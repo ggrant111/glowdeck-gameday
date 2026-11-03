@@ -61,6 +61,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <div class="stat"><span>Free memory</span><b id="heap">—</b></div>
 <div class="stat"><span>Currently on screen</span><b id="showingGame">—</b></div>
 <div class="stat"><span>Rotation</span><b id="rotationStatus">—</b></div>
+<div class="stat"><span>NHL score check</span><b id="scorePollFrequency">—</b></div>
 </div>
 <div class="actions"><button class="primary" data-tab="games">Choose game</button><button data-tab="devices">Manage lights</button></div>
 <div class="small muted" id="lastError"></div></div>
@@ -216,6 +217,7 @@ function renderStatus(){
   const showing=currentGames[s.featuredIndex]||null;
   $("showingGame").textContent=showing?showing.away+" @ "+showing.home:"No games";
   $("rotationStatus").textContent=s.cycleGames?"Every "+s.cycleSeconds+" sec":"Paused";
+  $("scorePollFrequency").textContent=(s.scorePollSeconds||60)+" sec";
   $("displayGame").textContent=showing?showing.away+" @ "+showing.home:"No games";
   $("displayDate").textContent=s.scoreDate||"Not loaded";
   $("displayToday").textContent=s.today||"Synchronizing";
