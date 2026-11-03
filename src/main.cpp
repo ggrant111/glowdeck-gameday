@@ -1247,6 +1247,13 @@ void registerRoutes() {
     }
     sendJson(doc);
   });
+  server.on("/api/refresh", HTTP_POST, []() {
+    if (!authorized()) return;
+    lastPoll = millis() - IDLE_POLL_MS;
+    StaticJsonDocument<96> ok;
+    ok["queued"] = true;
+    sendJson(ok);
+  });
   server.on("/api/select", HTTP_POST, []() {
     if (!authorized()) return;
     StaticJsonDocument<128> doc;
