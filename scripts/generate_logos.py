@@ -5,7 +5,7 @@ Prerequisites: pip install Pillow cairosvg
 Generate:     python scripts/generate_logos.py
 Output:       include/TeamLogos.h (generated; never hand-edit)
 
-No logo is downloaded at runtime. Firmware stores 48px rasterized marks in flash.
+No logo is downloaded at runtime. Firmware stores 56px alpha-keyed rasterized marks in flash.
 Logos remain the trademarks of their respective NHL teams, not project artwork.
 """
 from __future__ import annotations
@@ -17,9 +17,9 @@ import cairosvg
 
 TEAMS = """ANA BOS BUF CGY CAR CHI COL CBJ DAL DET EDM FLA LAK MIN MTL NJD
 NSH NYI NYR OTT PHI PIT SEA SJS STL TBL TOR UTA VAN VGK WSH WPG""".split()
-SIZE = 48
+SIZE = 56
 OUTPUT = Path(__file__).resolve().parent.parent / "include" / "TeamLogos.h"
-BG = (8, 8, 8)  # exact RGB565 background 0x0841 used by the CYD UI
+BG = (4, 12, 22)  # color used to preblend translucent antialiasing edges
 
 
 def load_logo(team: str) -> Image.Image:
@@ -46,13 +46,14 @@ def load_logo(team: str) -> Image.Image:
 
 def encode(logo: Image.Image) -> tuple[list[int], bytes]:
     rgba = logo.convert("RGBA")
-    # Quantize antialiased pixels composited over the display background. Fully
-    # transparent source pixels use palette index zero (reserved for background).
+    # Build a 15-color palette plus a true transparent index zero. The old
+    # renderer painted the transparent pixels as a solid blue/purple rectangle;
+    # the 4-bit pushImage transparency path below leaves the arena visible.
     composed = Image.new("RGB", rgba.size, BG)
     composed.paste(rgba, (0, 0), rgba)
     quant = composed.quantize(colors=15, method=Image.Quantize.MEDIANCUT)
     native_palette = quant.getpalette() or []
-    pal = [((BG[0] >> 3) << 11) | ((BG[1] >> 2) << 5) | (BG[2] >> 3)]
+    pal = [0]  # palette index zero is transparent, never a background fill
     for i in range(15):
         p = i * 3
         if p + 2 < len(native_palette):
@@ -113,18 +114,16 @@ def main():
         "  for (uint8_t i = 0; i < sizeof(TEAM_LOGOS) / sizeof(TEAM_LOGOS[0]); ++i) {",
         "    const TeamLogoAsset &logo = TEAM_LOGOS[i];",
         "    if (abbr != String(logo.abbrev)) continue;",
-        "    static uint16_t decoded[TEAM_LOGO_SIZE * TEAM_LOGO_SIZE];",
-        "    for (uint16_t k = 0; k < TEAM_LOGO_SIZE * TEAM_LOGO_SIZE / 2; ++k) {",
-        "      const uint8_t packed = pgm_read_byte(&logo.pixels[k]);",
-        "      decoded[2*k] = pgm_read_word(&logo.palette[packed >> 4]);",
-        "      decoded[2*k+1] = pgm_read_word(&logo.palette[packed & 0x0F]);",
-        "    }",
-        "    display.pushImage(x, y, TEAM_LOGO_SIZE, TEAM_LOGO_SIZE, decoded);",
+        "    // Native 4-bit paletted pushImage, with 0 as transparent.",
+        "    // This preserves background detail behind the logo without a box.",
+        "    display.pushImage(x, y, TEAM_LOGO_SIZE, TEAM_LOGO_SIZE,",
+        "                      (uint8_t *)logo.pixels, (uint8_t)0, false,",
+        "                      (uint16_t *)logo.palette);",
         "    return;",
         "  }",
-        "  display.fillRoundRect(x, y, TEAM_LOGO_SIZE, TEAM_LOGO_SIZE, 8, TFT_DARKGREY);",
+        "  display.drawRoundRect(x, y, TEAM_LOGO_SIZE, TEAM_LOGO_SIZE, 8, TFT_DARKGREY);",
         "  display.setTextDatum(MC_DATUM);",
-        "  display.setTextColor(TFT_WHITE, TFT_DARKGREY);",
+        "  display.setTextColor(TFT_WHITE);",
         "  display.drawString(abbr, x + TEAM_LOGO_SIZE / 2, y + TEAM_LOGO_SIZE / 2, 2);",
         "  display.setTextDatum(TL_DATUM);",
         "}",

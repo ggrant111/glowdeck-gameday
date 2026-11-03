@@ -62,6 +62,8 @@ uint32_t selectedGameId = 0;
 int previousHome = 0, previousAway = 0;
 bool haveBaseline = false, mdnsStarted = false, mdnsAttempted = false, needsDraw = true;
 bool touchWasDown = false, wifiWasConnected = false, partialLiveUpdate = false;
+int16_t gestureStartX = 0, gestureStartY = 0, gestureEndX = 0, gestureEndY = 0;
+bool swallowLiveGesture = false;
 String apSsid, apPassword, mdnsName, lastError;
 uint32_t lastPoll = 0, reconnectAt = 0, rebootAt = 0;
 uint32_t lastTouch = 0;
@@ -625,23 +627,161 @@ void button(int x, int y, int w, int h, const String &label, bool active = false
 }
 // Paint only the changing score and clock regions on the 2.8" TFT.
 // The logos, team labels and navigation remain intact between NHL polls.
-void drawLiveReadout(const Game &g) {
-  tft.fillRect(103, 71, 114, 48, BG);
-  tft.fillRect(0, 130, 320, 37, BG);
+// Broadcast board: deliberately lightweight raster/vector drawing for the CYD.
+// Static arena is drawn on slide changes; NHL polls repaint only the readouts.
+constexpr uint16_t ARENA_BLACK = 0x0006;
+constexpr uint16_t ARENA_PLATE = 0x080E;
+constexpr uint16_t ARENA_LINE = 0x4B33;
+constexpr uint16_t ICE_BLUE = 0x36BE;
+constexpr uint16_t ICE_TEXT = 0xC6FA;
+
+bool gameIsLive(const Game &g) { return g.state == "LIVE" || g.state == "CRIT"; }
+bool gameIsFuture(const Game &g) { return g.state == "FUT" || g.state == "PRE"; }
+
+String broadcastTime(const Game &g) {
+  if (gameIsFuture(g)) return formattedStart(g.startUTC);
+  if (!gameIsLive(g)) return gameStatus(g);
+  String period = g.periodType == "SO" ? "SO" :
+                  g.periodType == "OT" ? "OT" :
+                  g.period == 1 ? "1ST" : g.period == 2 ? "2ND" :
+                  g.period == 3 ? "3RD" : "P" + String(g.period);
+  if (g.intermission) return "INT  |  " + period;
+  return period + "  |  " + (g.clock.length() ? g.clock : String("LIVE"));
+}
+
+void drawArenaBackground() {
+  tft.fillScreen(ARENA_BLACK);
+  // Dim blue arena bowl and reflected ice, rendered as simple primitives.
+  for (int y = 25; y < 159; y += 5) {
+    int blue = 7 + (y / 12);
+    int green = y / 32;
+    uint16_t row = ((uint16_t)green << 5) | (uint16_t)blue;
+    tft.fillRect(0, y, 320, 5, row);
+  }
+  tft.fillRect(0, 150, 320, 47, 0x0820);
+  tft.drawLine(0, 163, 160, 145, 0x18EC);
+  tft.drawLine(160, 145, 319, 163, 0x18EC);
+  tft.drawLine(160, 145, 160, 195, 0x41C8);
+  tft.drawEllipse(160, 175, 50, 15, 0x18EA);
+  // Stadium lights are purposely subtle so the score and logos remain legible.
+  for (int i = 0; i < 15; ++i) {
+    int x = 6 + i * 22;
+    int y = 26 + (i < 7 ? 7 - i : i - 7);
+    tft.fillCircle(x, y, 2, 0x94F9);
+  }
+}
+
+void drawScoreboardHeader(const Game &g) {
+  tft.fillRect(0, 0, 320, 31, ARENA_BLACK);
+  // Small NHL-like shield outline without using a heavyweight background image.
+  tft.drawLine(7, 4, 37, 4, WHITE);
+  tft.drawLine(7, 4, 7, 21, WHITE);
+  tft.drawLine(37, 4, 37, 21, WHITE);
+  tft.drawLine(7, 21, 22, 28, WHITE);
+  tft.drawLine(22, 28, 37, 21, WHITE);
   tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(WHITE, BG);
-  tft.drawString(g.state == "FUT" || g.state == "PRE" ? "VS" :
-                 String(g.awayScore) + " - " + String(g.homeScore), 160, 93, 4);
-  tft.setTextColor(g.state == "LIVE" || g.state == "CRIT" ? ORANGE : WHITE, BG);
-  tft.drawString(gameStatus(g), 160, 140, 2);
-  tft.setTextColor(MUTED, BG);
-  if (g.awayShots >= 0 && g.homeShots >= 0)
-    tft.drawString("SHOTS  " + String(g.awayShots) + " - " +
-                   String(g.homeShots), 160, 156, 2);
-  else
-    tft.drawString("Tap matchup for team stats", 160, 156, 2);
+  tft.setTextColor(WHITE, ARENA_BLACK);
+  tft.drawString("NHL", 22, 14, 2);
+  uint16_t pill = gameIsLive(g) ? 0xE800 :
+                  gameIsFuture(g) ? 0x04F2 : 0x39C7;
+  tft.fillRoundRect(48, 5, 67, 23, 5, pill);
+  tft.setTextColor(WHITE, pill);
+  tft.drawString(gameIsLive(g) ? "LIVE" :
+                 gameIsFuture(g) ? "NEXT" : "FINAL", 81, 16, 2);
+  if (gameIsLive(g)) tft.fillCircle(56, 16, 2, WHITE);
+  tft.setTextColor(ICE_TEXT, ARENA_BLACK);
+  tft.drawString(String(featuredIndex + 1) + "/" + String(gameCount), 228, 16, 2);
+  tft.setTextColor(WiFi.status() == WL_CONNECTED ? ICE_BLUE : ORANGE, ARENA_BLACK);
+  tft.drawString(WiFi.status() == WL_CONNECTED ? "WiFi" : "AP", 281, 16, 2);
+  // Small menu glyph replaces the former three large navigation buttons.
+  tft.drawFastHLine(305, 9, 10, WHITE);
+  tft.drawFastHLine(305, 15, 10, WHITE);
+  tft.drawFastHLine(305, 21, 10, WHITE);
   tft.setTextDatum(TL_DATUM);
 }
+
+void drawScoreboardStatic(const Game &g) {
+  drawArenaBackground();
+  drawScoreboardHeader(g);
+  // Scoreboard clock / status banner.
+  tft.fillRoundRect(71, 34, 178, 37, 6, ARENA_PLATE);
+  tft.drawRoundRect(71, 34, 178, 37, 6, ARENA_LINE);
+  // A central opaque score plate makes partial refreshes clean and flicker-free.
+  tft.fillRoundRect(78, 77, 164, 66, 7, ARENA_PLATE);
+  // Official alpha-keyed 56x56 logo sprites: rink remains visible around marks.
+  drawTeamLogo(tft, g.away, 13, 79);
+  drawTeamLogo(tft, g.home, 251, 79);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE);
+  tft.drawString(g.away, 41, 145, 4);
+  tft.drawString(g.home, 279, 145, 4);
+  tft.drawFastHLine(13, 160, 57, to565(teamRgb(g.away)));
+  tft.drawFastHLine(250, 160, 57, to565(teamRgb(g.home)));
+  tft.setTextDatum(TL_DATUM);
+  // Bottom information plates cover the lower strip of the stylized rink.
+  tft.fillRoundRect(7, 166, 306, 30, 6, ARENA_PLATE);
+  tft.drawRoundRect(7, 166, 306, 30, 6, ARENA_LINE);
+  tft.drawFastVLine(160, 171, 21, ARENA_LINE);
+  tft.drawFastHLine(11, 167, 68, to565(teamRgb(g.away)));
+  tft.drawFastHLine(241, 167, 68, to565(teamRgb(g.home)));
+  tft.fillRoundRect(7, 201, 306, 33, 6, ARENA_PLATE);
+  tft.drawRoundRect(7, 201, 306, 33, 6, ARENA_LINE);
+  tft.drawFastVLine(108, 206, 22, ARENA_LINE);
+  tft.drawFastVLine(211, 206, 22, ARENA_LINE);
+}
+
+void drawLiveReadout(const Game &g) {
+  // This function updates the *same game* without erasing/redrawing logos.
+  tft.fillRoundRect(73, 36, 174, 33, 5, ARENA_PLATE);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE, ARENA_PLATE);
+  const String status = broadcastTime(g);
+  tft.drawString(status, 160, 52, status.length() > 15 ? 2 : 4);
+
+  tft.fillRoundRect(80, 79, 160, 62, 6, ARENA_PLATE);
+  if (gameIsFuture(g)) {
+    tft.setTextColor(WHITE, ARENA_PLATE);
+    tft.drawString("VS", 160, 110, 4);
+  } else {
+    tft.setTextColor(WHITE, ARENA_PLATE);
+    tft.setTextSize(2);
+    tft.drawString(String(g.awayScore), 130, 108, 4);
+    tft.drawString(String(g.homeScore), 190, 108, 4);
+    tft.setTextSize(1);
+    tft.drawFastVLine(160, 88, 42, ARENA_LINE);
+  }
+
+  tft.fillRect(10, 169, 300, 25, ARENA_PLATE);
+  tft.setTextColor(ICE_TEXT, ARENA_PLATE);
+  tft.drawString("SOG", 37, 181, 2);
+  tft.drawString("SOG", 203, 181, 2);
+  tft.setTextColor(WHITE, ARENA_PLATE);
+  tft.drawString(g.awayShots < 0 ? "--" : String(g.awayShots), 111, 181, 4);
+  tft.drawString(g.homeShots < 0 ? "--" : String(g.homeShots), 280, 181, 4);
+
+  // The three bottom cells use real game stats when the detail feed was opened.
+  // Otherwise they show useful navigation/alert context, not invented stats.
+  String footerLeft = "GAME " + String(featuredIndex + 1) + "/" + String(gameCount);
+  String footerMid = g.id == selectedGameId ? "ARMED" : "VIEW ONLY";
+  String footerRight = "TAP: STATS";
+  if (detail.loaded && detail.gameId == g.id && detail.count) {
+    for (uint8_t i = 0; i < detail.count; ++i) {
+      if (detail.label[i] == "POWER PLAY")
+        footerLeft = "PP " + detail.away[i] + "/" + detail.home[i];
+      if (detail.label[i] == "PEN. MIN")
+        footerMid = "PIM " + detail.away[i] + "-" + detail.home[i];
+      if (detail.label[i] == "FACEOFFS")
+        footerRight = "FO " + detail.away[i] + "-" + detail.home[i];
+    }
+  }
+  tft.fillRect(10, 204, 298, 27, ARENA_PLATE);
+  tft.setTextColor(ICE_TEXT, ARENA_PLATE);
+  tft.drawString(footerLeft, 58, 217, footerLeft.length() > 13 ? 1 : 2);
+  tft.drawString(footerMid, 160, 217, footerMid.length() > 13 ? 1 : 2);
+  tft.drawString(footerRight, 262, 217, footerRight.length() > 13 ? 1 : 2);
+  tft.setTextDatum(TL_DATUM);
+}
+
 
 void drawCalibration() {
   tft.fillScreen(BG);
@@ -656,6 +796,25 @@ void drawCalibration() {
 void draw() {
   needsDraw = false;
   if (screen == Screen::CALIBRATE) { drawCalibration(); return; }
+  if (screen == Screen::LIVE) {
+    if (!gameCount) {
+      tft.fillScreen(ARENA_BLACK);
+      tft.setTextDatum(MC_DATUM);
+      tft.setTextColor(WHITE, ARENA_BLACK);
+      tft.drawString("NHL GAMEDAY", 160, 46, 4);
+      tft.drawString(lastError.length() ? lastError : "Waiting for games...", 160, 108, 2);
+      tft.setTextColor(ICE_TEXT, ARENA_BLACK);
+      tft.drawString("Tap the top-right for the menu", 160, 193, 2);
+      tft.setTextDatum(TL_DATUM);
+    } else {
+      const Game &g = games[featuredIndex % gameCount];
+      drawScoreboardStatic(g);
+      drawLiveReadout(g);
+    }
+    // No persistent TODAY/GAMES/SETUP buttons on the carousel.
+    return;
+  }
+
   tft.fillScreen(BG);
   tft.fillRect(0, 0, 320, 33, PANEL);
   tft.setTextColor(WHITE, PANEL);
@@ -664,31 +823,7 @@ void draw() {
   tft.drawString(WiFi.status() == WL_CONNECTED ? "ONLINE" : "SETUP AP", 310, 9, 2);
   tft.setTextDatum(TL_DATUM);
 
-  if (screen == Screen::LIVE) {
-    if (!gameCount) {
-      textAt("TODAY'S NHL", 16, 46, WHITE, 4);
-      textAt(lastError.isEmpty() ? "Waiting for games..." : lastError, 16, 90, ORANGE);
-      textAt("Connect Wi-Fi to load games", 16, 121, MUTED);
-    } else {
-      const Game &g = games[featuredIndex % gameCount];
-      tft.setTextDatum(MC_DATUM);
-      tft.setTextColor(MUTED, BG);
-      tft.drawString(scoreboardDate + "   " + String(featuredIndex + 1) +
-                    " / " + String(gameCount), 160, 47, 2);
-      drawTeamLogo(tft, g.away, 38, 66);
-      drawTeamLogo(tft, g.home, 234, 66);
-      tft.setTextDatum(MC_DATUM); // Logo renderer uses its own text datum.
-      tft.setTextColor(WHITE, BG);
-      tft.drawString(g.away, 62, 122, 2);
-      tft.drawString(g.home, 258, 122, 2);
-      drawLiveReadout(g);
-      button(8, 169, 65, 28, "PREV");
-      button(81, 169, 157, 28,
-             g.id == selectedGameId ? "ARMED FOR GOALS" : "ARM GOALS",
-             g.id == selectedGameId);
-      button(246, 169, 66, 28, "NEXT");
-    }
-  } else if (screen == Screen::STATS) {
+  if (screen == Screen::STATS) {
     Game *g = detailGame();
     if (!g) {
       textAt("Game unavailable", 14, 54, ORANGE, 4);
@@ -764,6 +899,7 @@ void draw() {
 }
 
 void selectGame(uint32_t id) {
+  swallowLiveGesture = true;
   selectedGameId = id;
   haveBaseline = false;
   prefs.putUInt("game", id);
@@ -775,8 +911,51 @@ void selectGame(uint32_t id) {
 }
 
 void handleTouch() {
-  // Act on touch DOWN only; a held press must never advance two calibration steps.
-  bool pressed = touch.touched();
+  const bool pressed = touch.touched();
+  // On the full-screen broadcast view, gestures are recognized on finger lift:
+  // swipe left/right to change games, tap a matchup for stats, tap top-right
+  // menu glyph to open GAMES (which provides SETUP in its footer).
+  if (screen == Screen::LIVE) {
+    if (swallowLiveGesture) {
+      if (!pressed) { swallowLiveGesture = false; touchWasDown = false; }
+      return;
+    }
+    if (pressed) {
+      TS_Point p = touch.getPoint();
+      const int16_t x = constrain((int)map(p.x, cfg.touchX0, cfg.touchX1, 0, 319), 0, 319);
+      const int16_t y = constrain((int)map(p.y, cfg.touchY0, cfg.touchY1, 0, 239), 0, 239);
+      if (!touchWasDown) {
+        touchWasDown = true;
+        gestureStartX = x;
+        gestureStartY = y;
+      }
+      gestureEndX = x;
+      gestureEndY = y;
+    } else if (touchWasDown) {
+      touchWasDown = false;
+      const int dx = gestureEndX - gestureStartX;
+      const int dy = gestureEndY - gestureStartY;
+      if (gameCount > 1 && abs(dx) > 48 && abs(dy) < 90) {
+        if (dx < 0) featuredIndex = (featuredIndex + 1) % gameCount;
+        else featuredIndex = (featuredIndex + gameCount - 1) % gameCount;
+      } else if (gestureStartY <= 35 && gestureStartX >= 263) {
+        screen = Screen::GAMES; // Access setup and arming from existing menu.
+      } else if (gameCount > 1 && gestureStartY >= 213 && gestureStartX < 58) {
+        featuredIndex = (featuredIndex + gameCount - 1) % gameCount;
+      } else if (gameCount > 1 && gestureStartY >= 213 && gestureStartX > 263) {
+        featuredIndex = (featuredIndex + 1) % gameCount;
+      } else if (gameCount) {
+        showDetail(games[featuredIndex % gameCount].id);
+      } else {
+        screen = Screen::GAMES;
+      }
+      lastCarouselAdvance = millis();
+      needsDraw = true;
+    }
+    return;
+  }
+  // Other screens use one action per press, including the 2-point calibrator.
+
   if (!pressed) { touchWasDown = false; return; }
   if (touchWasDown || millis() - lastTouch < 120) return;
   touchWasDown = true;
@@ -814,16 +993,8 @@ void handleTouch() {
     } else {
       screen = x < 107 ? Screen::LIVE : x < 214 ? Screen::GAMES : Screen::SETUP;
     }
+    if (screen == Screen::LIVE) swallowLiveGesture = true;
     lastCarouselAdvance = millis();
-  } else if (screen == Screen::LIVE && gameCount) {
-    if (y >= 168 && y < 199) {
-      if (x < 76) featuredIndex = (featuredIndex + gameCount - 1) % gameCount;
-      else if (x >= 243) featuredIndex = (featuredIndex + 1) % gameCount;
-      else selectGame(games[featuredIndex % gameCount].id);
-      lastCarouselAdvance = millis();
-    } else if (y >= 36 && y < 168) {
-      showDetail(games[featuredIndex % gameCount].id);
-    }
   } else if (screen == Screen::GAMES) {
     if (y >= 39 && y < 64 && gameCount > 3) {
       if (x > 170 && (gamePage + 1) * 3 < gameCount) ++gamePage;
@@ -856,7 +1027,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1024> doc;
-    doc["version"] = "0.2.0";
+    doc["version"] = "0.2.1";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -1064,7 +1235,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.2.0 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.2.1 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);

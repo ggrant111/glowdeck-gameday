@@ -80,7 +80,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 </section>
 <section id="display" class="panel">
 <div class="card"><h2>Today's game carousel</h2>
-<p>Cycle through today's NHL schedule on the CYD, with official team logos, scheduled starts, live period/clock, scores, shots and final results. Tap a matchup on the device to open its team stats.</p>
+<p>Cycle through today's NHL schedule on the CYD, with official team logos, scheduled starts, live period/clock, scores, shots and final results. The CYD now uses a full-screen broadcast layout without persistent TODAY, GAMES or SETUP buttons. Swipe across the screen for next/previous, tap the main scoreboard to view stats, or tap the tiny top-right menu icon to reach the game list and setup.</p>
 <div class="stats">
 <div class="stat"><span>Current screen</span><b id="displayGame">—</b></div>
 <div class="stat"><span>Scoreboard date</span><b id="displayDate">—</b></div>
