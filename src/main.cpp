@@ -16,6 +16,7 @@
 #include "GameDayCadence.h"
 #include "ConferenceRecords.h"
 #include "GameDetailMode.h"
+#include "NhlFetchPolicy.h"
 #include "RearLedPattern.h"
 #include <time.h>
 
@@ -105,6 +106,12 @@ int16_t gestureStartX = 0, gestureStartY = 0, gestureEndX = 0, gestureEndY = 0;
 bool swallowLiveGesture = false;
 String apSsid, apPassword, mdnsName, lastError;
 uint32_t lastPoll = 0, reconnectAt = 0, rebootAt = 0;
+// NHL feed health diagnostics; no extra heap copies of the raw JSON payload.
+uint8_t nhlConsecutiveFailures = 0;
+int nhlLastHttpCode = 0;
+int nhlLastContentLength = -1;
+uint32_t nhlLastDurationMs = 0;
+uint32_t nhlLastSuccessAt = 0;
 uint32_t lastTouch = 0;
 String savedState[MAX_WLED];
 bool restoring[MAX_WLED] = {false, false, false, false};
@@ -1100,30 +1107,54 @@ void fetchFollowedPowerPlays() {
   }
 }
 
+void markNhlFetchFailure(const String &message) {
+  lastError = message;
+  if (nhlConsecutiveFailures < 255) ++nhlConsecutiveFailures;
+  Serial.printf("[NHL] %s | HTTP %d | expected=%dB | elapsed=%lums "
+                "| failures=%u | freeHeap=%u\n",
+                message.c_str(), nhlLastHttpCode, nhlLastContentLength,
+                (unsigned long)nhlLastDurationMs, nhlConsecutiveFailures,
+                (unsigned)ESP.getFreeHeap());
+  if (gameCount == 0 && screen == Screen::LIVE) needsDraw = true;
+}
+
 void pollNhl() {
   const uint32_t previousFingerprint = gamesFingerprint();
   if (WiFi.status() != WL_CONNECTED) return;
+  const uint32_t requestStart = millis();
+  nhlLastHttpCode = 0;
+  nhlLastContentLength = -1;
   WiFiClientSecure client;
   // NHL's public endpoint; no credentials are transmitted. See SECURITY.md.
   client.setInsecure();
+  client.setTimeout(NhlFetchPolicy::kResponseTimeoutMs);
   HTTPClient http;
-  http.setTimeout(4500);
+  http.setConnectTimeout(NhlFetchPolicy::kConnectTimeoutMs);
+  http.setTimeout(NhlFetchPolicy::kResponseTimeoutMs);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.useHTTP10(true); // JSON stream will not contain chunked transfer framing.
+  http.useHTTP10(true); // Stream JSON without HTTP/1.1 chunk framing.
   const String requestedDate = deviceLocalDate();
   const String endpoint = "https://api-web.nhle.com/v1/score/" +
                           (requestedDate.length() ? requestedDate : String("now"));
   if (!http.begin(client, endpoint)) {
-    lastError = "NHL connection setup failed";
+    nhlLastDurationMs = millis() - requestStart;
+    markNhlFetchFailure("NHL connection setup failed");
     return;
   }
-  int response = http.GET();
+  // ESPN/NHL-style APIs sometimes gzip HTTP/1.1 responses. The CYD cannot
+  // decompress them and ArduinoJson expects plain JSON.
+  http.addHeader("Accept-Encoding", "identity");
+  const int response = http.GET();
+  nhlLastHttpCode = response;
+  nhlLastContentLength = http.getSize();
   if (response != HTTP_CODE_OK) {
-    lastError = "NHL HTTP " + String(response);
+    nhlLastDurationMs = millis() - requestStart;
     http.end();
+    markNhlFetchFailure("NHL HTTP " + String(response));
     return;
   }
-  StaticJsonDocument<1280> filter;
+
+  StaticJsonDocument<2048> filter;
   filter["currentDate"] = true;
   JsonObject gameFilter = filter["games"][0].to<JsonObject>();
   gameFilter["id"] = true;
@@ -1145,30 +1176,52 @@ void pollNhl() {
   gameFilter["homeTeam"]["score"] = true;
   gameFilter["awayTeam"]["abbrev"] = true;
   gameFilter["awayTeam"]["score"] = true;
-  DynamicJsonDocument doc(12288);
+
+  if (filter.overflowed()) {
+    nhlLastDurationMs = millis() - requestStart;
+    http.end();
+    markNhlFetchFailure("NHL field filter exceeded memory");
+    return;
+  }
+  // The NHL has up to 16 matchups on busy days. Keep the filtered document
+  // large enough for the entire date's games without storing raw JSON twice.
+  DynamicJsonDocument doc(24576);
+  if (doc.capacity() < 24576) {
+    nhlLastDurationMs = millis() - requestStart;
+    http.end();
+    markNhlFetchFailure("NHL JSON allocation failed");
+    return;
+  }
+  // Key fix for IncompleteInput: ArduinoJson's Stream read defaults to 1s.
+  // HTTP timeout alone is not sufficient for TLS gaps during large payloads.
+  Stream &body = http.getStream();
+  body.setTimeout(NhlFetchPolicy::kResponseTimeoutMs);
   const DeserializationError err = deserializeJson(
-    doc, http.getStream(), DeserializationOption::Filter(filter));
+      doc, body, DeserializationOption::Filter(filter));
+  nhlLastDurationMs = millis() - requestStart;
   http.end();
   if (err) {
-    lastError = String("NHL JSON: ") + err.c_str();
+    Serial.printf("[NHL] parser=%s, filterOverflow=%d, docOverflow=%d\n",
+                  err.c_str(), filter.overflowed(), doc.overflowed());
+    markNhlFetchFailure(String("NHL JSON: ") + err.c_str());
     return;
   }
   JsonArray arr = doc["games"].as<JsonArray>();
   if (arr.isNull()) {
-    lastError = "NHL games unavailable";
+    markNhlFetchFailure("NHL games unavailable");
     return;
   }
   const uint32_t previouslyFeatured = gameCount ?
       games[min((int)featuredIndex, (int)gameCount - 1)].id : 0;
   String newScoreboardDate = doc["currentDate"].as<String>();
   if (newScoreboardDate.length() != 10) {
-    lastError = "Invalid NHL scoreboard date";
+    markNhlFetchFailure("Invalid NHL scoreboard date");
     return;
   }
   // Never replace today's schedule with stale /now data or a mismatched
   // redirect. A successful empty games[] still counts as today's schedule.
   if (requestedDate.length() && newScoreboardDate != requestedDate) {
-    lastError = "NHL returned " + newScoreboardDate + ", expected " + requestedDate;
+    markNhlFetchFailure("NHL returned " + newScoreboardDate + ", expected " + requestedDate);
     return;
   }
   bool newDay = newScoreboardDate != scoreboardDate;
@@ -1243,6 +1296,11 @@ void pollNhl() {
     if (!found) featuredIndex = 0;
   } else featuredIndex = 0;
   if (gamePage * 3 >= gameCount) gamePage = 0;
+  // A valid full JSON document (including games: []) resets retry backoff.
+  if (nhlConsecutiveFailures)
+    Serial.printf("[NHL] recovered after %u failed fetches\n", nhlConsecutiveFailures);
+  nhlConsecutiveFailures = 0;
+  nhlLastSuccessAt = millis();
   lastError = "";
   if (selectedGameId && !selectedGame()) {
     // Do not keep an old, invisible matchup armed after a calendar rollover.
@@ -1752,8 +1810,8 @@ void registerRoutes() {
   });
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
-    StaticJsonDocument<1024> doc;
-    doc["version"] = "0.2.7";
+    StaticJsonDocument<1536> doc;
+    doc["version"] = "0.2.8";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -1774,7 +1832,14 @@ void registerRoutes() {
     doc["featuredIndex"] = featuredIndex;
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
-    doc["scorePollSeconds"] = currentScoreboardPollIntervalMs() / 1000UL;
+    doc["scorePollSeconds"] = NhlFetchPolicy::pollIntervalMs(
+      currentScoreboardPollIntervalMs(), nhlConsecutiveFailures) / 1000UL;
+    doc["nhlFailures"] = nhlConsecutiveFailures;
+    doc["nhlLastHttp"] = nhlLastHttpCode;
+    doc["nhlExpectedBytes"] = nhlLastContentLength;
+    doc["nhlLastDurationMs"] = nhlLastDurationMs;
+    doc["nhlLastSuccessAgeSeconds"] = nhlLastSuccessAt
+        ? (int32_t)((millis() - nhlLastSuccessAt) / 1000UL) : -1;
     doc["error"] = lastError;
     doc["freeHeap"] = ESP.getFreeHeap();
     doc["uptimeSeconds"] = millis() / 1000UL;
@@ -2068,7 +2133,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.2.7 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.2.8 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
@@ -2152,8 +2217,18 @@ void loop() {
     }
     // 10s: live + armed/followed, 20s: other live, 30s: armed pregame,
     // 60s: idle. A single fetch refreshes the entire daily carousel.
-    const uint32_t interval = currentScoreboardPollIntervalMs();
-    if (uint32_t(now - lastPoll) >= interval) {
+    const uint32_t interval = NhlFetchPolicy::pollIntervalMs(
+      currentScoreboardPollIntervalMs(), nhlConsecutiveFailures);
+    // An interrupted HTTPS stream can block until its timeout. Never start
+    // one so close to a WLED snapshot restoration that the lights remain in
+    // celebration mode while the ESP32 waits for NHL bytes.
+    bool restoreSoon = false;
+    for (uint8_t i = 0; i < MAX_WLED; ++i)
+      if (restoring[i] &&
+          int32_t(restoreAt[i] - now) <=
+             int32_t(NhlFetchPolicy::kResponseTimeoutMs + 500UL))
+        restoreSoon = true;
+    if (!restoreSoon && uint32_t(now - lastPoll) >= interval) {
       lastPoll = now;
       pollNhl();
     }

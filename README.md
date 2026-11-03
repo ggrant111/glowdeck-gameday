@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.2.7 pregame season/conference records and live stats.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.2.8 NHL incomplete-JSON recovery.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
@@ -21,6 +21,12 @@ The first score after selecting a game is used as a baseline and never replays a
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+
+## Reliable NHL scoreboard downloads (v0.2.8)
+
+The NHL JSON reader now permits up to 12 seconds for an HTTPS response and for a stalled streamed read, avoiding `NHL JSON: IncompleteInput` caused by packet gaps under the old 4.5-second HTTP and default short Stream timeout. The filtered JSON allocation also supports busy 16-game dates. Partial, invalid or mismatched responses **never replace** a previously valid game list. Failed fetches retry after 5 seconds (first three failures), then back off to 15/30 seconds, or the normal live-game cadence if faster. When the feed recovers, normal 10/20/30/60-second polling resumes.
+
+The local dashboard now displays retry count/HTTP status, last successful NHL update and effective retry interval. Serial logs include expected HTTP Content-Length, elapsed time and free heap. Slow requests are deferred before WLED restoration to preserve lighting recovery. No extra hardware or reset is required.
 
 ## Pregame season and conference records (v0.2.7)
 
