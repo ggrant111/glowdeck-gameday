@@ -582,8 +582,14 @@ String knownConferenceRecord(const String &team, uint32_t season) {
 bool loadSeasonStandings() {
   const String today = scoreboardDate.length() ? scoreboardDate : deviceLocalDate();
   const uint32_t now = millis();
+  // League standings need not refresh on every score poll. During live NHL
+  // games refresh at most every 3 minutes, otherwise every 15 minutes.
+  bool anyLive = false;
+  for (uint8_t i = 0; i < gameCount; ++i)
+    if (games[i].state == "LIVE" || games[i].state == "CRIT") anyLive = true;
+  const uint32_t ttl = anyLive ? 180000UL : 900000UL;
   if (standingsReady && standingsForDate == today &&
-      uint32_t(now - standingsLastAttempt) < 900000UL) return true;
+      uint32_t(now - standingsLastAttempt) < ttl) return true;
   if (!standingsReady && standingsLastAttempt &&
       uint32_t(now - standingsLastAttempt) < 60000UL) return false;
   if (WiFi.status() != WL_CONNECTED) return standingsReady;
@@ -592,17 +598,22 @@ bool loadSeasonStandings() {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  http.setTimeout(4500);
+  http.setConnectTimeout(4500);
+  http.setTimeout(10000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.useHTTP10(true);
   const String url = "https://api-web.nhle.com/v1/standings/" +
                      (today.length() == 10 ? today : String("now"));
   if (!http.begin(client, url)) return standingsReady;
+  http.addHeader("Accept-Encoding", "identity");
   if (http.GET() != HTTP_CODE_OK) {
     http.end();
     return standingsReady;
   }
-  StaticJsonDocument<512> filter;
+  // These NHL fields are shared with the pregame preview. Allocate the
+  // expanded filter on heap to protect the loopTask stack on the CYD.
+  DynamicJsonDocument filter(1024);
+  if (filter.capacity() < 1024) { http.end(); return standingsReady; }
   JsonObject first = filter["standings"][0].to<JsonObject>();
   first["teamAbbrev"]["default"] = true;
   first["wins"] = true;
@@ -610,9 +621,21 @@ bool loadSeasonStandings() {
   first["otLosses"] = true;
   first["points"] = true;
   first["conferenceSequence"] = true;
-  DynamicJsonDocument parsed(10800);
+  first["conferenceAbbrev"] = true;
+  first["divisionAbbrev"] = true;
+  first["divisionSequence"] = true;
+  first["gamesPlayed"] = true;
+  if (filter.overflowed()) {
+    Serial.println("[NHL] Standings filter capacity exceeded");
+    http.end();
+    return standingsReady;
+  }
+  DynamicJsonDocument parsed(20480);
+  if (parsed.capacity() < 20480) { http.end(); return standingsReady; }
+  Stream &stream = http.getStream();
+  stream.setTimeout(10000);
   const DeserializationError err = deserializeJson(
-      parsed, http.getStream(), DeserializationOption::Filter(filter));
+      parsed, stream, DeserializationOption::Filter(filter));
   http.end();
   if (err) {
     Serial.printf("Pregame standings JSON: %s\n", err.c_str());
@@ -632,15 +655,29 @@ bool loadSeasonStandings() {
         row["losses"].isNull() || row["otLosses"].isNull()) continue;
     SeasonStanding &record = fresh[loaded++];
     record.team = team;
-    record.seasonRecord = String(row["wins"].as<int>()) + "-" +
-                          String(row["losses"].as<int>()) + "-" +
-                          String(row["otLosses"].as<int>());
+    record.wins = (uint8_t)constrain(row["wins"].as<int>(), 0, 255);
+    record.losses = (uint8_t)constrain(row["losses"].as<int>(), 0, 255);
+    record.otLosses = (uint8_t)constrain(row["otLosses"].as<int>(), 0, 255);
+    record.gamesPlayed = (uint8_t)constrain((int)(row["gamesPlayed"] | 0), 0, 255);
+    record.seasonRecord = String(record.wins) + "-" + String(record.losses) +
+                          "-" + String(record.otLosses);
     if (!row["points"].isNull())
       record.points = String(row["points"].as<int>());
     const int rank = row["conferenceSequence"] | 0;
+    record.conferenceSequence = (uint8_t)constrain(rank, 0, 255);
+    record.divisionSequence =
+        (uint8_t)constrain((int)(row["divisionSequence"] | 0), 0, 255);
+    const String div = row["divisionAbbrev"].as<String>();
+    const String conf = row["conferenceAbbrev"].as<String>();
+    record.division = StandingsCarousel::groupFor(conf.c_str(), div.c_str());
     if (rank > 0) record.conferenceRank = "#" + String(rank);
   }
-  if (!loaded) return standingsReady;
+  if (loaded < 24) {
+    // A truncated-but-parseable partial standings object must never overwrite
+    // a good 32-team cache; it would make the table silently drop teams.
+    Serial.printf("[NHL] Only %u valid standings teams; keeping cache\n", loaded);
+    return standingsReady;
+  }
   for (uint8_t i = 0; i < 32; ++i)
     seasonStandings[i] = i < loaded ? fresh[i] : SeasonStanding();
   standingsForDate = today;
