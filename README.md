@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.2.6 priority live-game polling.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.2.7 pregame season/conference records and live stats.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
@@ -21,6 +21,10 @@ The first score after selecting a game is used as a baseline and never replays a
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+
+## Pregame season and conference records (v0.2.7)
+
+Tap an upcoming game on the CYD to see **season W-L-OT, record against conference opponents, conference rank and standings points** for both teams. The league standings feed supplies season totals and conference rank; versus-conference W-L-OT is calculated from each team's completed regular-season schedule and cached. When the matchup switches to LIVE/CRIT, the detail view automatically changes to **live game stats**, and final games continue showing game stats. Pregame carousels now put each team's W-L-OT in separate bottom cells instead of a clipped combined string. Web Games → Preview mirrors the same information. See [Pregame records](docs/PREGAME_RECORDS.md).
 
 ## Priority NHL event detection (v0.2.6)
 
