@@ -291,9 +291,18 @@ void fetchDetailStats(uint32_t id) {
             if (!category.equalsIgnoreCase(target.id)) continue;
             if (detail.count >= 5) break;
             if (category == "sog" && g->awayShots >= 0) break;
-            addDetailRow(target.name,
-                         row["awayValue"].as<String>(),
-                         row["homeValue"].as<String>());
+            String awayValue = row["awayValue"].as<String>();
+            String homeValue = row["homeValue"].as<String>();
+            if (category.equalsIgnoreCase("faceoffWinningPctg")) {
+              // NHL right-rail returns a 0..1 fraction, not a displayed percent.
+              float aw = awayValue.toFloat();
+              float hm = homeValue.toFloat();
+              if (aw >= 0 && aw <= 1) aw *= 100.0f;
+              if (hm >= 0 && hm <= 1) hm *= 100.0f;
+              awayValue = String(aw, 1) + "%";
+              homeValue = String(hm, 1) + "%";
+            }
+            addDetailRow(target.name, awayValue, homeValue);
             break;
           }
         }
@@ -629,9 +638,9 @@ void button(int x, int y, int w, int h, const String &label, bool active = false
 // The logos, team labels and navigation remain intact between NHL polls.
 // Broadcast board: deliberately lightweight raster/vector drawing for the CYD.
 // Static arena is drawn on slide changes; NHL polls repaint only the readouts.
-constexpr uint16_t ARENA_BLACK = 0x0006;
-constexpr uint16_t ARENA_PLATE = 0x080E;
-constexpr uint16_t ARENA_LINE = 0x4B33;
+constexpr uint16_t ARENA_BLACK = 0x0000;
+constexpr uint16_t ARENA_PLATE = 0x10A4; // dark slate-blue RGB565, not saturated blue
+constexpr uint16_t ARENA_LINE = 0x422C;
 constexpr uint16_t ICE_BLUE = 0x36BE;
 constexpr uint16_t ICE_TEXT = 0xC6FA;
 
@@ -651,23 +660,23 @@ String broadcastTime(const Game &g) {
 
 void drawArenaBackground() {
   tft.fillScreen(ARENA_BLACK);
-  // Dim blue arena bowl and reflected ice, rendered as simple primitives.
+  // Keep the arena dark on real ILI9341 CYDs. Previous blue components
+  // climbed to 20/31, producing the vivid electric-blue photographed screen.
   for (int y = 25; y < 159; y += 5) {
-    int blue = 7 + (y / 12);
-    int green = y / 32;
-    uint16_t row = ((uint16_t)green << 5) | (uint16_t)blue;
-    tft.fillRect(0, y, 320, 5, row);
+    const uint16_t blue = y < 65 ? 1 : y < 112 ? 2 : 3;
+    const uint16_t green = y < 112 ? 0 : 1;
+    tft.fillRect(0, y, 320, 5, (green << 5) | blue);
   }
-  tft.fillRect(0, 150, 320, 47, 0x0820);
-  tft.drawLine(0, 163, 160, 145, 0x18EC);
-  tft.drawLine(160, 145, 319, 163, 0x18EC);
-  tft.drawLine(160, 145, 160, 195, 0x41C8);
-  tft.drawEllipse(160, 175, 50, 15, 0x18EA);
-  // Stadium lights are purposely subtle so the score and logos remain legible.
+  // Dim perspective ice and centerline only; UI remains high-contrast.
+  tft.fillRect(0, 150, 320, 47, 0x0863);
+  tft.drawLine(0, 163, 160, 145, 0x1987);
+  tft.drawLine(160, 145, 319, 163, 0x1987);
+  tft.drawLine(160, 145, 160, 195, 0x3988);
+  tft.drawEllipse(160, 175, 50, 15, 0x1987);
   for (int i = 0; i < 15; ++i) {
-    int x = 6 + i * 22;
-    int y = 26 + (i < 7 ? 7 - i : i - 7);
-    tft.fillCircle(x, y, 2, 0x94F9);
+    const int x = 6 + i * 22;
+    const int y = 26 + (i < 7 ? 7 - i : i - 7);
+    tft.fillCircle(x, y, 1, 0x6C14);
   }
 }
 
@@ -1027,7 +1036,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1024> doc;
-    doc["version"] = "0.2.1";
+    doc["version"] = "0.2.2";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -1235,7 +1244,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.2.1 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.2.2 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
