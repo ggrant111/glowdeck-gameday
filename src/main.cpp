@@ -1119,6 +1119,11 @@ void markNhlFetchFailure(const String &message) {
 }
 
 void pollNhl() {
+  // Watch free loopTask stack before the heavy HTTPS + JSON code.
+  // This helped diagnose the v0.2.8 stack canary reboot.
+  Serial.printf("[NHL] poll entry stackWatermark=%u freeHeap=%u\n",
+                (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+                (unsigned)ESP.getFreeHeap());
   const uint32_t previousFingerprint = gamesFingerprint();
   if (WiFi.status() != WL_CONNECTED) return;
   const uint32_t requestStart = millis();
@@ -1154,7 +1159,16 @@ void pollNhl() {
     return;
   }
 
-  StaticJsonDocument<2048> filter;
+  // Allocate the 2KB filter from HEAP, not the ESP32 loopTask stack.
+  // With WiFiClientSecure + HTTPClient this pushed the default 8KB task
+  // stack past its canary on some stock ESP32-2432S028R boards.
+  DynamicJsonDocument filter(2048);
+  if (filter.capacity() < 2048) {
+    nhlLastDurationMs = millis() - requestStart;
+    http.end();
+    markNhlFetchFailure("NHL filter allocation failed");
+    return;
+  }
   filter["currentDate"] = true;
   JsonObject gameFilter = filter["games"][0].to<JsonObject>();
   gameFilter["id"] = true;
@@ -1299,6 +1313,9 @@ void pollNhl() {
   // A valid full JSON document (including games: []) resets retry backoff.
   if (nhlConsecutiveFailures)
     Serial.printf("[NHL] recovered after %u failed fetches\n", nhlConsecutiveFailures);
+  Serial.printf("[NHL] poll success stackWatermark=%u freeHeap=%u\n",
+                (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+                (unsigned)ESP.getFreeHeap());
   nhlConsecutiveFailures = 0;
   nhlLastSuccessAt = millis();
   lastError = "";
@@ -1811,7 +1828,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1536> doc;
-    doc["version"] = "0.2.8";
+    doc["version"] = "0.2.9";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -2133,7 +2150,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.2.8 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.2.9 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
