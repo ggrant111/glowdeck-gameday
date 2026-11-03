@@ -1087,44 +1087,291 @@ void tickHorn() {
   if (elapsed >= 900) hornPlaying = false;
 }
 
-void celebrate(uint32_t color) {
-  StaticJsonDocument<256> doc;
-  doc["on"] = true;
-  doc["bri"] = cfg.brightness;
-  doc["transition"] = 0;
-  JsonObject seg = doc.createNestedArray("seg").createNestedObject();
-  seg["id"] = 0;
-  seg["fx"] = 0;
-  JsonArray col = seg.createNestedArray("col").createNestedArray();
-  col.add((color >> 16) & 0xFF);
-  col.add((color >> 8) & 0xFF);
-  col.add(color & 0xFF);
-  String payload;
-  serializeJson(doc, payload);
+// WLED Celebration Engine v0.3.1
+// Same event, RGB, speed/intensity and global event clock across all opted-in
+// WLED controllers. HTTP delivery may have small network skew; this is not
+// sub-frame-accurate UDP pixel synchronization.
+//
+// Snapshot ALL selected devices before sending the first effect update. This
+// keeps sequential state GET latency out of the visible celebration sequence.
+bool wledParticipates(uint8_t i, CelebrationEngine::Event event) {
+  return i < MAX_WLED && !cfg.wled[i].isEmpty() &&
+      CelebrationEngine::eligible(cfg.wledEnabled[i], cfg.wledEvents[i], event);
+}
 
-  for (uint8_t i = 0; i < MAX_WLED; ++i) {
-    if (!cfg.wledEnabled[i] || cfg.wled[i].isEmpty()) continue;
-    if (!restoring[i]) {
-      savedState[i] = getWledState(cfg.wled[i]);
-      if (savedState[i].isEmpty()) continue; // Never alter lights if we cannot restore.
+uint8_t wledEligibleCount(CelebrationEngine::Event event) {
+  uint8_t count = 0;
+  for (uint8_t i = 0; i < MAX_WLED; ++i)
+    if (wledParticipates(i, event)) ++count;
+  return count;
+}
+
+// WLED's "udpn.nn" suppresses UDP sync notifications for THIS state
+// change. Preserve the user's regular sync configuration; keep excluded
+// controllers outside the event even if their usual sync groups overlap.
+String wledRestoreBody(const String &original) {
+  String body = original;
+  if (body.length() < 2) return "";
+  const int pos = body.indexOf("\"udpn\"");
+  if (pos >= 0) {
+    const int opening = body.indexOf('{', pos);
+    if (opening >= 0) {
+      int nesting = 1, end = opening + 1;
+      while (end < (int)body.length() && nesting) {
+        if (body[end] == '{') ++nesting;
+        if (body[end] == '}') --nesting;
+        ++end;
+      }
+      if (!nesting) {
+        body = body.substring(0, pos) +
+               "\"udpn\":{\"nn\":true}" + body.substring(end);
+        return body;
+      }
     }
-    if (postWled(cfg.wled[i], payload)) {
-      restoring[i] = true;
-      restoreRetries[i] = 0;
-      restoreAt[i] = millis() + uint32_t(cfg.seconds) * 1000UL;
-    } else if (!restoring[i]) savedState[i] = "";
   }
-  startHorn();
+  const int end = body.lastIndexOf('}');
+  if (end < 0) return "";
+  body = body.substring(0, end) + ",\"udpn\":{\"nn\":true}}";
+  return body;
+}
+
+String wledEffectBody(const String &snapshot,
+                      CelebrationEngine::Event event, uint32_t color,
+                      uint8_t phase) {
+  DynamicJsonDocument filter(384);
+  if (filter.capacity() < 384) return "";
+  JsonObject templateSegment = filter["seg"][0].to<JsonObject>();
+  templateSegment["id"] = true;
+  templateSegment["start"] = true;
+  templateSegment["stop"] = true;
+  templateSegment["len"] = true;
+  DynamicJsonDocument state(3072);
+  if (state.capacity() < 3072) return "";
+  if (deserializeJson(state, snapshot, DeserializationOption::Filter(filter)))
+    return "";
+
+  DynamicJsonDocument command(4096);
+  if (command.capacity() < 4096) return "";
+  command["on"] = true;
+  command["bri"] = cfg.brightness;
+  command["transition"] = 0;
+  command["udpn"]["nn"] = true;  // Do not wake non-participating WLEDs.
+  const CelebrationEngine::Effect effect =
+      CelebrationEngine::effect(event, phase, cfg.wledGoalStyle);
+  JsonArray segments = command.createNestedArray("seg");
+  JsonArray current = state["seg"].as<JsonArray>();
+  uint8_t emitted = 0;
+  for (uint8_t j = 0; j < current.size() &&
+                       emitted < CelebrationEngine::kMaxSegments; ++j) {
+    JsonObject seg = current[j];
+    const int start = seg["start"] | 0;
+    const int stop = seg["stop"] | 0;
+    const int len = seg["len"] | 0;
+    if (stop <= start && len <= 0) continue;
+    JsonObject out = segments.createNestedObject();
+    out["id"] = seg["id"] | (int)j;
+    out["on"] = true;
+    out["fx"] = effect.fx;
+    out["sx"] = effect.speed;
+    out["ix"] = effect.intensity;
+    out["pal"] = 0;
+    JsonArray cols = out.createNestedArray("col");
+    JsonArray primary = cols.createNestedArray();
+    primary.add((color >> 16) & 0xFF);
+    primary.add((color >> 8) & 0xFF);
+    primary.add(color & 0xFF);
+    JsonArray secondary = cols.createNestedArray();
+    secondary.add(0); secondary.add(0); secondary.add(0);
+    ++emitted;
+  }
+  if (!emitted) {
+    // Some older WLED builds omit segment bounds from their state JSON.
+    JsonObject out = segments.createNestedObject();
+    out["id"] = 0;
+    out["fx"] = effect.fx;
+    out["sx"] = effect.speed;
+    out["ix"] = effect.intensity;
+    out["pal"] = 0;
+    JsonArray cols = out.createNestedArray("col");
+    JsonArray primary = cols.createNestedArray();
+    primary.add((color >> 16) & 0xFF);
+    primary.add((color >> 8) & 0xFF);
+    primary.add(color & 0xFF);
+  }
+  if (command.overflowed()) return "";
+  String body;
+  serializeJson(command, body);
+  return body;
+}
+
+void scheduleWledRestoreAll() {
+  const uint32_t now = millis();
+  for (uint8_t i = 0; i < MAX_WLED; ++i) {
+    if (restoring[i]) {
+      restoreAt[i] = now;
+      restoreRetries[i] = 0;
+    }
+  }
+  wledActiveEvent = CelebrationEngine::Event::NONE;
+  wledEventDuration = 0;
+  wledPpTestUntil = 0;
 }
 
 void tickRestores() {
+  const uint32_t now = millis();
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
-    if (!restoring[i] || int32_t(millis() - restoreAt[i]) < 0) continue;
-    if (postWled(cfg.wled[i], savedState[i]) || ++restoreRetries[i] >= 3) {
+    if (!restoring[i] || int32_t(now - restoreAt[i]) < 0) continue;
+    const String body = wledRestoreBody(savedState[i]);
+    const bool restored = !body.isEmpty() && postWled(cfg.wled[i], body);
+    if (restored) {
+      wledDeviceResult[i] = "Restored";
       restoring[i] = false;
       savedState[i] = "";
-    } else restoreAt[i] = millis() + 1500;
+      restoreRetries[i] = 0;
+    } else if (++restoreRetries[i] >= 3) {
+      wledDeviceResult[i] = "Restore failed";
+      Serial.printf("[WLED] controller %u restore failed after 3 tries\n", i + 1);
+      restoring[i] = false;
+      savedState[i] = "";
+    } else {
+      restoreAt[i] = millis() + 1500UL;
+      wledDeviceResult[i] = "Retrying restore";
+    }
   }
+}
+
+bool startWledEvent(CelebrationEngine::Event event, uint32_t color) {
+  if (event == CelebrationEngine::Event::NONE) {
+    scheduleWledRestoreAll();
+    return false;
+  }
+  bool prepared[MAX_WLED] = {};
+  for (uint8_t i = 0; i < MAX_WLED; ++i) {
+    if (!wledParticipates(i, event)) {
+      if (restoring[i]) {
+        restoreAt[i] = millis();
+        restoreRetries[i] = 0;
+      }
+      continue;
+    }
+    if (!restoring[i]) {
+      savedState[i] = getWledState(cfg.wled[i]);
+      if (savedState[i].isEmpty()) {
+        wledDeviceResult[i] = "Snapshot failed";
+        Serial.printf("[WLED] controller %u skipped: cannot save state\n", i + 1);
+        continue;
+      }
+    }
+    prepared[i] = true;
+  }
+
+  const uint32_t commonStart = millis();
+  uint8_t successful = 0;
+  for (uint8_t i = 0; i < MAX_WLED; ++i) {
+    if (!prepared[i]) continue;
+    const String body = wledEffectBody(savedState[i], event, color, 0);
+    if (!body.isEmpty() && postWled(cfg.wled[i], body)) {
+      restoring[i] = true;
+      restoreRetries[i] = 0;
+      // All devices share a single clock; PP has no duration until it ends.
+      restoreAt[i] = UINT32_MAX;
+      wledDeviceResult[i] = "Playing";
+      ++successful;
+    } else {
+      wledDeviceResult[i] = "Command failed";
+      // If the POST may have applied despite a timeout, retain the snapshot
+      // and attempt to restore rather than leaving the lights stranded.
+      restoring[i] = true;
+      restoreRetries[i] = 0;
+      restoreAt[i] = millis();
+    }
+  }
+  if (!successful) {
+    wledActiveEvent = CelebrationEngine::Event::NONE;
+    wledEventDuration = 0;
+    return false;
+  }
+  wledActiveEvent = event;
+  wledEventColor = color;
+  wledEventStart = commonStart;
+  wledEventDuration = CelebrationEngine::duration(event, cfg.seconds);
+  wledPhase = 0;
+  Serial.printf("[WLED] %s on %u/%u selected controllers, heap=%u\n",
+                CelebrationEngine::label(event), successful,
+                wledEligibleCount(event), (unsigned)ESP.getFreeHeap());
+  return true;
+}
+
+uint8_t currentWledPowerPlay(uint32_t &color) {
+  if (!cfg.wledPP || !selectedGameId) return 0;
+  Game *g = selectedGame();
+  if (!g || !(g->state == "LIVE" || g->state == "CRIT") ||
+      g->intermission || !g->ppDataKnown || !g->ppSide ||
+      uint32_t(millis() - g->ppUpdatedAt) >= 80000UL) return 0;
+  color = teamRgb(g->ppSide == 1 ? g->home : g->away);
+  return g->ppSide;
+}
+
+void tickWledCelebrations() {
+  const uint32_t now = millis();
+  uint32_t powerPlayColor = 0;
+  const bool testPP = wledPpTestUntil && int32_t(wledPpTestUntil - now) > 0;
+  bool hasPP = false;
+  if (testPP) {
+    hasPP = true;
+    powerPlayColor = wledEventColor;
+  } else {
+    hasPP = currentWledPowerPlay(powerPlayColor) != 0;
+  }
+  if (wledActiveEvent != CelebrationEngine::Event::NONE &&
+      CelebrationEngine::temporary(wledActiveEvent)) {
+    const uint32_t elapsed = uint32_t(now - wledEventStart);
+    if (elapsed < wledEventDuration) {
+      const uint8_t nextPhase = CelebrationEngine::phase(
+          wledActiveEvent, elapsed, wledEventDuration, cfg.wledGoalStyle);
+      if (nextPhase != wledPhase) {
+        wledPhase = nextPhase;
+        for (uint8_t i = 0; i < MAX_WLED; ++i) {
+          if (!restoring[i] || !wledParticipates(i, wledActiveEvent))
+            continue;
+          const String body = wledEffectBody(savedState[i], wledActiveEvent,
+                                              wledEventColor, wledPhase);
+          if (!body.isEmpty() && postWled(cfg.wled[i], body))
+            wledDeviceResult[i] = "Playing";
+          else
+            wledDeviceResult[i] = "Phase update failed";
+        }
+      }
+      return;
+    }
+    // After goal or game-start, return to power-play breathing if NHL still
+    // reports an advantage, otherwise restore the original WLED state.
+    if (hasPP && startWledEvent(CelebrationEngine::Event::POWER_PLAY,
+                                powerPlayColor)) return;
+    scheduleWledRestoreAll();
+    return;
+  }
+  if (wledActiveEvent == CelebrationEngine::Event::POWER_PLAY) {
+    if (!hasPP) {
+      scheduleWledRestoreAll();
+    } else if (wledEventColor != powerPlayColor) {
+      startWledEvent(CelebrationEngine::Event::POWER_PLAY, powerPlayColor);
+    }
+  } else if (hasPP && wledActiveEvent == CelebrationEngine::Event::NONE) {
+    // Avoid re-triggering a failed WLED every 5ms; NHL situation updates are
+    // already throttled and each event transition can initiate up to 4 HTTPs.
+    static uint32_t lastPpAttempt = 0;
+    if (uint32_t(now - lastPpAttempt) > 8000UL) {
+      lastPpAttempt = now;
+      startWledEvent(CelebrationEngine::Event::POWER_PLAY, powerPlayColor);
+    }
+  }
+}
+
+// Compatibility with existing goal detection and "Test all enabled lights".
+void celebrate(uint32_t color) {
+  startWledEvent(CelebrationEngine::Event::GOAL, color);
+  startHorn();
 }
 
 // Compact score/state fingerprint: redraw only when visible scoreboard values changed.
