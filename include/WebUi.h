@@ -88,12 +88,16 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <p>Cycle through today's NHL schedule on the CYD, with official team logos, scheduled starts, live period/clock, scores, shots and final results. The CYD now uses a full-screen broadcast layout without persistent TODAY, GAMES or SETUP buttons. Swipe across the screen for next/previous, tap the main scoreboard to view stats, or tap the tiny top-right menu icon to reach the game list and setup.</p>
 <div class="stats">
 <div class="stat"><span>Current screen</span><b id="displayGame">—</b></div>
+<div class="stat"><span>Carousel slide</span><b id="displaySlide">—</b></div>
+<div class="stat"><span>League standings</span><b id="displayStandingsState">—</b></div>
 <div class="stat"><span>Scoreboard date</span><b id="displayDate">—</b></div>
 <div class="stat"><span>Local game date</span><b id="displayToday">—</b></div>
 <div class="stat"><span>Clock synchronization</span><b id="displayClock">—</b></div>
 </div>
-<div class="toggle" style="margin-top:18px"><input type="checkbox" id="cycleGames"><label for="cycleGames">Automatically cycle through games</label></div>
-<label for="cycleSeconds">Show each game for (seconds)</label>
+<div class="toggle" style="margin-top:18px"><input type="checkbox" id="cycleGames"><label for="cycleGames">Automatically cycle through carousel slides</label></div>
+<div class="toggle" style="margin-top:13px"><input type="checkbox" id="showStandings"><label for="showStandings">Include league-wide conference & division rankings</label></div>
+<p class="small muted">Eight standings slides: East (ranks 1–8 and 9–16), West (ranks 1–8 and 9–16), and all four divisions. Each shows team rank, games played, W-L-OT and points. Swipe left/right to browse. Armed goal alerts continue normally.</p>
+<label for="cycleSeconds">Show each slide for (seconds)</label>
 <input id="cycleSeconds" type="number" min="5" max="30" step="1" value="9">
 <label for="displayTimezone">Game start time zone</label>
 <select id="displayTimezone">
@@ -227,7 +231,11 @@ function renderStatus(){
     :s.scoreboardLoaded?"Connected":"Connecting";
   $("nhlLastSuccess").textContent=s.nhlLastSuccessAgeSeconds>=0
     ?s.nhlLastSuccessAgeSeconds+" sec ago":"Not yet received";
-  $("displayGame").textContent=showing?showing.away+" @ "+showing.home:"No games";
+  $("displayGame").textContent=s.slideStandings
+    ?s.standingsPage||"League standings"
+    :showing?showing.away+" @ "+showing.home:"No games";
+  $("displaySlide").textContent=((s.carouselSlide??0)+1)+" / "+(s.carouselTotal||1);
+  $("displayStandingsState").textContent=s.standingsReady?"Current cache loaded":"Loading or unavailable";
   $("displayDate").textContent=s.scoreDate||"Not loaded";
   $("displayToday").textContent=s.today||"Synchronizing";
   $("displayClock").textContent=s.clockSynced?"Synced":"Pending NTP";
@@ -414,7 +422,8 @@ function formConfig(){
     rearPowerPlay:$("rearPowerPlay").checked,
     rearBrightness:Number($("rearBrightness").value),
     rearGoalSeconds:Number($("rearGoalSeconds").value),
-    cycleGames:$("cycleGames").checked,cycleSeconds:Number($("cycleSeconds").value),
+    cycleGames:$("cycleGames").checked,showStandings:$("showStandings").checked,
+    cycleSeconds:Number($("cycleSeconds").value),
     timezone:Number($("displayTimezone").value),wled:deviceSettings()};
 }
 async function saveConfig(){
@@ -440,6 +449,7 @@ async function loadConfig(){
   $("rearGoalSeconds").value=currentConfig.rearGoalSeconds||6;
   $("screenInverted").checked=!!currentConfig.screenInverted;
   $("cycleGames").checked=!!currentConfig.cycleGames;
+  $("showStandings").checked=currentConfig.showStandings!==false;
   $("cycleSeconds").value=currentConfig.cycleSeconds||9;
   $("displayTimezone").value=String(currentConfig.timezone ?? 1);
   renderDevices();
