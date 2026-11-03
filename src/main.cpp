@@ -366,6 +366,8 @@ String deviceLocalDate() {
   return formatLocalGameDate(time(nullptr), date) ? String(date) : String("");
 }
 
+void saveSettings(); // Declaration: Preferences implementation follows later.
+
 void prepareNewScoreboardDate(const String &today) {
   if (today.isEmpty() || today == targetScoreboardDate) return;
   targetScoreboardDate = today;
