@@ -2220,7 +2220,16 @@ void loop() {
     // 60s: idle. A single fetch refreshes the entire daily carousel.
     const uint32_t interval = NhlFetchPolicy::pollIntervalMs(
       currentScoreboardPollIntervalMs(), nhlConsecutiveFailures);
-    if (uint32_t(now - lastPoll) >= interval) {
+    // An interrupted HTTPS stream can block until its timeout. Never start
+    // one so close to a WLED snapshot restoration that the lights remain in
+    // celebration mode while the ESP32 waits for NHL bytes.
+    bool restoreSoon = false;
+    for (uint8_t i = 0; i < MAX_WLED; ++i)
+      if (restoring[i] &&
+          int32_t(restoreAt[i] - now) <=
+             int32_t(NhlFetchPolicy::kResponseTimeoutMs + 500UL))
+        restoreSoon = true;
+    if (!restoreSoon && uint32_t(now - lastPoll) >= interval) {
       lastPoll = now;
       pollNhl();
     }
