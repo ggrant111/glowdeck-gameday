@@ -38,6 +38,7 @@ struct Settings {
   uint8_t brightness = 190;
   uint8_t seconds = 8;
   bool horn = false;
+  bool invertScreen = true; // This CYD panel needs INVON to render dark colors correctly.
   int touchX0 = 300, touchX1 = 3800, touchY0 = 300, touchY1 = 3800;
 } cfg;
 
@@ -111,6 +112,7 @@ void loadSettings() {
   cfg.brightness = constrain(prefs.getUChar("bright", 190), 1, 255);
   cfg.seconds = constrain(prefs.getUChar("seconds", 8), 2, 30);
   cfg.horn = prefs.getBool("horn", false);
+  cfg.invertScreen = prefs.getBool("invert", true);
   cfg.touchX0 = prefs.getInt("tx0", 300);
   cfg.touchX1 = prefs.getInt("tx1", 3800);
   cfg.touchY0 = prefs.getInt("ty0", 300);
@@ -130,6 +132,7 @@ void saveSettings() {
   prefs.putUChar("bright", cfg.brightness);
   prefs.putUChar("seconds", cfg.seconds);
   prefs.putBool("horn", cfg.horn);
+  prefs.putBool("invert", cfg.invertScreen);
 }
 
 bool authorized() {
@@ -245,7 +248,26 @@ void tickRestores() {
   }
 }
 
+// Compact score/state fingerprint: redraw only when visible scoreboard values changed.
+// Avoids repeated fillScreen() calls during polling while scores stay the same.
+uint32_t gamesFingerprint() {
+  uint32_t hash = 2166136261UL;
+  for (uint8_t i = 0; i < gameCount; ++i) {
+    const Game &g = games[i];
+    hash = (hash ^ g.id) * 16777619UL;
+    hash = (hash ^ uint32_t(g.homeScore)) * 16777619UL;
+    hash = (hash ^ uint32_t(g.awayScore)) * 16777619UL;
+    const String *fields[] = {&g.home, &g.away, &g.state};
+    for (const String *str : fields) {
+      for (size_t j = 0; j < str->length(); ++j)
+        hash = (hash ^ uint8_t((*str)[j])) * 16777619UL;
+    }
+  }
+  return (hash ^ gameCount) * 16777619UL;
+}
+
 void pollNhl() {
+  const uint32_t previousFingerprint = gamesFingerprint();
   if (WiFi.status() != WL_CONNECTED) return;
   WiFiClientSecure client;
   // NHL's public endpoint; no credentials are transmitted. See SECURITY.md.
@@ -313,7 +335,7 @@ void pollNhl() {
   } else {
     haveBaseline = false;
   }
-  needsDraw = true;
+  if (gamesFingerprint() != previousFingerprint) needsDraw = true;
 }
 
 uint16_t to565(uint32_t rgb) {
@@ -395,8 +417,9 @@ void draw() {
     textAt("IP: " + localAddress(), 12, 97, MUTED);
     textAt("AP: " + apSsid, 12, 118, MUTED);
     textAt("AP password: " + apPassword, 12, 138, WHITE);
-    button(10, 161, 145, 29, "TEST LIGHTS");
-    button(166, 161, 145, 29, "CALIBRATE");
+    button(8, 161, 98, 29, "TEST");
+    button(111, 161, 98, 29, "TOUCH");
+    button(214, 161, 98, 29, "INVERT");
   }
   button(6, 200, 99, 34, "LIVE", screen == Screen::LIVE);
   button(111, 200, 99, 34, "GAMES", screen == Screen::GAMES);
@@ -457,12 +480,16 @@ void handleTouch() {
       if (index < gameCount) selectGame(games[index].id);
     }
   } else if (screen == Screen::SETUP && y >= 160 && y < 193) {
-    if (x < 158) {
+    if (x < 107) {
       Game *g = selectedGame();
       celebrate(teamRgb(g ? g->home : String("UTA")));
-    } else {
+    } else if (x < 213) {
       screen = Screen::CALIBRATE;
       calStep = 0;
+    } else {
+      cfg.invertScreen = !cfg.invertScreen;
+      tft.invertDisplay(cfg.invertScreen);
+      prefs.putBool("invert", cfg.invertScreen);
     }
   }
   needsDraw = true;
@@ -476,7 +503,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1024> doc;
-    doc["version"] = "0.1.0";
+    doc["version"] = "0.1.1";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -525,6 +552,7 @@ void registerRoutes() {
     doc["brightness"] = cfg.brightness;
     doc["seconds"] = cfg.seconds;
     doc["horn"] = cfg.horn;
+    doc["screenInverted"] = cfg.invertScreen;
     JsonArray wled = doc.createNestedArray("wled");
     for (uint8_t i = 0; i < MAX_WLED; ++i) {
       JsonObject d = wled.createNestedObject();
@@ -554,6 +582,12 @@ void registerRoutes() {
     cfg.brightness = constrain((int)(doc["brightness"] | cfg.brightness), 1, 255);
     cfg.seconds = constrain((int)(doc["seconds"] | cfg.seconds), 2, 30);
     cfg.horn = doc["horn"] | cfg.horn;
+    bool invert = doc["screenInverted"] | cfg.invertScreen;
+    if (cfg.invertScreen != invert) {
+      cfg.invertScreen = invert;
+      tft.invertDisplay(cfg.invertScreen);
+      needsDraw = true;
+    }
     JsonArray arr = doc["wled"].as<JsonArray>();
     for (uint8_t i = 0; i < MAX_WLED && !arr.isNull() && i < arr.size(); ++i) {
       String ip = arr[i]["ip"] | String("");
@@ -634,7 +668,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.1.0 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.1.1 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
@@ -659,6 +693,9 @@ void setup() {
   mdnsName = "glowdeck-" + String(suffix);
   mdnsName.toLowerCase();
   loadSettings();
+  // Some ILI9341-compatible CYDs boot with visually inverted colors.
+  // Runtime setting is stored in NVS, so the user can change it from web or touch.
+  tft.invertDisplay(cfg.invertScreen);
 
   WiFi.persistent(false);
   WiFi.setSleep(false);

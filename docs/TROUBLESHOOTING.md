@@ -22,6 +22,16 @@ COM6 was the most recently reported port, but confirm in Device Manager after re
 
 Unlike earlier builds, this firmware starts the local screen and hotspot without blocking on Wi-Fi, WLED or NHL requests. A new reboot loop still requires the actual serial error trace; do not assume it was caused by the network.
 
+## Pale blue background / pink buttons / video flicker
+
+Some 2.8-inch CYDs need the controller's display-inversion command to render the intended dark interface. Starting in v0.1.1 the default is corrected for the reported panel and remains user-adjustable.
+
+- Tap **SETUP → INVERT** on the physical touchscreen to switch the screen color mode.
+- Alternatively open the web dashboard, choose **Setup → Correct inverted CYD display colors**, then save. The preference is stored in NVS.
+- Expected GlowDeck appearance: a **dark navy background**, **white text**, **teal selected buttons**.
+- If the screen only appears to pulse when viewed *through a phone camera*, it can be camera/display refresh interference. If flicker is visible to the naked eye, check power quality and update the firmware; the code now skips unchanged NHL scoreboard redraws.
+- If actual screen tearing remains after the fix, try the hardware SPI speed diagnostic or a lower TFT SPI frequency instead of changing several variables at once.
+
 ## Touch inaccurate
 
 Use **SETUP → CALIBRATE** on the CYD screen and tap the top-left then bottom-right crosses precisely. Your calibration is saved.
