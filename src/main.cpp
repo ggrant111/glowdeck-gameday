@@ -15,6 +15,7 @@
 #include "GameDayDate.h"
 #include "GameDayCadence.h"
 #include "ConferenceRecords.h"
+#include "GameDetailMode.h"
 #include "RearLedPattern.h"
 #include <time.h>
 
@@ -734,7 +735,7 @@ void fetchDetailStats(uint32_t id) {
   for (uint8_t i = 0; i < gameCount; ++i)
     if (games[i].id == id) { g = &games[i]; break; }
   if (!g) return;
-  const bool pregame = g->state == "FUT" || g->state == "PRE";
+  const bool pregame = GameDetailMode::isPregame(g->state.c_str());
   if (detail.gameId == id && detail.loaded &&
       detail.fetchedPregame == pregame) {
     const uint32_t ttl = pregame ? 180000UL :
@@ -1283,9 +1284,10 @@ void pollNhl() {
   if (screen == Screen::STATS && detailGameId) {
     Game *viewed = detailGame();
     if (viewed) {
-      const bool pregame = viewed->state == "FUT" || viewed->state == "PRE";
+      const bool pregame = GameDetailMode::isPregame(viewed->state.c_str());
       if (detail.gameId == viewed->id &&
-          detail.loaded && detail.fetchedPregame != pregame) {
+          GameDetailMode::needsModeSwitch(detail.loaded, detail.fetchedPregame,
+                                           viewed->state.c_str())) {
         detail.loaded = false;
         detail.count = 0;
         needDetailLoad = true;
