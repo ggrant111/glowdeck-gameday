@@ -834,32 +834,41 @@ void draw() {
 
   if (screen == Screen::STATS) {
     Game *g = detailGame();
+    tft.fillRect(0, 33, 320, 165, ARENA_BLACK);
+    tft.fillRoundRect(6, 38, 308, 154, 8, ARENA_PLATE);
+    tft.drawRoundRect(6, 38, 308, 154, 8, ARENA_LINE);
     if (!g) {
-      textAt("Game unavailable", 14, 54, ORANGE, 4);
-    } else {
-      drawTeamLogo(tft, g->away, 23, 40);
-      drawTeamLogo(tft, g->home, 249, 40);
       tft.setTextDatum(MC_DATUM);
-      tft.setTextColor(WHITE, BG);
-      tft.drawString(g->state == "FUT" || g->state == "PRE" ? "VS" :
-                     String(g->awayScore) + " - " + String(g->homeScore), 160, 57, 4);
-      tft.setTextColor(MUTED, BG);
-      tft.drawString(gameStatus(*g), 160, 89, 2);
-      tft.drawString(g->away, 47, 97, 2);
-      tft.drawString(g->home, 273, 97, 2);
+      tft.setTextColor(WHITE, ARENA_PLATE);
+      tft.drawString("Game unavailable", 160, 103, 2);
+      tft.setTextDatum(TL_DATUM);
+    } else {
+      drawTeamLogo(tft, g->away, 15, 42);
+      drawTeamLogo(tft, g->home, 249, 42);
+      tft.setTextDatum(MC_DATUM);
+      tft.setTextColor(WHITE, ARENA_PLATE);
+      tft.drawString(gameIsFuture(*g) ? "VS" :
+                     String(g->awayScore) + " - " + String(g->homeScore),
+                     160, 59, 4);
+      tft.setTextColor(ICE_TEXT, ARENA_PLATE);
+      tft.drawString(gameStatus(*g), 160, 87, 2);
+      tft.setTextColor(WHITE, ARENA_PLATE);
+      tft.drawString(g->away, 43, 108, 2);
+      tft.drawString(g->home, 277, 108, 2);
+      tft.drawFastHLine(92, 106, 136, ARENA_LINE);
       if (detail.loaded && detail.gameId == g->id && detail.count) {
         for (uint8_t i = 0; i < detail.count; ++i) {
-          int16_t y = 113 + i * 16;
-          tft.setTextColor(WHITE, BG);
-          tft.drawString(detail.away[i], 62, y, 2);
-          tft.drawString(detail.home[i], 258, y, 2);
-          tft.setTextColor(MUTED, BG);
+          const int16_t y = 123 + i * 14;
+          tft.setTextColor(WHITE, ARENA_PLATE);
+          tft.drawString(detail.away[i], 52, y, 2);
+          tft.drawString(detail.home[i], 268, y, 2);
+          tft.setTextColor(ICE_TEXT, ARENA_PLATE);
           tft.drawString(detail.label[i], 160, y, 2);
         }
       } else {
-        tft.setTextColor(MUTED, BG);
+        tft.setTextColor(ICE_TEXT, ARENA_PLATE);
         tft.drawString(detail.loaded ? detail.error : "Loading team stats...",
-                       160, 141, 2);
+                       160, 148, 2);
       }
       tft.setTextDatum(TL_DATUM);
     }
