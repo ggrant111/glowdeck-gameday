@@ -276,35 +276,57 @@ function renderGames(){
       await refresh();
     });
     const stats=document.createElement("button");
-    stats.textContent="Stats";stats.className="ghost";
-    stats.title="View team comparisons for this matchup";
+    const isFuture=g.state==="FUT"||g.state==="PRE";
+    stats.textContent=isFuture?"Preview":g.state==="LIVE"||g.state==="CRIT"?"Live stats":"Stats";
+    stats.className="ghost";
+    stats.title=isFuture
+      ?"Season W-L-OT, vs-conference W-L-OT, conference rank and points"
+      :"Shots, faceoffs, power plays and other game stats";
     stats.onclick=()=>perform(async()=>{
-      $("gameDetail").hidden=false;
-      $("gameDetail").replaceChildren(document.createTextNode("Loading stats for "+g.away+" @ "+g.home+"..."));
-      const data=await api("/api/stats?id="+encodeURIComponent(g.id));
-      const box=$("gameDetail");box.replaceChildren();
-      const head=document.createElement("h3");
-      head.textContent=g.away+" @ "+g.home+" — "+(g.status||g.state);
-      box.append(head);
-      if(!data.stats||!data.stats.length){
-        const p=document.createElement("p");p.className="muted";
-        p.textContent=data.error||"Detailed game stats not yet published";
-        box.append(p);
-      }else{
-        const table=document.createElement("table");table.style.width="100%";
-        data.stats.forEach(row=>{
-          const tr=document.createElement("tr");
-          [row.away,row.label,row.home].forEach((v,j)=>{
-            const td=document.createElement("td");td.textContent=String(v||"—");
-            td.style.padding="7px";td.style.textAlign=j===0?"left":j===1?"center":"right";
-            if(j===1)td.className="muted";
-            tr.append(td);
+      const box=$("gameDetail");
+      box.hidden=false;
+      const selectedId=g.id;
+      const token=++detailPreviewToken;
+      box.replaceChildren(document.createTextNode(
+        isFuture?"Loading season and conference records for "+g.away+" @ "+g.home+"..."
+                :"Loading game stats for "+g.away+" @ "+g.home+"..."));
+      // Conference game records take two low-priority NHL schedule requests.
+      // Recheck the device until both are ready; never invent a zero record.
+      for(let attempt=0;attempt<7;attempt++){
+        const data=await api("/api/stats?id="+encodeURIComponent(selectedId));
+        if(token!==detailPreviewToken)return;
+        box.replaceChildren();
+        const head=document.createElement("h3");
+        head.textContent=g.away+" @ "+g.home+" — "+
+          (data.pregame?"Pregame records":g.status||g.state);
+        box.append(head);
+        if(!data.stats||!data.stats.length){
+          const p=document.createElement("p");p.className="muted";
+          p.textContent=data.error||"Game data not yet published";
+          box.append(p);
+        }else{
+          const table=document.createElement("table");table.style.width="100%";
+          data.stats.forEach(row=>{
+            const tr=document.createElement("tr");
+            [row.away,row.label,row.home].forEach((v,j)=>{
+              const td=document.createElement("td");td.textContent=String(v||"—");
+              td.style.padding="7px";
+              td.style.textAlign=j===0?"left":j===1?"center":"right";
+              if(j===1)td.className="muted";
+              tr.append(td);
+            });
+            table.append(tr);
           });
-          table.append(tr);
-        });
-        box.append(table);
+          box.append(table);
+        }
+        if(!data.pregame||!data.conferenceLoading)break;
+        const status=document.createElement("p");status.className="small muted";
+        status.textContent="Calculating records against conference opponents...";
+        box.append(status);
+        await new Promise(resolve=>setTimeout(resolve,2600));
       }
-      box.scrollIntoView({behavior:"smooth",block:"nearest"});
+      if(token===detailPreviewToken)
+        box.scrollIntoView({behavior:"smooth",block:"nearest"});
     });
     actions.append(stats,arm);
     line.append(detail,actions);list.append(line);
