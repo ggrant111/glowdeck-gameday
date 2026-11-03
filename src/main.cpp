@@ -129,7 +129,7 @@ uint32_t wledEventStart = 0, wledEventColor = 0, wledEventDuration = 0;
 uint8_t wledPhase = 0;
 String wledDeviceResult[MAX_WLED];
 String lastArmedGameState;
-uint32_t wledPpTestUntil = 0;
+uint32_t wledPpTestUntil = 0, wledSuppressPpUntil = 0;
 bool restoring[MAX_WLED] = {false, false, false, false};
 uint32_t restoreAt[MAX_WLED] = {0, 0, 0, 0};
 uint8_t restoreRetries[MAX_WLED] = {0, 0, 0, 0};
@@ -1340,7 +1340,7 @@ void tickWledCelebrations() {
   if (testPP) {
     hasPP = true;
     powerPlayColor = wledEventColor;
-  } else {
+  } else if (int32_t(wledSuppressPpUntil - now) <= 0) {
     hasPP = currentWledPowerPlay(powerPlayColor) != 0;
   }
   if (wledActiveEvent != CelebrationEngine::Event::NONE &&
@@ -2628,6 +2628,47 @@ void registerRoutes() {
       rearEvent = RearEvent::IDLE;
     }
     StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
+  });
+  server.on("/api/wled/preview", HTTP_POST, []() {
+    if (!authorized()) return;
+    StaticJsonDocument<256> request;
+    if (deserializeJson(request, server.arg("plain")))
+      return errorResponse("Invalid preview JSON");
+    const String type = request["event"] | String("goal");
+    const String side = request["side"] | String("home");
+    if (side != "home" && side != "away")
+      return errorResponse("Invalid team side");
+    CelebrationEngine::Event event = CelebrationEngine::Event::NONE;
+    if (type == "goal") event = CelebrationEngine::Event::GOAL;
+    else if (type == "pp") event = CelebrationEngine::Event::POWER_PLAY;
+    else if (type == "start") event = CelebrationEngine::Event::GAME_START;
+    else if (type == "win") event = CelebrationEngine::Event::FINAL_WIN;
+    else if (type == "loss") event = CelebrationEngine::Event::FINAL_LOSS;
+    else if (type != "stop") return errorResponse("Invalid celebration type");
+    if (event == CelebrationEngine::Event::NONE) {
+      wledSuppressPpUntil = millis() + 30000UL;
+      scheduleWledRestoreAll();
+      tickRestores();
+    } else {
+      Game *game = selectedGame();
+      if (!game && gameCount) game = &games[featuredIndex % gameCount];
+      const uint32_t color = teamRgb(
+          game ? (side == "home" ? game->home : game->away) : String("UTA"));
+      wledSuppressPpUntil = 0;
+      if (startWledEvent(event, color)) {
+        if (event == CelebrationEngine::Event::POWER_PLAY)
+          wledPpTestUntil = millis() + 9000UL;
+        else
+          wledPpTestUntil = 0;
+      }
+    }
+    StaticJsonDocument<256> response;
+    response["event"] = CelebrationEngine::label(wledActiveEvent);
+    response["devices"] = wledEligibleCount(event == CelebrationEngine::Event::NONE
+        ? CelebrationEngine::Event::GOAL : event);
+    response["ok"] = event == CelebrationEngine::Event::NONE ||
+                      wledActiveEvent == event;
+    sendJson(response);
   });
   server.on("/api/test", HTTP_POST, []() {
     if (!authorized()) return;
