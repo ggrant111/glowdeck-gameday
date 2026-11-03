@@ -1724,7 +1724,6 @@ void pollNhl() {
     }
   }
   if (followedChanged) saveSettings();
-  detectRearGoalChanges();
   Game *g = selectedGame();
   if (g) {
     if (haveBaseline && (g->state == "LIVE" || g->state == "CRIT")) {
@@ -1761,6 +1760,10 @@ void pollNhl() {
     haveBaseline = false;
     lastArmedGameState = "";
   }
+  // A multi-device HTTP celebration may spend time capturing WLED snapshots.
+  // Start the CYD rear LED's timed flash AFTER those network calls, otherwise
+  // its short flash can expire before the main loop resumes.
+  detectRearGoalChanges();
   if (gamesFingerprint() != previousFingerprint || newDay) {
     if (!newDay && !showingStandingsPage() && screen == Screen::LIVE &&
         gameCount > 0 && previouslyFeatured == games[featuredIndex].id)
