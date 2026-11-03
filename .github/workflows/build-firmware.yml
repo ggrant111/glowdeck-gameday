@@ -32,6 +32,10 @@ jobs:
           /tmp/glowdeck-conference-test
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_detail_mode.cpp -o /tmp/glowdeck-detail-test
           /tmp/glowdeck-detail-test
+      - name: Test NHL partial-input retry and backoff
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_nhl_fetch_policy.cpp -o /tmp/glowdeck-nhl-fetch-test
+          /tmp/glowdeck-nhl-fetch-test
       - name: Install PlatformIO
         run: pip install platformio==6.1.18
       - name: Install logo build dependencies
