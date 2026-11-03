@@ -46,6 +46,10 @@ jobs:
           /tmp/glowdeck-celebration-test
       - name: Validate embedded web dashboard JavaScript
         run: python tests/check_web_ui.py
+      - name: Test CYD team-color gradient and RGB565 display bounds
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_team_gradient.cpp -o /tmp/glowdeck-gradient-test
+          /tmp/glowdeck-gradient-test
       - name: Install PlatformIO
         run: pip install platformio==6.1.18
       - name: Install logo build dependencies
