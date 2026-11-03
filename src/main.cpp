@@ -123,6 +123,7 @@ uint32_t nhlLastDurationMs = 0;
 uint32_t nhlLastSuccessAt = 0;
 uint32_t lastTouch = 0;
 String savedState[MAX_WLED];
+String savedWledIp[MAX_WLED];
 CelebrationEngine::Event wledActiveEvent = CelebrationEngine::Event::NONE;
 uint32_t wledEventStart = 0, wledEventColor = 0, wledEventDuration = 0;
 uint8_t wledPhase = 0;
@@ -1228,17 +1229,21 @@ void tickRestores() {
     if (!restoring[i] || restoreAt[i] == UINT32_MAX ||
         int32_t(now - restoreAt[i]) < 0) continue;
     const String body = wledRestoreBody(savedState[i]);
-    const bool restored = !body.isEmpty() && postWled(cfg.wled[i], body);
+    const bool restored = !body.isEmpty() &&
+                          postWled(savedWledIp[i].length() ? savedWledIp[i] :
+                                   cfg.wled[i], body);
     if (restored) {
       wledDeviceResult[i] = "Restored";
       restoring[i] = false;
       savedState[i] = "";
+      savedWledIp[i] = "";
       restoreRetries[i] = 0;
     } else if (++restoreRetries[i] >= 3) {
       wledDeviceResult[i] = "Restore failed";
       Serial.printf("[WLED] controller %u restore failed after 3 tries\n", i + 1);
       restoring[i] = false;
       savedState[i] = "";
+      savedWledIp[i] = "";
     } else {
       restoreAt[i] = millis() + 1500UL;
       wledDeviceResult[i] = "Retrying restore";
@@ -1260,9 +1265,18 @@ bool startWledEvent(CelebrationEngine::Event event, uint32_t color) {
       }
       continue;
     }
+    if (restoring[i] && savedWledIp[i] != cfg.wled[i]) {
+      // Device IP changed during a celebration: never restore the old
+      // controller's state to a new IP. Retire the old one first.
+      restoreAt[i] = millis();
+      tickRestores();
+      if (restoring[i]) continue;
+    }
     if (!restoring[i]) {
       savedState[i] = getWledState(cfg.wled[i]);
+      savedWledIp[i] = cfg.wled[i];
       if (savedState[i].isEmpty()) {
+        savedWledIp[i] = "";
         wledDeviceResult[i] = "Snapshot failed";
         Serial.printf("[WLED] controller %u skipped: cannot save state\n", i + 1);
         continue;
