@@ -75,6 +75,12 @@ struct GoalWatch {
   bool baseline = false;
 };
 GoalWatch goalWatch[MAX_GAMES];
+struct PowerPlaySnapshot {
+  uint32_t id = 0, updatedAt = 0;
+  uint8_t side = 0;
+  bool known = false;
+};
+PowerPlaySnapshot ppCache[MAX_GAMES];
 enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY };
 RearEvent rearEvent = RearEvent::IDLE;
 uint32_t rearGoalAt = 0, rearGoalColor = 0, rearGoalDuration = 0;
@@ -372,6 +378,9 @@ void prepareNewScoreboardDate(const String &today) {
     needDetailLoad = false;
     detail.loaded = false;
     for (auto &entry : carouselStats) entry = CarouselStats();
+    for (auto &entry : goalWatch) entry = GoalWatch();
+    for (auto &entry : ppCache) entry = PowerPlaySnapshot();
+    stopRearLed();
     if (screen == Screen::STATS) screen = Screen::LIVE;
     if (selectedGameId) {
       selectedGameId = 0;
@@ -762,6 +771,59 @@ uint32_t gamesFingerprint() {
   return (hash ^ gameCount) * 16777619UL;
 }
 
+// The NHL's cross-day scoreboard currently exposes PP 'situation' even when
+// the date-scoped /score endpoint omits it. Use a small filtered parse, and
+// only fetch for live games the user actually follows.
+void fetchFollowedPowerPlays() {
+  bool relevant = false;
+  for (uint8_t i = 0; i < gameCount; ++i)
+    if (rearFollows(games[i].id) &&
+        (games[i].state == "LIVE" || games[i].state == "CRIT")) relevant = true;
+  if (!relevant || WiFi.status() != WL_CONNECTED) return;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.setTimeout(3500);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.useHTTP10(true);
+  if (!http.begin(client, "https://api-web.nhle.com/v1/scoreboard/now"))
+    return;
+  if (http.GET() != HTTP_CODE_OK) { http.end(); return; }
+
+  StaticJsonDocument<512> filter;
+  JsonObject fg = filter["gamesByDate"][0]["games"][0].to<JsonObject>();
+  fg["id"] = true;
+  fg["situation"]["homeTeam"]["strength"] = true;
+  fg["situation"]["awayTeam"]["strength"] = true;
+  fg["situation"]["homeTeam"]["situationDescriptions"][0] = true;
+  fg["situation"]["awayTeam"]["situationDescriptions"][0] = true;
+  DynamicJsonDocument doc(24576);
+  const DeserializationError err = deserializeJson(
+    doc, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  if (err) { Serial.printf("Rear PP fallback JSON: %s\n", err.c_str()); return; }
+
+  JsonArray dates = doc["gamesByDate"].as<JsonArray>();
+  for (JsonObject date : dates) for (JsonObject entry : date["games"].as<JsonArray>()) {
+    const uint32_t id = entry["id"] | 0U;
+    for (uint8_t i = 0; i < gameCount; ++i) {
+      Game &g = games[i];
+      if (g.id != id || !rearFollows(id)) continue;
+      JsonVariantConst situation = entry["situation"];
+      const uint8_t side = detectPowerPlay(situation);
+      g.ppSide = side;
+      g.ppDataKnown = true; // Present in standings; absent situation == no PP.
+      g.ppUpdatedAt = millis();
+      ppCache[i].id = id;
+      ppCache[i].side = side;
+      ppCache[i].known = true;
+      ppCache[i].updatedAt = g.ppUpdatedAt;
+      break;
+    }
+  }
+}
+
 void pollNhl() {
   const uint32_t previousFingerprint = gamesFingerprint();
   if (WiFi.status() != WL_CONNECTED) return;
@@ -795,6 +857,10 @@ void pollNhl() {
   gameFilter["periodDescriptor"]["periodType"] = true;
   gameFilter["clock"]["timeRemaining"] = true;
   gameFilter["clock"]["inIntermission"] = true;
+  gameFilter["situation"]["homeTeam"]["strength"] = true;
+  gameFilter["situation"]["awayTeam"]["strength"] = true;
+  gameFilter["situation"]["homeTeam"]["situationDescriptions"][0] = true;
+  gameFilter["situation"]["awayTeam"]["situationDescriptions"][0] = true;
   gameFilter["homeTeam"]["name"]["default"] = true;
   gameFilter["homeTeam"]["sog"] = true;
   gameFilter["awayTeam"]["name"]["default"] = true;
@@ -852,6 +918,24 @@ void pollNhl() {
     g.awayScore = item["awayTeam"]["score"] | 0;
     g.homeShots = item["homeTeam"]["sog"] | -1;
     g.awayShots = item["awayTeam"]["sog"] | -1;
+    JsonVariantConst situation = item["situation"];
+    if (!situation.isNull()) {
+      g.ppSide = detectPowerPlay(situation);
+      g.ppDataKnown = true;
+      g.ppUpdatedAt = millis();
+      ppCache[gameCount - 1].id = g.id;
+      ppCache[gameCount - 1].side = g.ppSide;
+      ppCache[gameCount - 1].known = true;
+      ppCache[gameCount - 1].updatedAt = g.ppUpdatedAt;
+    } else {
+      const PowerPlaySnapshot &cached = ppCache[gameCount - 1];
+      if (cached.id == g.id && cached.known &&
+          uint32_t(millis() - cached.updatedAt) < 80000UL) {
+        g.ppSide = cached.side;
+        g.ppDataKnown = true;
+        g.ppUpdatedAt = cached.updatedAt;
+      }
+    }
   }
   if (newDay) {
     featuredIndex = 0;
@@ -879,6 +963,7 @@ void pollNhl() {
     prefs.putUInt("game", 0);
     haveBaseline = false;
   }
+  detectRearGoalChanges();
   Game *g = selectedGame();
   if (g) {
     if (haveBaseline && (g->state == "LIVE" || g->state == "CRIT")) {
@@ -1620,6 +1705,7 @@ void loop() {
   handleTouch();
   tickHorn();
   tickRestores();
+  tickRearLed();
 
   const uint32_t now = millis();
   const bool connected = WiFi.status() == WL_CONNECTED;
@@ -1665,6 +1751,22 @@ void loop() {
     WiFi.reconnect();
     reconnectAt = now;
     needsDraw = true;
+  }
+  // PP is event-driven by real NHL manpower data, not by cumulative PP stats.
+  // Poll only while relevant and never while WLED state restoration is pending.
+  if (connected && cfg.rearLedEnabled && cfg.rearPowerPlay &&
+      uint32_t(now - lastPpFallback) >= 45000UL) {
+    bool restoringLights = false, needSituation = false;
+    for (uint8_t i = 0; i < MAX_WLED; ++i)
+      if (restoring[i]) restoringLights = true;
+    for (uint8_t i = 0; i < gameCount; ++i)
+      if (rearFollows(games[i].id) && (games[i].state == "LIVE" ||
+           games[i].state == "CRIT") && !games[i].intermission &&
+           !games[i].ppDataKnown) needSituation = true;
+    if (needSituation && !restoringLights && rearEvent != RearEvent::GOAL) {
+      lastPpFallback = millis();
+      fetchFollowedPowerPlays();
+    }
   }
   if (screen == Screen::LIVE && cfg.cycleGames && gameCount > 1 &&
       now - lastCarouselAdvance >= uint32_t(cfg.cycleSeconds) * 1000UL) {
