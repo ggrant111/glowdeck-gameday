@@ -85,6 +85,53 @@ struct DetailStats {
 } detail;
 bool needDetailLoad = false;
 uint32_t detailGameId = 0;
+
+// Keep the compact scoreboard stats per game, not just in the current detail view.
+// Cached once when a carousel game is shown; refreshed for ongoing games.
+struct CarouselStats {
+  uint32_t id = 0, updatedAt = 0;
+  bool loaded = false;
+  String ppAway, ppHome, pimAway, pimHome, faceAway, faceHome;
+  String recordAway, recordHome, pointsAway, pointsHome;
+};
+CarouselStats carouselStats[MAX_GAMES];
+uint32_t lastCarouselStatsCheck = 0;
+
+CarouselStats &statsFor(uint8_t index) {
+  CarouselStats &entry = carouselStats[index];
+  if (entry.id != games[index].id) {
+    entry = CarouselStats();
+    entry.id = games[index].id;
+  }
+  return entry;
+}
+
+bool statsAreFresh(const Game &g, const CarouselStats &stat) {
+  if (!stat.loaded || stat.id != g.id) return false;
+  const uint32_t ttl = (g.state == "LIVE" || g.state == "CRIT") ? 60000UL
+       : (g.state == "FUT" || g.state == "PRE") ? 900000UL : 3600000UL;
+  return uint32_t(millis() - stat.updatedAt) < ttl;
+}
+
+void updateCarouselStatsFromDetail(uint8_t index, const DetailStats &source) {
+  CarouselStats &cached = statsFor(index);
+  cached.loaded = true;
+  cached.updatedAt = millis();
+  for (uint8_t i = 0; i < source.count; ++i) {
+    if (source.label[i] == "POWER PLAY") {
+      cached.ppAway = source.away[i]; cached.ppHome = source.home[i];
+    } else if (source.label[i] == "PEN. MIN") {
+      cached.pimAway = source.away[i]; cached.pimHome = source.home[i];
+    } else if (source.label[i] == "FACEOFFS") {
+      cached.faceAway = source.away[i]; cached.faceHome = source.home[i];
+    } else if (source.label[i] == "W-L-OT") {
+      cached.recordAway = source.away[i]; cached.recordHome = source.home[i];
+    } else if (source.label[i] == "POINTS") {
+      cached.pointsAway = source.away[i]; cached.pointsHome = source.home[i];
+    }
+  }
+}
+
 Screen screen = Screen::LIVE;
 uint8_t calStep = 0;
 int calX, calY;
@@ -278,9 +325,9 @@ void fetchDetailStats(uint32_t id) {
         const struct { const char *id; const char *name; } targets[] = {
           {"faceoffWinningPctg", "FACEOFFS"},
           {"powerPlay", "POWER PLAY"},
+          {"pim", "PEN. MIN"},
           {"hits", "HITS"},
           {"blockedShotAttempts", "BLOCKS"},
-          {"pim", "PEN. MIN"},
           {"giveaways", "GIVEAWAYS"},
           {"sog", "SHOTS"}
         };
@@ -314,7 +361,14 @@ void fetchDetailStats(uint32_t id) {
       ? "Team records not yet available" : "Game stats not yet available";
   detail.loaded = true;
   detail.updatedAt = millis();
-  needsDraw = true;
+  for (uint8_t i = 0; i < gameCount; ++i) {
+    if (games[i].id == id) {
+      updateCarouselStatsFromDetail(i, detail);
+      if (screen == Screen::LIVE && featuredIndex == i) partialLiveUpdate = true;
+      break;
+    }
+  }
+  if (screen == Screen::STATS) needsDraw = true;
 }
 
 void loadSettings() {
@@ -768,26 +822,35 @@ void drawLiveReadout(const Game &g) {
   tft.drawString(g.awayShots < 0 ? "--" : String(g.awayShots), 111, 181, 4);
   tft.drawString(g.homeShots < 0 ? "--" : String(g.homeShots), 280, 181, 4);
 
-  // The three bottom cells use real game stats when the detail feed was opened.
-  // Otherwise they show useful navigation/alert context, not invented stats.
-  String footerLeft = "GAME " + String(featuredIndex + 1) + "/" + String(gameCount);
-  String footerMid = g.id == selectedGameId ? "ARMED" : "VIEW ONLY";
-  String footerRight = "TAP: STATS";
-  if (detail.loaded && detail.gameId == g.id && detail.count) {
-    for (uint8_t i = 0; i < detail.count; ++i) {
-      if (detail.label[i] == "POWER PLAY")
-        footerLeft = "PP " + detail.away[i] + "/" + detail.home[i];
-      if (detail.label[i] == "PEN. MIN")
-        footerMid = "PIM " + detail.away[i] + "-" + detail.home[i];
-      if (detail.label[i] == "FACEOFFS")
-        footerRight = "FO " + detail.away[i] + "-" + detail.home[i];
+  // Automatic per-game cache: the viewer never has to visit STATS first.
+  // When the NHL has not published a value we show "--", not navigation text
+  // or fabricated game statistics.
+  String footerLeft = "PP --", footerMid = "PIM --", footerRight = "FO --";
+  const CarouselStats &cached = statsFor(featuredIndex % gameCount);
+  if (gameIsFuture(g)) {
+    footerLeft = cached.recordAway.length() && cached.recordHome.length()
+        ? "REC " + cached.recordAway + "|" + cached.recordHome : "REC --";
+    footerMid = cached.pointsAway.length() && cached.pointsHome.length()
+        ? "PTS " + cached.pointsAway + "-" + cached.pointsHome : "PTS --";
+    footerRight = "PREGAME";
+  } else {
+    if (cached.ppAway.length() && cached.ppHome.length())
+      footerLeft = "PP " + cached.ppAway + "|" + cached.ppHome;
+    if (cached.pimAway.length() && cached.pimHome.length())
+      footerMid = "PIM " + cached.pimAway + "-" + cached.pimHome;
+    if (cached.faceAway.length() && cached.faceHome.length()) {
+      // One decimal place is useful on the detail page, but the lower 100px
+      // cell is more readable with rounded whole percentages.
+      const int awayPct = (int)(cached.faceAway.toFloat() + 0.5f);
+      const int homePct = (int)(cached.faceHome.toFloat() + 0.5f);
+      footerRight = "FO " + String(awayPct) + "-" + String(homePct) + "%";
     }
   }
   tft.fillRect(10, 204, 298, 27, ARENA_PLATE);
   tft.setTextColor(ICE_TEXT, ARENA_PLATE);
-  tft.drawString(footerLeft, 58, 217, footerLeft.length() > 13 ? 1 : 2);
-  tft.drawString(footerMid, 160, 217, footerMid.length() > 13 ? 1 : 2);
-  tft.drawString(footerRight, 262, 217, footerRight.length() > 13 ? 1 : 2);
+  tft.drawString(footerLeft, 58, 217, footerLeft.length() > 10 ? 1 : 2);
+  tft.drawString(footerMid, 160, 217, footerMid.length() > 11 ? 1 : 2);
+  tft.drawString(footerRight, 262, 217, footerRight.length() > 10 ? 1 : 2);
   tft.setTextDatum(TL_DATUM);
 }
 
@@ -1045,7 +1108,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1024> doc;
-    doc["version"] = "0.2.2";
+    doc["version"] = "0.2.3";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -1253,7 +1316,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.2.2 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.2.3 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
@@ -1346,6 +1409,21 @@ void loop() {
   if (needDetailLoad && screen == Screen::STATS) {
     needDetailLoad = false;
     fetchDetailStats(detailGameId);
+  }
+  // Prefetch stats for the displayed carousel game; the background request
+  // happens only once per game/TTL, never once per frame. Defer requests
+  // while a WLED restoration is pending to avoid delaying light recovery.
+  if (screen == Screen::LIVE && gameCount && connected &&
+      uint32_t(now - lastCarouselStatsCheck) >= 2500UL) {
+    bool lightRestorePending = false;
+    for (uint8_t i = 0; i < MAX_WLED; ++i)
+      if (restoring[i]) lightRestorePending = true;
+    const uint8_t currentIndex = featuredIndex % gameCount;
+    if (!lightRestorePending &&
+        !statsAreFresh(games[currentIndex], statsFor(currentIndex))) {
+      lastCarouselStatsCheck = millis();
+      fetchDetailStats(games[currentIndex].id);
+    }
   }
   if (needsDraw) {
     partialLiveUpdate = false;
