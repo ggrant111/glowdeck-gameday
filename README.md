@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.2.5 onboard rear RGB NHL event lighting.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.2.6 priority live-game polling.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
@@ -21,6 +21,12 @@ The first score after selecting a game is used as a baseline and never replays a
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+
+## Priority NHL event detection (v0.2.6)
+
+The ESP32 now polls the daily NHL scoreboard every **10 seconds** when an armed or CYD-LED-followed game is LIVE/CRIT. It polls every **20 seconds** if other NHL games are live, **30 seconds** while an armed game is still pregame, and **60 seconds** during idle periods. One date-scoped API request updates every game in the carousel, while armed/followed games determine priority. Arming a matchup queues an immediate score refresh and establishes a safe baseline, rather than replaying earlier goals.
+
+The CYD LED power-play fallback now refreshes missing or aging situation data at most once every **20 seconds** during followed live games, rather than relying on stale cached state. The dashboard displays its actual **NHL score check** interval. These intervals describe the CYD's requests, not guaranteed delays from an event on television; the NHL API itself may publish changes later.
 
 ## Rear RGB LED NHL reactions (v0.2.5)
 
