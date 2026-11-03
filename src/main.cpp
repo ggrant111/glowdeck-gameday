@@ -420,7 +420,7 @@ void prepareNewScoreboardDate(const String &today) {
   }
   // Poll the explicitly dated endpoint on the next loop, even when the
   // previous game was being polled on a slower idle interval.
-  lastPoll = millis() - IDLE_POLL_MS;
+  lastPoll = millis() - GameDayCadence::kIdleMs;
 }
 String formattedStart(const String &utc) {
   int yr = 0, mo = 0, dy = 0, hh = 0, mm = 0, sec = 0;
@@ -1559,7 +1559,7 @@ void registerRoutes() {
   });
   server.on("/api/refresh", HTTP_POST, []() {
     if (!authorized()) return;
-    lastPoll = millis() - IDLE_POLL_MS;
+    lastPoll = millis() - GameDayCadence::kIdleMs;
     StaticJsonDocument<96> ok;
     ok["queued"] = true;
     sendJson(ok);
@@ -1637,7 +1637,7 @@ void registerRoutes() {
       applyTimezone();
       // A new timezone can change what 'today' means on this CYD.
       lastDateCheck = millis() - 5000UL;
-      lastPoll = millis() - IDLE_POLL_MS;
+      lastPoll = millis() - GameDayCadence::kIdleMs;
       needsDraw = true;
     }
     bool invert = doc["screenInverted"] | cfg.invertScreen;
@@ -1843,7 +1843,7 @@ void loop() {
     // SNTP runs asynchronously; neither boot nor web dashboard waits for it.
     configTzTime(timezoneRule(), "pool.ntp.org", "time.nist.gov");
     lastDateCheck = millis() - 5000UL;
-    lastPoll = millis() - IDLE_POLL_MS;
+    lastPoll = millis() - GameDayCadence::kIdleMs;
     needsDraw = true;
   } else if (!connected && wifiWasConnected) {
     wifiWasConnected = false;
