@@ -13,6 +13,7 @@
 #include "WebUi.h"
 #include "TeamLogos.h"
 #include "GameDayDate.h"
+#include "RearLedPattern.h"
 #include <time.h>
 
 // GlowDeck GameDay — ESP32-2432S028R (2.8" resistive CYD).
@@ -23,6 +24,9 @@
 namespace {
 constexpr uint8_t PIN_BL = 21, PIN_AUDIO = 26, PIN_TOUCH_CS = 33, PIN_TOUCH_IRQ = 36;
 constexpr uint8_t AUDIO_CH = 6;
+constexpr uint8_t PIN_RGB_R = 4, PIN_RGB_G = 16, PIN_RGB_B = 17;
+constexpr uint8_t RGB_CH_R = 2, RGB_CH_G = 3, RGB_CH_B = 4;
+constexpr uint8_t MAX_FOLLOWED_GAMES = 4;
 constexpr uint8_t MAX_GAMES = 20, MAX_WLED = 4;
 constexpr uint32_t LIVE_POLL_MS = 20000, IDLE_POLL_MS = 60000;
 constexpr uint16_t BG = 0x0841, PANEL = 0x10A2, WHITE = 0xFFFF;
@@ -34,6 +38,9 @@ struct Game {
   int homeScore = 0, awayScore = 0, homeShots = -1, awayShots = -1;
   uint8_t period = 0;
   bool intermission = false;
+  uint8_t ppSide = 0; // 0=not known/no PP, 1=home PP, 2=away PP
+  bool ppDataKnown = false;
+  uint32_t ppUpdatedAt = 0;
 };
 struct Settings {
   String ssid, wifiPassword, adminPassword;
@@ -43,6 +50,12 @@ struct Settings {
   uint8_t brightness = 190;
   uint8_t seconds = 8;
   bool horn = false;
+  bool rearLedEnabled = true;
+  bool rearGoal = true;
+  bool rearPowerPlay = true;
+  uint8_t rearBrightness = 128;
+  uint8_t rearGoalSeconds = 6;
+  uint32_t followIds[MAX_FOLLOWED_GAMES] = {0, 0, 0, 0};
   bool invertScreen = true; // This CYD panel needs INVON to render dark colors correctly.
   bool cycleGames = true;
   uint8_t cycleSeconds = 9;
@@ -56,6 +69,19 @@ SPIClass touchSPI(VSPI);
 XPT2046_Touchscreen touch(PIN_TOUCH_CS, PIN_TOUCH_IRQ);
 WebServer server(80);
 Game games[MAX_GAMES];
+struct GoalWatch {
+  uint32_t id = 0;
+  int home = 0, away = 0;
+  bool baseline = false;
+};
+GoalWatch goalWatch[MAX_GAMES];
+enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY };
+RearEvent rearEvent = RearEvent::IDLE;
+uint32_t rearGoalAt = 0, rearGoalColor = 0, rearGoalDuration = 0;
+uint32_t rearPulseStart = 0;
+uint32_t rearLastTick = 0;
+uint8_t rearLastDuty[3] = {255, 255, 255};
+uint32_t lastPpFallback = 0;
 uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
 uint32_t lastCarouselAdvance = 0;
 String scoreboardDate;
@@ -426,6 +452,13 @@ void loadSettings() {
   cfg.brightness = constrain(prefs.getUChar("bright", 190), 1, 255);
   cfg.seconds = constrain(prefs.getUChar("seconds", 8), 2, 30);
   cfg.horn = prefs.getBool("horn", false);
+  cfg.rearLedEnabled = prefs.getBool("rearOn", true);
+  cfg.rearGoal = prefs.getBool("rearGoal", true);
+  cfg.rearPowerPlay = prefs.getBool("rearPP", true);
+  cfg.rearBrightness = prefs.getUChar("rearBri", 128);
+  cfg.rearGoalSeconds = constrain(prefs.getUChar("rearDur", 6), 2, 12);
+  for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
+    cfg.followIds[i] = prefs.getUInt(("follow" + String(i)).c_str(), 0);
   cfg.invertScreen = prefs.getBool("invert", true);
   cfg.cycleGames = prefs.getBool("carousel", true);
   cfg.cycleSeconds = constrain(prefs.getUChar("cycleSec", 9), 5, 30);
@@ -449,6 +482,13 @@ void saveSettings() {
   prefs.putUChar("bright", cfg.brightness);
   prefs.putUChar("seconds", cfg.seconds);
   prefs.putBool("horn", cfg.horn);
+  prefs.putBool("rearOn", cfg.rearLedEnabled);
+  prefs.putBool("rearGoal", cfg.rearGoal);
+  prefs.putBool("rearPP", cfg.rearPowerPlay);
+  prefs.putUChar("rearBri", cfg.rearBrightness);
+  prefs.putUChar("rearDur", cfg.rearGoalSeconds);
+  for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
+    prefs.putUInt(("follow" + String(i)).c_str(), cfg.followIds[i]);
   prefs.putBool("invert", cfg.invertScreen);
   prefs.putBool("carousel", cfg.cycleGames);
   prefs.putUChar("cycleSec", cfg.cycleSeconds);
