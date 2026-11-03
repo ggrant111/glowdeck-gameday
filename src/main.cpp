@@ -746,6 +746,9 @@ void selectGame(uint32_t id) {
   haveBaseline = false;
   prefs.putUInt("game", id);
   screen = Screen::LIVE;
+  for (uint8_t i = 0; i < gameCount; ++i)
+    if (games[i].id == id) { featuredIndex = i; break; }
+  lastCarouselAdvance = millis();
   needsDraw = true;
 }
 
@@ -782,10 +785,23 @@ void handleTouch() {
   const int x = constrain((int)map(p.x, cfg.touchX0, cfg.touchX1, 0, 319), 0, 319);
   const int y = constrain((int)map(p.y, cfg.touchY0, cfg.touchY1, 0, 239), 0, 239);
   if (y >= 198) {
-    screen = x < 107 ? Screen::LIVE : x < 214 ? Screen::GAMES : Screen::SETUP;
-  } else if (screen == Screen::LIVE && y >= 148 && y < 187) {
-    cfg.mode = constrain(x / 79, 0, 3);
-    prefs.putUChar("mode", cfg.mode);
+    if (screen == Screen::STATS) {
+      if (x < 107) screen = Screen::LIVE;
+      else if (x < 214) selectGame(detailGameId);
+      else screen = Screen::SETUP;
+    } else {
+      screen = x < 107 ? Screen::LIVE : x < 214 ? Screen::GAMES : Screen::SETUP;
+    }
+    lastCarouselAdvance = millis();
+  } else if (screen == Screen::LIVE && gameCount) {
+    if (y >= 168 && y < 199) {
+      if (x < 76) featuredIndex = (featuredIndex + gameCount - 1) % gameCount;
+      else if (x >= 243) featuredIndex = (featuredIndex + 1) % gameCount;
+      else selectGame(games[featuredIndex % gameCount].id);
+      lastCarouselAdvance = millis();
+    } else if (y >= 36 && y < 168) {
+      showDetail(games[featuredIndex % gameCount].id);
+    }
   } else if (screen == Screen::GAMES) {
     if (y >= 39 && y < 64 && gameCount > 3) {
       if (x > 170 && (gamePage + 1) * 3 < gameCount) ++gamePage;
@@ -1062,6 +1078,16 @@ void loop() {
     WiFi.reconnect();
     reconnectAt = now;
     needsDraw = true;
+  }
+  if (screen == Screen::LIVE && cfg.cycleGames && gameCount > 1 &&
+      now - lastCarouselAdvance >= uint32_t(cfg.cycleSeconds) * 1000UL) {
+    featuredIndex = (featuredIndex + 1) % gameCount;
+    lastCarouselAdvance = now;
+    needsDraw = true;
+  }
+  if (needDetailLoad && screen == Screen::STATS) {
+    needDetailLoad = false;
+    fetchDetailStats(detailGameId);
   }
   if (needsDraw) draw();
   if (rebootAt && int32_t(now - rebootAt) >= 0) ESP.restart();
