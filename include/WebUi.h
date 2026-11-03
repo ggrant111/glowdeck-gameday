@@ -187,18 +187,78 @@ function renderStatus(){
 }
 function renderGames(){
   const list=$("gameList");list.replaceChildren();
-  if(!currentGames.length){const p=document.createElement("p");p.textContent="No NHL games available. Verify Wi-Fi and try again.";list.append(p);return}
+  if(!currentGames.length){
+    const p=document.createElement("p");
+    p.textContent="No NHL games available. Verify Wi-Fi and try again.";
+    list.append(p);return;
+  }
   currentGames.forEach(g=>{
     const line=document.createElement("div");line.className="game";
-    const detail=document.createElement("div");
-    const score=document.createElement("div");score.className="score";score.textContent=g.away+" "+g.awayScore+"  @  "+g.home+" "+g.homeScore;
-    const subtitle=document.createElement("div");subtitle.className="muted small";subtitle.textContent=g.state;
-    detail.append(score,subtitle);
-    const button=document.createElement("button");
-    const selected=currentStatus&&currentStatus.selectedId===g.id;
-    button.textContent=selected?"Selected":"Select";if(selected)button.className="selected";
-    button.onclick=()=>perform(async()=>{await post("/api/select",{id:g.id});message("Game armed: "+g.away+" @ "+g.home);await refresh();tab("dashboard")});
-    line.append(detail,button);list.append(line);
+    const detail=document.createElement("div");detail.style.flex="1";
+    const matchup=document.createElement("div");
+    matchup.style.display="flex";matchup.style.alignItems="center";matchup.style.gap="6px";
+    function teamLogo(code){
+      const pic=document.createElement("img");
+      if(/^[A-Z]{3}$/.test(code)){
+        pic.src="https://assets.nhle.com/logos/nhl/svg/"+code+"_light.svg";
+      }
+      pic.alt=code+" logo";pic.width=30;pic.height=30;
+      pic.style.objectFit="contain";
+      pic.onerror=()=>pic.style.display="none";
+      return pic;
+    }
+    const score=document.createElement("div");score.className="score";
+    score.textContent=(g.state==="FUT"||g.state==="PRE")?
+      g.away+" @ "+g.home:
+      g.away+" "+g.awayScore+" - "+g.homeScore+" "+g.home;
+    matchup.append(teamLogo(g.away),score,teamLogo(g.home));
+    const subtitle=document.createElement("div");
+    subtitle.className="muted small";subtitle.textContent=g.status||g.state;
+    detail.append(matchup,subtitle);
+    const actions=document.createElement("div");actions.className="actions";
+    actions.style.justifyContent="flex-end";
+    const selected=!!currentStatus&&currentStatus.selectedId===g.id;
+    const arm=document.createElement("button");
+    arm.textContent=selected?"Armed":"Arm";if(selected)arm.className="selected";
+    arm.title="Choose the game for goal-triggered lights";
+    arm.onclick=()=>perform(async()=>{
+      await post("/api/select",{id:g.id});
+      message("Goal alerts armed: "+g.away+" @ "+g.home);
+      await refresh();
+    });
+    const stats=document.createElement("button");
+    stats.textContent="Stats";stats.className="ghost";
+    stats.title="View team comparisons for this matchup";
+    stats.onclick=()=>perform(async()=>{
+      $("gameDetail").hidden=false;
+      $("gameDetail").replaceChildren(document.createTextNode("Loading stats for "+g.away+" @ "+g.home+"..."));
+      const data=await api("/api/stats?id="+encodeURIComponent(g.id));
+      const box=$("gameDetail");box.replaceChildren();
+      const head=document.createElement("h3");
+      head.textContent=g.away+" @ "+g.home+" — "+(g.status||g.state);
+      box.append(head);
+      if(!data.stats||!data.stats.length){
+        const p=document.createElement("p");p.className="muted";
+        p.textContent=data.error||"Detailed game stats not yet published";
+        box.append(p);
+      }else{
+        const table=document.createElement("table");table.style.width="100%";
+        data.stats.forEach(row=>{
+          const tr=document.createElement("tr");
+          [row.away,row.label,row.home].forEach((v,j)=>{
+            const td=document.createElement("td");td.textContent=String(v||"—");
+            td.style.padding="7px";td.style.textAlign=j===0?"left":j===1?"center":"right";
+            if(j===1)td.className="muted";
+            tr.append(td);
+          });
+          table.append(tr);
+        });
+        box.append(table);
+      }
+      box.scrollIntoView({behavior:"smooth",block:"nearest"});
+    });
+    actions.append(stats,arm);
+    line.append(detail,actions);list.append(line);
   });
 }
 async function refresh(){
