@@ -623,49 +623,100 @@ void draw() {
   needsDraw = false;
   if (screen == Screen::CALIBRATE) { drawCalibration(); return; }
   tft.fillScreen(BG);
-  tft.fillRect(0, 0, 320, 34, PANEL);
+  tft.fillRect(0, 0, 320, 33, PANEL);
   tft.setTextColor(WHITE, PANEL);
-  tft.drawString("GLOWDECK", 10, 8, 2);
+  tft.drawString("GLOWDECK / NHL", 8, 8, 2);
   tft.setTextDatum(TR_DATUM);
-  tft.drawString(WiFi.status() == WL_CONNECTED ? "WiFi OK" : "SETUP AP", 309, 8, 2);
+  tft.drawString(WiFi.status() == WL_CONNECTED ? "ONLINE" : "SETUP AP", 310, 9, 2);
   tft.setTextDatum(TL_DATUM);
 
   if (screen == Screen::LIVE) {
-    Game *g = selectedGame();
-    if (g) {
-      textAt(g->away + "  " + String(g->awayScore), 18, 45, to565(teamRgb(g->away)), 4);
-      textAt("@", 154, 54, MUTED, 2);
-      textAt(g->home + "  " + String(g->homeScore), 191, 45, to565(teamRgb(g->home)), 4);
-      textAt(g->state == "LIVE" ? "LIVE GAME" :
-             g->state == "OFF" ? "FINAL" : g->state, 113, 92, ORANGE);
-      textAt("Goal celebrations", 12, 126, MUTED);
+    if (!gameCount) {
+      textAt("TODAY'S NHL", 16, 46, WHITE, 4);
+      textAt(lastError.isEmpty() ? "Waiting for games..." : lastError, 16, 90, ORANGE);
+      textAt("Connect Wi-Fi to load games", 16, 121, MUTED);
     } else {
-      textAt("No game selected", 18, 54, WHITE, 4);
-      textAt("Tap GAMES to pick a matchup", 18, 92, MUTED);
-      textAt("Goal celebrations", 12, 126, MUTED);
+      const Game &g = games[featuredIndex % gameCount];
+      tft.setTextDatum(MC_DATUM);
+      tft.setTextColor(MUTED, BG);
+      tft.drawString(scoreboardDate + "   " + String(featuredIndex + 1) +
+                    " / " + String(gameCount), 160, 47, 2);
+      drawTeamLogo(tft, g.away, 38, 66);
+      drawTeamLogo(tft, g.home, 234, 66);
+      tft.setTextColor(WHITE, BG);
+      tft.drawString(g.state == "FUT" || g.state == "PRE" ? "VS" :
+                     String(g.awayScore) + " - " + String(g.homeScore),
+                     160, 93, 4);
+      tft.drawString(g.away, 62, 122, 2);
+      tft.drawString(g.home, 258, 122, 2);
+      tft.setTextColor(g.state == "LIVE" || g.state == "CRIT" ? ORANGE : WHITE, BG);
+      tft.drawString(gameStatus(g), 160, 140, 2);
+      if (g.awayShots >= 0 && g.homeShots >= 0) {
+        tft.setTextColor(MUTED, BG);
+        tft.drawString("SHOTS  " + String(g.awayShots) + " - " +
+                       String(g.homeShots), 160, 156, 2);
+      } else {
+        tft.setTextColor(MUTED, BG);
+        tft.drawString("Tap matchup for team stats", 160, 156, 2);
+      }
+      tft.setTextDatum(TL_DATUM);
+      button(8, 169, 65, 28, "PREV");
+      button(81, 169, 157, 28,
+             g.id == selectedGameId ? "ARMED FOR GOALS" : "ARM GOALS",
+             g.id == selectedGameId);
+      button(246, 169, 66, 28, "NEXT");
     }
-    for (int i = 0; i < 4; ++i)
-      button(6 + i * 79, 150, 74, 34, modeName(i), cfg.mode == i);
+  } else if (screen == Screen::STATS) {
+    Game *g = detailGame();
+    if (!g) {
+      textAt("Game unavailable", 14, 54, ORANGE, 4);
+    } else {
+      drawTeamLogo(tft, g->away, 23, 40);
+      drawTeamLogo(tft, g->home, 249, 40);
+      tft.setTextDatum(MC_DATUM);
+      tft.setTextColor(WHITE, BG);
+      tft.drawString(g->state == "FUT" || g->state == "PRE" ? "VS" :
+                     String(g->awayScore) + " - " + String(g->homeScore), 160, 57, 4);
+      tft.setTextColor(MUTED, BG);
+      tft.drawString(gameStatus(*g), 160, 89, 2);
+      tft.drawString(g->away, 47, 97, 2);
+      tft.drawString(g->home, 273, 97, 2);
+      if (detail.loaded && detail.gameId == g->id && detail.count) {
+        for (uint8_t i = 0; i < detail.count; ++i) {
+          int16_t y = 113 + i * 16;
+          tft.setTextColor(WHITE, BG);
+          tft.drawString(detail.away[i], 62, y, 2);
+          tft.drawString(detail.home[i], 258, y, 2);
+          tft.setTextColor(MUTED, BG);
+          tft.drawString(detail.label[i], 160, y, 2);
+        }
+      } else {
+        tft.setTextColor(MUTED, BG);
+        tft.drawString(detail.loaded ? detail.error : "Loading team stats...",
+                       160, 141, 2);
+      }
+      tft.setTextDatum(TL_DATUM);
+    }
   } else if (screen == Screen::GAMES) {
-    textAt("Select an NHL game", 12, 42, WHITE);
-    if (gameCount == 0) {
+    textAt("Select a goal-alert game", 12, 39, WHITE, 2);
+    if (!gameCount) {
       textAt(lastError.isEmpty() ? "Loading games..." : lastError, 12, 81, ORANGE);
       textAt("Wi-Fi connection required", 12, 105, MUTED);
     }
     for (uint8_t n = 0; n < 3; ++n) {
-      const uint8_t i = gamePage * 3 + n;
+      uint8_t i = gamePage * 3 + n;
       if (i >= gameCount) break;
       Game &g = games[i];
       button(8, 66 + n * 40, 304, 36,
              g.away + " " + String(g.awayScore) + "  @  " +
-             g.home + " " + String(g.homeScore) + "  " + g.state,
+             g.home + " " + String(g.homeScore) + "  " +
+             (g.id == selectedGameId ? "* ARMED" : g.state),
              g.id == selectedGameId);
     }
     if (gameCount > 3) {
       tft.setTextDatum(TR_DATUM);
-      textAt("", 0, 0); // keep font/background state deterministic
       tft.setTextColor(MUTED, BG);
-      tft.drawString("< prev       next >", 309, 40, 2);
+      tft.drawString("< PREV         NEXT >", 309, 40, 2);
       tft.setTextDatum(TL_DATUM);
     }
   } else if (screen == Screen::SETUP) {
@@ -678,9 +729,16 @@ void draw() {
     button(111, 161, 98, 29, "TOUCH");
     button(214, 161, 98, 29, "INVERT");
   }
-  button(6, 200, 99, 34, "LIVE", screen == Screen::LIVE);
-  button(111, 200, 99, 34, "GAMES", screen == Screen::GAMES);
-  button(216, 200, 98, 34, "SETUP", screen == Screen::SETUP);
+
+  if (screen == Screen::STATS) {
+    button(6, 200, 99, 34, "BACK");
+    button(111, 200, 99, 34, detailGameId == selectedGameId ? "ARMED" : "ARM");
+    button(216, 200, 98, 34, "SETUP");
+  } else {
+    button(6, 200, 99, 34, "TODAY", screen == Screen::LIVE);
+    button(111, 200, 99, 34, "GAMES", screen == Screen::GAMES);
+    button(216, 200, 98, 34, "SETUP", screen == Screen::SETUP);
+  }
 }
 
 void selectGame(uint32_t id) {
