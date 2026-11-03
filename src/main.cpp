@@ -1298,8 +1298,7 @@ void pollNhl() {
   if (gamePage * 3 >= gameCount) gamePage = 0;
   // A valid full JSON document (including games: []) resets retry backoff.
   if (nhlConsecutiveFailures)
-    Serial.printf("[NHL] recovered after %u failed fetches
-", nhlConsecutiveFailures);
+    Serial.printf("[NHL] recovered after %u failed fetches\n", nhlConsecutiveFailures);
   nhlConsecutiveFailures = 0;
   nhlLastSuccessAt = millis();
   lastError = "";
