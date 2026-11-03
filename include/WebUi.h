@@ -109,11 +109,45 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <div class="hint">Browsing rotating games does not change which matchup triggers goal celebrations. Use ARM GOALS on the CYD or ARM in the Games tab.</div>
 </div></section>
 <section id="devices" class="panel">
-<div class="card"><h2>WLED devices</h2>
-<p>Add up to four WLED controllers on the same Wi-Fi network as your CYD. Each enabled controller will receive a goal celebration.</p>
+<div class="card"><h2>WLED celebration engine</h2>
+<p>Run matching event effects on the WLED controllers you choose. Each controller can participate in goals, power plays, game starts and final results independently.</p>
+<div class="stats">
+<div class="stat"><span>Playing now</span><b id="wledEventStatus">Idle</b></div>
+<div class="stat"><span>Selected controllers</span><b id="wledSelectedCount">—</b></div>
+</div>
+<div class="row">
+<div><label for="wledGoalStyle">Goal animation</label><select id="wledGoalStyle">
+<option value="0">Strobe → Chase</option>
+<option value="1">Strobe only</option>
+<option value="2">Chase only</option>
+<option value="3">Solid team color</option></select></div>
+<div><label for="favoriteSide">Team to track for game-start and final result</label>
+<select id="favoriteSide"><option value="0">Home team</option><option value="1">Away team</option></select></div>
+</div>
+<div class="toggle" style="margin-top:14px"><input id="wledPP" type="checkbox"><label for="wledPP">Pulse team color during an active power play</label></div>
+<div class="toggle" style="margin-top:13px"><input id="wledGameStart" type="checkbox"><label for="wledGameStart">Game-start team-color sweep</label></div>
+<div class="toggle" style="margin-top:13px"><input id="wledFinal" type="checkbox"><label for="wledFinal">Final win/loss effects</label></div>
+<p class="small muted">Goal priority overrides power-play effects, then the pulse resumes if the advantage is still active. When an effect ends, each controller returns to its previous WLED state. WLED's own UDP broadcasting is suppressed for these commands so non-participating devices are not accidentally included.</p>
+</div>
+<div class="card"><h2>Select participating WLED devices</h2>
+<p>Enter up to four local IP addresses. Switch on only the controllers you want involved, then choose which NHL events each one receives.</p>
 <div id="deviceList"></div>
-<div class="actions"><button class="primary" id="saveDevices">Save light settings</button><button id="testLights">Test all enabled lights</button></div>
-<p class="small muted">Enter IPv4 addresses such as 192.168.1.71. For stable operation, reserve those IPs in your router. This release controls segment 0; per-segment routing is planned.</p></div>
+<div class="actions"><button class="primary" id="saveDevices">Save celebration settings</button></div>
+<p class="small muted">All active segments on each selected WLED controller participate. You can use different WLED LED counts and segment layouts across devices.</p>
+</div>
+<div class="card"><h2>Preview celebrations</h2>
+<p>Test all opted-in controllers at once, without waiting for a game. The selected game's team colors are used, or Utah's color when no game is armed.</p>
+<div class="actions">
+<button id="wledTestGoalHome">Home goal</button>
+<button id="wledTestGoalAway">Away goal</button>
+<button id="wledTestPP">Power play (9s)</button>
+<button id="wledTestStart">Game start</button>
+<button id="wledTestWin">Final win</button>
+<button id="wledTestLoss">Final loss</button>
+<button id="wledStop">Stop and restore</button>
+</div>
+<p class="small muted" id="wledDeviceFeedback">Controller status will appear here after a test.</p>
+</div>
 </section>
 <section id="rear" class="panel">
 <div class="card"><h2>Rear RGB LED</h2>
@@ -219,6 +253,13 @@ function renderStatus(){
   $("deviceIp").textContent=s.ip;
   $("currentGame").textContent=game?game.away+" @ "+game.home:"Not selected";
   $("currentMode").textContent=modes[s.mode]||"Unknown";
+  $("wledEventStatus").textContent=s.wledEvent||"IDLE";
+  $("wledSelectedCount").textContent=(currentConfig?.wled||[])
+    .filter(d=>d.enabled&&d.ip).length+" / 4";
+  renderWledControllerResults();
+  $("wledDeviceFeedback").textContent=(s.wledResults||[])
+    .map((v,i)=>v?"WLED "+(i+1)+": "+v:"").filter(Boolean).join(" · ")
+    ||"No recent WLED celebration activity";
   $("rearEvent").textContent=(s.rearEvent||"IDLE").replaceAll("_"," ");
   $("rearFollowCount").textContent=(s.followed||[]).length+
     (s.selectedId?" additional + armed":" additional");
@@ -360,12 +401,40 @@ function renderDevices(){
   (currentConfig.wled||[]).forEach((device,i)=>{
     const card=document.createElement("div");card.className="item";
     const title=document.createElement("h3");title.textContent="WLED "+(i+1);
-    const label=document.createElement("label");label.htmlFor="ip"+i;label.textContent="IP address";
+    const label=document.createElement("label");label.htmlFor="ip"+i;label.textContent="Local IP address";
     const ip=document.createElement("input");ip.id="ip"+i;ip.placeholder="192.168.1.71";ip.value=device.ip||"";ip.inputMode="decimal";
     const row=document.createElement("div");row.className="toggle";row.style.marginTop="10px";
     const enable=document.createElement("input");enable.id="enabled"+i;enable.type="checkbox";enable.checked=!!device.enabled;
-    const lbl=document.createElement("label");lbl.htmlFor=enable.id;lbl.textContent="Use for celebrations";
-    row.append(enable,lbl);card.append(title,label,ip,row);list.append(card);
+    const lbl=document.createElement("label");lbl.htmlFor=enable.id;lbl.textContent="Include this WLED device in celebrations";
+    row.append(enable,lbl);card.append(title,label,ip,row);
+    const flags=document.createElement("div");flags.className="row";flags.style.marginTop="10px";
+    const events=[
+      ["goal",1,"Goals"],["pp",2,"Power plays"],
+      ["start",4,"Game start"],["final",8,"Final results"]
+    ];
+    const mask=Number(device.events??15);
+    events.forEach(([name,bit,title])=>{
+      const option=document.createElement("div");
+      option.className="toggle";
+      const cb=document.createElement("input");cb.id="event"+i+"_"+name;
+      cb.type="checkbox";cb.checked=!!(mask&bit);
+      const lab=document.createElement("label");lab.htmlFor=cb.id;lab.textContent=title;
+      option.append(cb,lab);flags.append(option);
+    });
+    card.append(flags);
+    const result=document.createElement("p");result.className="small muted";
+    result.id="wledDeviceResult"+i;
+    result.textContent="Status: not tested";
+    card.append(result);list.append(card);
+  });
+  renderWledControllerResults();
+}
+function renderWledControllerResults(){
+  if(!currentStatus)return;
+  const statuses=currentStatus.wledResults||[];
+  statuses.forEach((txt,i)=>{
+    const el=$("wledDeviceResult"+i);
+    if(el)el.textContent="Status: "+(txt||"Ready");
   });
 }
 function renderRearFollowed(){
@@ -410,7 +479,12 @@ function renderRearFollowed(){
   });
 }
 function deviceSettings(){
-  return Array.from({length:4},(_,i)=>({ip:$("ip"+i).value.trim(),enabled:$("enabled"+i).checked}));
+  return Array.from({length:4},(_,i)=>{
+    const choices=[["goal",1],["pp",2],["start",4],["final",8]];
+    const events=choices.reduce((mask,[name,bit])=>
+      mask+($("event"+i+"_"+name).checked?bit:0),0);
+    return {ip:$("ip"+i).value.trim(),enabled:$("enabled"+i).checked,events};
+  });
 }
 function formConfig(){
   return {ssid:$("ssid").value.trim(),password:$("wifiPassword").value,
@@ -418,6 +492,10 @@ function formConfig(){
     mode:currentStatus?currentStatus.mode:currentConfig.mode,
     brightness:Number($("brightness").value),seconds:Number($("seconds").value),
     horn:$("horn").checked,screenInverted:$("screenInverted").checked,
+    wledPP:$("wledPP").checked,wledGameStart:$("wledGameStart").checked,
+    wledFinal:$("wledFinal").checked,
+    wledGoalStyle:Number($("wledGoalStyle").value),
+    favoriteSide:Number($("favoriteSide").value),
     rearEnabled:$("rearEnabled").checked,rearGoal:$("rearGoal").checked,
     rearPowerPlay:$("rearPowerPlay").checked,
     rearBrightness:Number($("rearBrightness").value),
@@ -441,6 +519,11 @@ async function loadConfig(){
   $("brightValue").textContent=currentConfig.brightness+" / 255";
   $("seconds").value=currentConfig.seconds;
   $("horn").checked=!!currentConfig.horn;
+  $("wledPP").checked=currentConfig.wledPP!==false;
+  $("wledGameStart").checked=currentConfig.wledGameStart!==false;
+  $("wledFinal").checked=currentConfig.wledFinal!==false;
+  $("wledGoalStyle").value=String(currentConfig.wledGoalStyle??0);
+  $("favoriteSide").value=String(currentConfig.favoriteSide??0);
   $("rearEnabled").checked=!!currentConfig.rearEnabled;
   $("rearGoal").checked=!!currentConfig.rearGoal;
   $("rearPowerPlay").checked=!!currentConfig.rearPowerPlay;
@@ -462,6 +545,22 @@ document.querySelectorAll("[data-mode]").forEach(b=>b.addEventListener("click",(
 $("saveSettings").onclick=()=>perform(saveConfig);
 $("saveDisplay").onclick=()=>perform(saveConfig);
 $("saveDevices").onclick=()=>perform(saveConfig);
+function wledPreview(event,side="home"){
+  perform(async()=>{
+    const result=await post("/api/wled/preview",{event,side});
+    await refresh();
+    if(!result.ok)throw Error("No opted-in WLED controller accepted the effect. Check IP addresses, selected events and device status.");
+    message(event==="stop"?"Restore requested on selected WLED devices":
+      event.toUpperCase()+" preview started on "+result.devices+" selected controller(s)");
+  });
+}
+$("wledTestGoalHome").onclick=()=>wledPreview("goal","home");
+$("wledTestGoalAway").onclick=()=>wledPreview("goal","away");
+$("wledTestPP").onclick=()=>wledPreview("pp");
+$("wledTestStart").onclick=()=>wledPreview("start");
+$("wledTestWin").onclick=()=>wledPreview("win");
+$("wledTestLoss").onclick=()=>wledPreview("loss");
+$("wledStop").onclick=()=>wledPreview("stop");
 $("saveRear").onclick=()=>perform(saveConfig);
 $("rearBrightness").oninput=()=>$("rearBrightValue").textContent=$("rearBrightness").value+" / 255";
 function rearPreview(mode,side="home"){
@@ -477,7 +576,7 @@ $("rearTestPP").onclick=()=>rearPreview("powerplay","home");
 $("rearTestOff").onclick=()=>rearPreview("off");
 $("testHome").onclick=()=>perform(async()=>{await post("/api/test",{side:"home"});message("Home color test started")});
 $("testAway").onclick=()=>perform(async()=>{await post("/api/test",{side:"away"});message("Away color test started")});
-$("testLights").onclick=()=>perform(async()=>{await post("/api/test",{side:"home"});message("Test sent to enabled lights")});
+
 $("refreshGames").onclick=()=>perform(async()=>{
   await post("/api/refresh",{});
   message("Fresh NHL schedule requested; the device will update shortly.");

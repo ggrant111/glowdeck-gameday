@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.3.0 full NHL conference/division standings carousel.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.3.1 multi-device WLED celebration engine.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
@@ -21,6 +21,14 @@ The first score after selecting a game is used as a baseline and never replays a
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+
+## Multi-device WLED Celebration Engine (v0.3.1)
+
+The CYD now triggers built-in WLED effects on **only the configured, enabled WLED controllers**. In **WLED / Lights**, enter up to four IPs and flag each controller for goals, power plays, puck drop and/or final results. All participating devices receive identical team colors and effect parameters from a single event timeline: goal strobe-to-chase (or select a simpler goal style), live power-play breathing, game-start wipe and win/loss finales. Afterward the CYD restores each device's original WLED state, including segments. A WLED state could not be saved? That device is skipped rather than risking loss of its previous lighting.
+
+The dashboard provides previews for every event, a Stop/Restore control, per-device result status, and a home/away favorite-team perspective for final outcomes. The rear CYD RGB remains independent; existing saved WLED IPs and enabled flags are preserved. WLED JSON commands use `udpn.nn` to suppress unintended WLED UDP broadcast to excluded devices.
+
+**Timing:** Effects match across opted-in controllers, but sequential HTTP is not frame-perfect synchronization; optional UDP/DDP real-time streaming could address that in a future release. See [WLED Celebration Engine](docs/WLED_CELEBRATION_ENGINE.md) for safety notes, configuration and tests.
 
 ## Full NHL conference and division standings (v0.3.0)
 
