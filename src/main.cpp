@@ -690,7 +690,11 @@ void drawScoreboardHeader(const Game &g) {
   tft.setTextColor(ICE_TEXT, ARENA_BLACK);
   tft.drawString(String(featuredIndex + 1) + "/" + String(gameCount), 228, 16, 2);
   tft.setTextColor(WiFi.status() == WL_CONNECTED ? ICE_BLUE : ORANGE, ARENA_BLACK);
-  tft.drawString(WiFi.status() == WL_CONNECTED ? "WiFi" : "AP", 289, 16, 2);
+  tft.drawString(WiFi.status() == WL_CONNECTED ? "WiFi" : "AP", 281, 16, 2);
+  // Small menu glyph replaces the former three large navigation buttons.
+  tft.drawFastHLine(305, 9, 10, WHITE);
+  tft.drawFastHLine(305, 15, 10, WHITE);
+  tft.drawFastHLine(305, 21, 10, WHITE);
   tft.setTextDatum(TL_DATUM);
 }
 
@@ -790,6 +794,25 @@ void drawCalibration() {
 void draw() {
   needsDraw = false;
   if (screen == Screen::CALIBRATE) { drawCalibration(); return; }
+  if (screen == Screen::LIVE) {
+    if (!gameCount) {
+      tft.fillScreen(ARENA_BLACK);
+      tft.setTextDatum(MC_DATUM);
+      tft.setTextColor(WHITE, ARENA_BLACK);
+      tft.drawString("NHL GAMEDAY", 160, 46, 4);
+      tft.drawString(lastError.length() ? lastError : "Waiting for games...", 160, 108, 2);
+      tft.setTextColor(ICE_TEXT, ARENA_BLACK);
+      tft.drawString("Tap the top-right for the menu", 160, 193, 2);
+      tft.setTextDatum(TL_DATUM);
+    } else {
+      const Game &g = games[featuredIndex % gameCount];
+      drawScoreboardStatic(g);
+      drawLiveReadout(g);
+    }
+    // No persistent TODAY/GAMES/SETUP buttons on the carousel.
+    return;
+  }
+
   tft.fillScreen(BG);
   tft.fillRect(0, 0, 320, 33, PANEL);
   tft.setTextColor(WHITE, PANEL);
@@ -798,31 +821,7 @@ void draw() {
   tft.drawString(WiFi.status() == WL_CONNECTED ? "ONLINE" : "SETUP AP", 310, 9, 2);
   tft.setTextDatum(TL_DATUM);
 
-  if (screen == Screen::LIVE) {
-    if (!gameCount) {
-      textAt("TODAY'S NHL", 16, 46, WHITE, 4);
-      textAt(lastError.isEmpty() ? "Waiting for games..." : lastError, 16, 90, ORANGE);
-      textAt("Connect Wi-Fi to load games", 16, 121, MUTED);
-    } else {
-      const Game &g = games[featuredIndex % gameCount];
-      tft.setTextDatum(MC_DATUM);
-      tft.setTextColor(MUTED, BG);
-      tft.drawString(scoreboardDate + "   " + String(featuredIndex + 1) +
-                    " / " + String(gameCount), 160, 47, 2);
-      drawTeamLogo(tft, g.away, 38, 66);
-      drawTeamLogo(tft, g.home, 234, 66);
-      tft.setTextDatum(MC_DATUM); // Logo renderer uses its own text datum.
-      tft.setTextColor(WHITE, BG);
-      tft.drawString(g.away, 62, 122, 2);
-      tft.drawString(g.home, 258, 122, 2);
-      drawLiveReadout(g);
-      button(8, 169, 65, 28, "PREV");
-      button(81, 169, 157, 28,
-             g.id == selectedGameId ? "ARMED FOR GOALS" : "ARM GOALS",
-             g.id == selectedGameId);
-      button(246, 169, 66, 28, "NEXT");
-    }
-  } else if (screen == Screen::STATS) {
+  if (screen == Screen::STATS) {
     Game *g = detailGame();
     if (!g) {
       textAt("Game unavailable", 14, 54, ORANGE, 4);
