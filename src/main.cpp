@@ -18,6 +18,7 @@
 #include "GameDetailMode.h"
 #include "StandingsCarousel.h"
 #include "NhlFetchPolicy.h"
+#include "CelebrationEngine.h"
 #include "RearLedPattern.h"
 #include <time.h>
 
@@ -50,6 +51,11 @@ struct Settings {
   String ssid, wifiPassword, adminPassword;
   String wled[MAX_WLED];
   bool wledEnabled[MAX_WLED] = {false, false, false, false};
+  // Masked opt-in for every connected controller: goal / PP / start / final.
+  uint8_t wledEvents[MAX_WLED] = {15, 15, 15, 15};
+  bool wledPP = true, wledGameStart = true, wledFinal = true;
+  uint8_t wledGoalStyle = 0; // 0 strobe+chase, 1 strobe, 2 chase, 3 solid
+  uint8_t favoriteSide = 0; // home 0 / away 1; for start and final outcomes
   uint8_t mode = 3; // 0=off, 1=home, 2=away, 3=both
   uint8_t brightness = 190;
   uint8_t seconds = 8;
@@ -117,6 +123,12 @@ uint32_t nhlLastDurationMs = 0;
 uint32_t nhlLastSuccessAt = 0;
 uint32_t lastTouch = 0;
 String savedState[MAX_WLED];
+CelebrationEngine::Event wledActiveEvent = CelebrationEngine::Event::NONE;
+uint32_t wledEventStart = 0, wledEventColor = 0, wledEventDuration = 0;
+uint8_t wledPhase = 0;
+String wledDeviceResult[MAX_WLED];
+String lastArmedGameState;
+uint32_t wledPpTestUntil = 0;
 bool restoring[MAX_WLED] = {false, false, false, false};
 uint32_t restoreAt[MAX_WLED] = {0, 0, 0, 0};
 uint8_t restoreRetries[MAX_WLED] = {0, 0, 0, 0};
@@ -938,8 +950,16 @@ void loadSettings() {
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     cfg.wled[i] = prefs.getString(("ip" + String(i)).c_str(), "");
     cfg.wledEnabled[i] = prefs.getBool(("enable" + String(i)).c_str(), false);
+    cfg.wledEvents[i] = prefs.getUChar(("event" + String(i)).c_str(),
+                                         CelebrationEngine::ALL_EVENTS) &
+                        CelebrationEngine::ALL_EVENTS;
   }
   cfg.mode = constrain(prefs.getUChar("mode", 3), 0, 3);
+  cfg.wledPP = prefs.getBool("wledPP", true);
+  cfg.wledGameStart = prefs.getBool("wledStart", true);
+  cfg.wledFinal = prefs.getBool("wledFinal", true);
+  cfg.wledGoalStyle = constrain(prefs.getUChar("wledStyle", 0), 0, 3);
+  cfg.favoriteSide = constrain(prefs.getUChar("favSide", 0), 0, 1);
   cfg.brightness = constrain(prefs.getUChar("bright", 190), 1, 255);
   cfg.seconds = constrain(prefs.getUChar("seconds", 8), 2, 30);
   cfg.horn = prefs.getBool("horn", false);
@@ -969,8 +989,14 @@ void saveSettings() {
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     prefs.putString(("ip" + String(i)).c_str(), cfg.wled[i]);
     prefs.putBool(("enable" + String(i)).c_str(), cfg.wledEnabled[i]);
+    prefs.putUChar(("event" + String(i)).c_str(), cfg.wledEvents[i]);
   }
   prefs.putUChar("mode", cfg.mode);
+  prefs.putBool("wledPP", cfg.wledPP);
+  prefs.putBool("wledStart", cfg.wledGameStart);
+  prefs.putBool("wledFinal", cfg.wledFinal);
+  prefs.putUChar("wledStyle", cfg.wledGoalStyle);
+  prefs.putUChar("favSide", cfg.favoriteSide);
   prefs.putUChar("bright", cfg.brightness);
   prefs.putUChar("seconds", cfg.seconds);
   prefs.putBool("horn", cfg.horn);
