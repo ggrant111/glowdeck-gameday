@@ -158,6 +158,7 @@ struct ConferenceSnapshot {
 };
 ConferenceSnapshot conferenceSnapshots[32];
 uint32_t lastConferenceFetch = 0;
+uint32_t webPreviewGameId = 0, webPreviewUntil = 0;
 
 CarouselStats &statsFor(uint8_t index) {
   CarouselStats &entry = carouselStats[index];
@@ -435,6 +436,7 @@ void prepareNewScoreboardDate(const String &today) {
     for (auto &entry : seasonStandings) entry = SeasonStanding();
     for (auto &entry : conferenceSnapshots) entry = ConferenceSnapshot();
     lastConferenceFetch = 0;
+    webPreviewGameId = 0;
     for (auto &entry : goalWatch) entry = GoalWatch();
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) cfg.followIds[i] = 0;
@@ -703,10 +705,17 @@ bool loadConferenceResults(ConferenceSnapshot &cache) {
 // On-demand and low priority: never issue the extra two schedule downloads
 // during carousel rotation, goal effects, or WLED state restoration.
 void tickPregameConferenceRecords() {
-  if (screen != Screen::STATS || !detail.loaded || !detail.fetchedPregame ||
+  if (!detail.loaded || !detail.fetchedPregame ||
       WiFi.status() != WL_CONNECTED) return;
-  Game *g = detailGame();
-  if (!g || (g->state != "FUT" && g->state != "PRE")) return;
+  Game *g = nullptr;
+  if (screen == Screen::STATS) {
+    g = detailGame();
+  } else if (webPreviewGameId && int32_t(webPreviewUntil - millis()) > 0) {
+    for (uint8_t i = 0; i < gameCount; ++i)
+      if (games[i].id == webPreviewGameId) { g = &games[i]; break; }
+  }
+  if (!g || detail.gameId != g->id ||
+      (g->state != "FUT" && g->state != "PRE")) return;
   if (rearEvent == RearEvent::GOAL) return;
   for (uint8_t i = 0; i < MAX_WLED; ++i)
     if (restoring[i]) return;
@@ -1799,14 +1808,30 @@ void registerRoutes() {
   server.on("/api/stats", HTTP_GET, []() {
     if (!authorized()) return;
     const uint32_t id = strtoul(server.arg("id").c_str(), nullptr, 10);
-    bool known = false;
+    Game *requested = nullptr;
     for (uint8_t i = 0; i < gameCount; ++i)
-      if (games[i].id == id) known = true;
-    if (!known || id == 0) return errorResponse("Game is not in the daily scoreboard", 404);
+      if (games[i].id == id) { requested = &games[i]; break; }
+    if (!requested || id == 0)
+      return errorResponse("Game is not in the daily scoreboard", 404);
+    if (GameDetailMode::isPregame(requested->state.c_str())) {
+      webPreviewGameId = id;
+      webPreviewUntil = millis() + 25000UL;
+    } else {
+      webPreviewGameId = 0;
+    }
     fetchDetailStats(id);
     StaticJsonDocument<2048> doc;
     doc["gameId"] = id;
+    doc["pregame"] = GameDetailMode::isPregame(requested->state.c_str());
     doc["error"] = detail.error;
+    bool conferenceLoading = false;
+    if (doc["pregame"].as<bool>()) {
+      for (uint8_t i = 0; i < detail.count; ++i)
+        if (detail.label[i] == "VS CONF" &&
+            (detail.away[i] == "--" || detail.home[i] == "--"))
+          conferenceLoading = true;
+    }
+    doc["conferenceLoading"] = conferenceLoading;
     JsonArray rows = doc.createNestedArray("stats");
     for (uint8_t i = 0; i < detail.count; ++i) {
       JsonObject row = rows.createNestedObject();
