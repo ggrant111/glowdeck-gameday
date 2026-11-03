@@ -728,11 +728,15 @@ void fetchDetailStats(uint32_t id) {
   for (uint8_t i = 0; i < gameCount; ++i)
     if (games[i].id == id) { g = &games[i]; break; }
   if (!g) return;
-  if (detail.gameId == id && detail.loaded) {
-    const uint32_t ttl = (g->state == "LIVE" || g->state == "CRIT") ? 30000 : 180000;
-    if (millis() - detail.updatedAt < ttl) return;
+  const bool pregame = g->state == "FUT" || g->state == "PRE";
+  if (detail.gameId == id && detail.loaded &&
+      detail.fetchedPregame == pregame) {
+    const uint32_t ttl = pregame ? 180000UL :
+          (g->state == "LIVE" || g->state == "CRIT") ? 30000UL : 180000UL;
+    if (uint32_t(millis() - detail.updatedAt) < ttl) return;
   }
   detail.gameId = id;
+  detail.fetchedPregame = pregame;
   detail.loaded = false;
   detail.count = 0;
   detail.error = "";
@@ -749,37 +753,28 @@ void fetchDetailStats(uint32_t id) {
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.useHTTP10(true);
 
-  if (g->state == "FUT" || g->state == "PRE") {
-    if (http.begin(client, "https://api-web.nhle.com/v1/standings/now")
-        && http.GET() == HTTP_CODE_OK) {
-      StaticJsonDocument<448> filter;
-      JsonObject row = filter["standings"][0].to<JsonObject>();
-      row["teamAbbrev"]["default"] = true;
-      row["wins"] = true;
-      row["losses"] = true;
-      row["otLosses"] = true;
-      row["points"] = true;
-      DynamicJsonDocument parsed(8192);
-      DeserializationError err = deserializeJson(
-        parsed, http.getStream(), DeserializationOption::Filter(filter));
-      if (!err) {
-        String records[2], points[2];
-        JsonArray standings = parsed["standings"].as<JsonArray>();
-        for (JsonObject team : standings) {
-          String code = team["teamAbbrev"]["default"].as<String>();
-          int side = code == g->away ? 0 : code == g->home ? 1 : -1;
-          if (side == -1) continue;
-          records[side] = String((int)(team["wins"] | 0)) + "-" +
-                          String((int)(team["losses"] | 0)) + "-" +
-                          String((int)(team["otLosses"] | 0));
-          points[side] = String((int)(team["points"] | 0));
-        }
-        if (records[0].length() && records[1].length()) {
-          addDetailRow("W-L-OT", records[0], records[1]);
-          addDetailRow("POINTS", points[0], points[1]);
-        }
-      }
-    }
+  if (pregame) {
+    // Matchup preview: league standings for season W-L-OT, conference rank
+    // and points; conference *record* is computed separately from completed
+    // same-conference games, never confused with conference rank.
+    const bool standingsAvailable = loadSeasonStandings();
+    const SeasonStanding *away = standingFor(g->away);
+    const SeasonStanding *home = standingFor(g->home);
+    const uint32_t season = seasonStartYear(g->id);
+    addDetailRow("SEASON",
+                 away ? away->seasonRecord : String("--"),
+                 home ? home->seasonRecord : String("--"));
+    addDetailRow("VS CONF",
+                 knownConferenceRecord(g->away, season),
+                 knownConferenceRecord(g->home, season));
+    addDetailRow("CONF RANK",
+                 away && away->conferenceRank.length() ? away->conferenceRank : String("--"),
+                 home && home->conferenceRank.length() ? home->conferenceRank : String("--"));
+    addDetailRow("POINTS",
+                 away && away->points.length() ? away->points : String("--"),
+                 home && home->points.length() ? home->points : String("--"));
+    if (!standingsAvailable)
+      detail.error = "Standings unavailable; retrying";
   } else {
     if (g->awayShots >= 0 && g->homeShots >= 0)
       addDetailRow("SHOTS", String(g->awayShots), String(g->homeShots));
