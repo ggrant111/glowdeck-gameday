@@ -46,6 +46,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <nav class="tabs" aria-label="Sections">
 <button class="tab selected" data-tab="dashboard">Dashboard</button>
 <button class="tab" data-tab="games">Games</button>
+<button class="tab" data-tab="display">Display</button>
 <button class="tab" data-tab="devices">Lights</button>
 <button class="tab" data-tab="settings">Setup</button>
 <button class="tab" data-tab="firmware">Update</button>
@@ -57,6 +58,8 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <div class="stat"><span>Goal celebrations</span><b id="currentMode">Both teams</b></div>
 <div class="stat"><span>Device IP</span><b id="deviceIp">—</b></div>
 <div class="stat"><span>Free memory</span><b id="heap">—</b></div>
+<div class="stat"><span>Currently on screen</span><b id="showingGame">—</b></div>
+<div class="stat"><span>Rotation</span><b id="rotationStatus">—</b></div>
 </div>
 <div class="actions"><button class="primary" data-tab="games">Choose game</button><button data-tab="devices">Manage lights</button></div>
 <div class="small muted" id="lastError"></div></div>
@@ -70,9 +73,30 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 </section>
 <section id="games" class="panel">
 <div class="card"><h2>Today's NHL games</h2><p>Tap a matchup to arm it on your CYD. The first poll records current scores without replaying earlier goals.</p>
-<div id="gameList"><p>No games loaded yet.</p></div><button id="refreshGames">Refresh list</button>
+<div id="gameList"><p>No games loaded yet.</p></div>
+<div id="gameDetail" class="item" hidden></div>
+<button id="refreshGames">Refresh list</button>
 <p class="small muted">Score checks run on the CYD every 20 seconds when a game is selected. NHL reporting can be delayed.</p></div>
 </section>
+<section id="display" class="panel">
+<div class="card"><h2>Today's game carousel</h2>
+<p>Cycle through today's NHL schedule on the CYD, with official team logos, scheduled starts, live period/clock, scores, shots and final results. Tap a matchup on the device to open its team stats.</p>
+<div class="stats">
+<div class="stat"><span>Current screen</span><b id="displayGame">—</b></div>
+<div class="stat"><span>Scoreboard date</span><b id="displayDate">—</b></div>
+</div>
+<div class="toggle" style="margin-top:18px"><input type="checkbox" id="cycleGames"><label for="cycleGames">Automatically cycle through games</label></div>
+<label for="cycleSeconds">Show each game for (seconds)</label>
+<input id="cycleSeconds" type="number" min="5" max="30" step="1" value="9">
+<label for="displayTimezone">Game start time zone</label>
+<select id="displayTimezone">
+<option value="0">Eastern (ET)</option><option value="1">Central (CT)</option>
+<option value="2">Mountain (MT)</option><option value="3">Pacific (PT)</option>
+<option value="4">Arizona (AZ)</option>
+</select>
+<div class="actions"><button id="saveDisplay" class="primary">Save display settings</button></div>
+<div class="hint">Browsing rotating games does not change which matchup triggers goal celebrations. Use ARM GOALS on the CYD or ARM in the Games tab.</div>
+</div></section>
 <section id="devices" class="panel">
 <div class="card"><h2>WLED devices</h2>
 <p>Add up to four WLED controllers on the same Wi-Fi network as your CYD. Each enabled controller will receive a goal celebration.</p>
@@ -148,6 +172,11 @@ function renderStatus(){
   $("deviceIp").textContent=s.ip;
   $("currentGame").textContent=game?game.away+" @ "+game.home:"Not selected";
   $("currentMode").textContent=modes[s.mode]||"Unknown";
+  const showing=currentGames[s.featuredIndex]||null;
+  $("showingGame").textContent=showing?showing.away+" @ "+showing.home:"No games";
+  $("rotationStatus").textContent=s.cycleGames?"Every "+s.cycleSeconds+" sec":"Paused";
+  $("displayGame").textContent=showing?showing.away+" @ "+showing.home:"No games";
+  $("displayDate").textContent=s.scoreDate||"Not loaded";
   $("heap").textContent=Math.round(s.freeHeap/1024)+" KB";
   $("lastError").textContent=s.error||"";
   $("apName").textContent=s.apSsid;
@@ -158,18 +187,78 @@ function renderStatus(){
 }
 function renderGames(){
   const list=$("gameList");list.replaceChildren();
-  if(!currentGames.length){const p=document.createElement("p");p.textContent="No NHL games available. Verify Wi-Fi and try again.";list.append(p);return}
+  if(!currentGames.length){
+    const p=document.createElement("p");
+    p.textContent="No NHL games available. Verify Wi-Fi and try again.";
+    list.append(p);return;
+  }
   currentGames.forEach(g=>{
     const line=document.createElement("div");line.className="game";
-    const detail=document.createElement("div");
-    const score=document.createElement("div");score.className="score";score.textContent=g.away+" "+g.awayScore+"  @  "+g.home+" "+g.homeScore;
-    const subtitle=document.createElement("div");subtitle.className="muted small";subtitle.textContent=g.state;
-    detail.append(score,subtitle);
-    const button=document.createElement("button");
-    const selected=currentStatus&&currentStatus.selectedId===g.id;
-    button.textContent=selected?"Selected":"Select";if(selected)button.className="selected";
-    button.onclick=()=>perform(async()=>{await post("/api/select",{id:g.id});message("Game armed: "+g.away+" @ "+g.home);await refresh();tab("dashboard")});
-    line.append(detail,button);list.append(line);
+    const detail=document.createElement("div");detail.style.flex="1";
+    const matchup=document.createElement("div");
+    matchup.style.display="flex";matchup.style.alignItems="center";matchup.style.gap="6px";
+    function teamLogo(code){
+      const pic=document.createElement("img");
+      if(/^[A-Z]{3}$/.test(code)){
+        pic.src="https://assets.nhle.com/logos/nhl/svg/"+code+"_light.svg";
+      }
+      pic.alt=code+" logo";pic.width=30;pic.height=30;
+      pic.style.objectFit="contain";
+      pic.onerror=()=>pic.style.display="none";
+      return pic;
+    }
+    const score=document.createElement("div");score.className="score";
+    score.textContent=(g.state==="FUT"||g.state==="PRE")?
+      g.away+" @ "+g.home:
+      g.away+" "+g.awayScore+" - "+g.homeScore+" "+g.home;
+    matchup.append(teamLogo(g.away),score,teamLogo(g.home));
+    const subtitle=document.createElement("div");
+    subtitle.className="muted small";subtitle.textContent=g.status||g.state;
+    detail.append(matchup,subtitle);
+    const actions=document.createElement("div");actions.className="actions";
+    actions.style.justifyContent="flex-end";
+    const selected=!!currentStatus&&currentStatus.selectedId===g.id;
+    const arm=document.createElement("button");
+    arm.textContent=selected?"Armed":"Arm";if(selected)arm.className="selected";
+    arm.title="Choose the game for goal-triggered lights";
+    arm.onclick=()=>perform(async()=>{
+      await post("/api/select",{id:g.id});
+      message("Goal alerts armed: "+g.away+" @ "+g.home);
+      await refresh();
+    });
+    const stats=document.createElement("button");
+    stats.textContent="Stats";stats.className="ghost";
+    stats.title="View team comparisons for this matchup";
+    stats.onclick=()=>perform(async()=>{
+      $("gameDetail").hidden=false;
+      $("gameDetail").replaceChildren(document.createTextNode("Loading stats for "+g.away+" @ "+g.home+"..."));
+      const data=await api("/api/stats?id="+encodeURIComponent(g.id));
+      const box=$("gameDetail");box.replaceChildren();
+      const head=document.createElement("h3");
+      head.textContent=g.away+" @ "+g.home+" — "+(g.status||g.state);
+      box.append(head);
+      if(!data.stats||!data.stats.length){
+        const p=document.createElement("p");p.className="muted";
+        p.textContent=data.error||"Detailed game stats not yet published";
+        box.append(p);
+      }else{
+        const table=document.createElement("table");table.style.width="100%";
+        data.stats.forEach(row=>{
+          const tr=document.createElement("tr");
+          [row.away,row.label,row.home].forEach((v,j)=>{
+            const td=document.createElement("td");td.textContent=String(v||"—");
+            td.style.padding="7px";td.style.textAlign=j===0?"left":j===1?"center":"right";
+            if(j===1)td.className="muted";
+            tr.append(td);
+          });
+          table.append(tr);
+        });
+        box.append(table);
+      }
+      box.scrollIntoView({behavior:"smooth",block:"nearest"});
+    });
+    actions.append(stats,arm);
+    line.append(detail,actions);list.append(line);
   });
 }
 async function refresh(){
@@ -198,7 +287,9 @@ function formConfig(){
     adminPassword:$("adminPassword").value,
     mode:currentStatus?currentStatus.mode:currentConfig.mode,
     brightness:Number($("brightness").value),seconds:Number($("seconds").value),
-    horn:$("horn").checked,screenInverted:$("screenInverted").checked,wled:deviceSettings()};
+    horn:$("horn").checked,screenInverted:$("screenInverted").checked,
+    cycleGames:$("cycleGames").checked,cycleSeconds:Number($("cycleSeconds").value),
+    timezone:Number($("displayTimezone").value),wled:deviceSettings()};
 }
 async function saveConfig(){
   const data=formConfig();
@@ -216,6 +307,9 @@ async function loadConfig(){
   $("seconds").value=currentConfig.seconds;
   $("horn").checked=!!currentConfig.horn;
   $("screenInverted").checked=!!currentConfig.screenInverted;
+  $("cycleGames").checked=!!currentConfig.cycleGames;
+  $("cycleSeconds").value=currentConfig.cycleSeconds||9;
+  $("displayTimezone").value=String(currentConfig.timezone ?? 1);
   renderDevices();
 }
 document.querySelectorAll("[data-mode]").forEach(b=>b.addEventListener("click",()=>perform(async()=>{
@@ -224,6 +318,7 @@ document.querySelectorAll("[data-mode]").forEach(b=>b.addEventListener("click",(
   await refresh();message("Celebrations: "+modes[mode]);
 })));
 $("saveSettings").onclick=()=>perform(saveConfig);
+$("saveDisplay").onclick=()=>perform(saveConfig);
 $("saveDevices").onclick=()=>perform(saveConfig);
 $("testHome").onclick=()=>perform(async()=>{await post("/api/test",{side:"home"});message("Home color test started")});
 $("testAway").onclick=()=>perform(async()=>{await post("/api/test",{side:"away"});message("Away color test started")});

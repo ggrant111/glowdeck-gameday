@@ -11,6 +11,8 @@
 #include <WiFiClientSecure.h>
 #include <XPT2046_Touchscreen.h>
 #include "WebUi.h"
+#include "TeamLogos.h"
+#include <time.h>
 
 // GlowDeck GameDay — ESP32-2432S028R (2.8" resistive CYD).
 // Display: HSPI / TFT_eSPI; touch: dedicated VSPI; speaker amp input: GPIO26.
@@ -27,8 +29,10 @@ constexpr uint16_t MUTED = 0x9CF3, TEAL = 0x340F, ORANGE = 0xFD20;
 
 struct Game {
   uint32_t id = 0;
-  String home, away, state;
-  int homeScore = 0, awayScore = 0;
+  String home, away, homeName, awayName, state, startUTC, clock, periodType;
+  int homeScore = 0, awayScore = 0, homeShots = -1, awayShots = -1;
+  uint8_t period = 0;
+  bool intermission = false;
 };
 struct Settings {
   String ssid, wifiPassword, adminPassword;
@@ -39,6 +43,9 @@ struct Settings {
   uint8_t seconds = 8;
   bool horn = false;
   bool invertScreen = true; // This CYD panel needs INVON to render dark colors correctly.
+  bool cycleGames = true;
+  uint8_t cycleSeconds = 9;
+  uint8_t timezone = 1; // 0=ET, 1=CT, 2=MT, 3=PT, 4=AZ
   int touchX0 = 300, touchX1 = 3800, touchY0 = 300, touchY1 = 3800;
 } cfg;
 
@@ -48,11 +55,13 @@ SPIClass touchSPI(VSPI);
 XPT2046_Touchscreen touch(PIN_TOUCH_CS, PIN_TOUCH_IRQ);
 WebServer server(80);
 Game games[MAX_GAMES];
-uint8_t gameCount = 0, gamePage = 0;
+uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
+uint32_t lastCarouselAdvance = 0;
+String scoreboardDate;
 uint32_t selectedGameId = 0;
 int previousHome = 0, previousAway = 0;
 bool haveBaseline = false, mdnsStarted = false, mdnsAttempted = false, needsDraw = true;
-bool touchWasDown = false, wifiWasConnected = false;
+bool touchWasDown = false, wifiWasConnected = false, partialLiveUpdate = false;
 String apSsid, apPassword, mdnsName, lastError;
 uint32_t lastPoll = 0, reconnectAt = 0, rebootAt = 0;
 uint32_t lastTouch = 0;
@@ -64,7 +73,16 @@ bool hornPlaying = false;
 uint32_t hornStart = 0;
 uint16_t hornFrequency = 0;
 
-enum class Screen : uint8_t { LIVE, GAMES, SETUP, CALIBRATE };
+enum class Screen : uint8_t { LIVE, GAMES, SETUP, CALIBRATE, STATS };
+struct DetailStats {
+  uint32_t gameId = 0, updatedAt = 0;
+  bool loaded = false;
+  String error;
+  String label[5], away[5], home[5];
+  uint8_t count = 0;
+} detail;
+bool needDetailLoad = false;
+uint32_t detailGameId = 0;
 Screen screen = Screen::LIVE;
 uint8_t calStep = 0;
 int calX, calY;
@@ -99,6 +117,195 @@ Game *selectedGame() {
   return nullptr;
 }
 
+// Timezone follows the user's chosen local zone, including daylight saving
+// transitions. NHL start times are sent in UTC and don't need a local NTP clock.
+const char *timezoneRule() {
+  switch (cfg.timezone) {
+    case 0: return "EST5EDT,M3.2.0/2,M11.1.0/2";
+    case 1: return "CST6CDT,M3.2.0/2,M11.1.0/2";
+    case 2: return "MST7MDT,M3.2.0/2,M11.1.0/2";
+    case 3: return "PST8PDT,M3.2.0/2,M11.1.0/2";
+    case 4: return "MST7";
+    default: return "CST6CDT,M3.2.0/2,M11.1.0/2";
+  }
+}
+const char *timezoneLabel() {
+  static const char *names[] = {"ET", "CT", "MT", "PT", "AZ"};
+  return names[constrain(cfg.timezone, 0, 4)];
+}
+void applyTimezone() {
+  setenv("TZ", timezoneRule(), 1);
+  tzset();
+}
+String formattedStart(const String &utc) {
+  int yr = 0, mo = 0, dy = 0, hh = 0, mm = 0, sec = 0;
+  if (sscanf(utc.c_str(), "%d-%d-%dT%d:%d:%d",
+             &yr, &mo, &dy, &hh, &mm, &sec) != 6)
+    return "Time TBA";
+  struct tm utcTime = {};
+  utcTime.tm_year = yr - 1900;
+  utcTime.tm_mon = mo - 1;
+  utcTime.tm_mday = dy;
+  utcTime.tm_hour = hh;
+  utcTime.tm_min = mm;
+  utcTime.tm_sec = sec;
+  // Arduino-ESP32's newlib does not expose timegm(). Convert UTC civil date
+  // directly to Unix days, without temporarily changing global TZ state.
+  const int y = yr - (mo <= 2 ? 1 : 0);
+  const int era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = (unsigned)(y - era * 400);
+  const int adjustedMonth = mo + (mo > 2 ? -3 : 9);
+  const unsigned doy = (153 * adjustedMonth + 2) / 5 + dy - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  const long days = era * 146097L + (long)doe - 719468L;
+  const time_t epoch = (time_t)(days * 86400L + hh * 3600L + mm * 60L + sec);
+  struct tm localTime = {};
+  localtime_r(&epoch, &localTime);
+  char timeBuffer[24] = {};
+  strftime(timeBuffer, sizeof(timeBuffer), "%I:%M %p", &localTime);
+  String result = timeBuffer;
+  if (result.startsWith("0")) result.remove(0, 1);
+  return result + " " + timezoneLabel();
+}
+String gameStatus(const Game &g) {
+  if (g.state == "FUT" || g.state == "PRE")
+    return "START " + formattedStart(g.startUTC);
+  if (g.state == "LIVE" || g.state == "CRIT") {
+    const String period = g.periodType == "SO" ? "SO" :
+                          g.periodType == "OT" ? "OT" : "P" + String(g.period);
+    if (g.intermission) return "INTERMISSION " + period;
+    return period + (g.clock.isEmpty() ? String("  LIVE") : String("  ") + g.clock);
+  }
+  if (g.state == "OFF" || g.state == "FINAL")
+    return g.periodType == "SO" ? "FINAL / SO" :
+           g.periodType == "OT" ? "FINAL / OT" : "FINAL";
+  return g.state.isEmpty() ? "SCHEDULED" : g.state;
+}
+void showDetail(uint32_t id) {
+  if (!id) return;
+  detailGameId = id;
+  if (detail.gameId != id) detail.loaded = false;
+  needDetailLoad = true;
+  screen = Screen::STATS;
+  needsDraw = true;
+}
+Game *detailGame() {
+  for (uint8_t i = 0; i < gameCount; ++i)
+    if (games[i].id == detailGameId) return &games[i];
+  return nullptr;
+}
+void addDetailRow(const String &name, const String &away, const String &home) {
+  if (detail.count >= 5) return;
+  detail.label[detail.count] = name;
+  detail.away[detail.count] = away;
+  detail.home[detail.count] = home;
+  ++detail.count;
+}
+void fetchDetailStats(uint32_t id) {
+  Game *g = nullptr;
+  for (uint8_t i = 0; i < gameCount; ++i)
+    if (games[i].id == id) { g = &games[i]; break; }
+  if (!g) return;
+  if (detail.gameId == id && detail.loaded) {
+    const uint32_t ttl = (g->state == "LIVE" || g->state == "CRIT") ? 30000 : 180000;
+    if (millis() - detail.updatedAt < ttl) return;
+  }
+  detail.gameId = id;
+  detail.loaded = false;
+  detail.count = 0;
+  detail.error = "";
+  if (WiFi.status() != WL_CONNECTED) {
+    detail.error = "Wi-Fi unavailable";
+    detail.loaded = true;
+    detail.updatedAt = millis();
+    return;
+  }
+  WiFiClientSecure client;
+  client.setInsecure(); // Same trusted-read limitation as the scoreboard.
+  HTTPClient http;
+  http.setTimeout(4000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.useHTTP10(true);
+
+  if (g->state == "FUT" || g->state == "PRE") {
+    if (http.begin(client, "https://api-web.nhle.com/v1/standings/now")
+        && http.GET() == HTTP_CODE_OK) {
+      StaticJsonDocument<448> filter;
+      JsonObject row = filter["standings"][0].to<JsonObject>();
+      row["teamAbbrev"]["default"] = true;
+      row["wins"] = true;
+      row["losses"] = true;
+      row["otLosses"] = true;
+      row["points"] = true;
+      DynamicJsonDocument parsed(8192);
+      DeserializationError err = deserializeJson(
+        parsed, http.getStream(), DeserializationOption::Filter(filter));
+      if (!err) {
+        String records[2], points[2];
+        JsonArray standings = parsed["standings"].as<JsonArray>();
+        for (JsonObject team : standings) {
+          String code = team["teamAbbrev"]["default"].as<String>();
+          int side = code == g->away ? 0 : code == g->home ? 1 : -1;
+          if (side == -1) continue;
+          records[side] = String((int)(team["wins"] | 0)) + "-" +
+                          String((int)(team["losses"] | 0)) + "-" +
+                          String((int)(team["otLosses"] | 0));
+          points[side] = String((int)(team["points"] | 0));
+        }
+        if (records[0].length() && records[1].length()) {
+          addDetailRow("W-L-OT", records[0], records[1]);
+          addDetailRow("POINTS", points[0], points[1]);
+        }
+      }
+    }
+  } else {
+    if (g->awayShots >= 0 && g->homeShots >= 0)
+      addDetailRow("SHOTS", String(g->awayShots), String(g->homeShots));
+    const String url = "https://api-web.nhle.com/v1/gamecenter/" +
+                       String(id) + "/right-rail";
+    if (http.begin(client, url) && http.GET() == HTTP_CODE_OK) {
+      StaticJsonDocument<384> filter;
+      JsonObject row = filter["teamGameStats"][0].to<JsonObject>();
+      row["category"] = true;
+      row["awayValue"] = true;
+      row["homeValue"] = true;
+      DynamicJsonDocument parsed(4096);
+      DeserializationError err = deserializeJson(
+        parsed, http.getStream(), DeserializationOption::Filter(filter));
+      if (!err) {
+        const struct { const char *id; const char *name; } targets[] = {
+          {"faceoffWinningPctg", "FACEOFFS"},
+          {"powerPlay", "POWER PLAY"},
+          {"hits", "HITS"},
+          {"blockedShotAttempts", "BLOCKS"},
+          {"pim", "PEN. MIN"},
+          {"giveaways", "GIVEAWAYS"},
+          {"sog", "SHOTS"}
+        };
+        JsonArray values = parsed["teamGameStats"].as<JsonArray>();
+        for (const auto &target : targets) {
+          for (JsonObject row : values) {
+            String category = row["category"].as<String>();
+            if (!category.equalsIgnoreCase(target.id)) continue;
+            if (detail.count >= 5) break;
+            if (category == "sog" && g->awayShots >= 0) break;
+            addDetailRow(target.name,
+                         row["awayValue"].as<String>(),
+                         row["homeValue"].as<String>());
+            break;
+          }
+        }
+      }
+    }
+  }
+  http.end();
+  if (!detail.count) detail.error = (g->state == "FUT" || g->state == "PRE")
+      ? "Team records not yet available" : "Game stats not yet available";
+  detail.loaded = true;
+  detail.updatedAt = millis();
+  needsDraw = true;
+}
+
 void loadSettings() {
   prefs.begin("gameday", false);
   cfg.ssid = prefs.getString("ssid", "");
@@ -113,6 +320,9 @@ void loadSettings() {
   cfg.seconds = constrain(prefs.getUChar("seconds", 8), 2, 30);
   cfg.horn = prefs.getBool("horn", false);
   cfg.invertScreen = prefs.getBool("invert", true);
+  cfg.cycleGames = prefs.getBool("carousel", true);
+  cfg.cycleSeconds = constrain(prefs.getUChar("cycleSec", 9), 5, 30);
+  cfg.timezone = constrain(prefs.getUChar("timezone", 1), 0, 4);
   cfg.touchX0 = prefs.getInt("tx0", 300);
   cfg.touchX1 = prefs.getInt("tx1", 3800);
   cfg.touchY0 = prefs.getInt("ty0", 300);
@@ -133,6 +343,9 @@ void saveSettings() {
   prefs.putUChar("seconds", cfg.seconds);
   prefs.putBool("horn", cfg.horn);
   prefs.putBool("invert", cfg.invertScreen);
+  prefs.putBool("carousel", cfg.cycleGames);
+  prefs.putUChar("cycleSec", cfg.cycleSeconds);
+  prefs.putUChar("timezone", cfg.timezone);
 }
 
 bool authorized() {
@@ -257,7 +470,12 @@ uint32_t gamesFingerprint() {
     hash = (hash ^ g.id) * 16777619UL;
     hash = (hash ^ uint32_t(g.homeScore)) * 16777619UL;
     hash = (hash ^ uint32_t(g.awayScore)) * 16777619UL;
-    const String *fields[] = {&g.home, &g.away, &g.state};
+    hash = (hash ^ uint32_t(g.homeShots + 1)) * 16777619UL;
+    hash = (hash ^ uint32_t(g.awayShots + 1)) * 16777619UL;
+    hash = (hash ^ uint32_t(g.period)) * 16777619UL;
+    hash = (hash ^ uint32_t(g.intermission)) * 16777619UL;
+    const String *fields[] = {&g.home, &g.away, &g.state, &g.clock,
+                              &g.periodType, &g.startUTC};
     for (const String *str : fields) {
       for (size_t j = 0; j < str->length(); ++j)
         hash = (hash ^ uint8_t((*str)[j])) * 16777619UL;
@@ -286,10 +504,20 @@ void pollNhl() {
     http.end();
     return;
   }
-  StaticJsonDocument<640> filter;
+  StaticJsonDocument<1280> filter;
+  filter["currentDate"] = true;
   JsonObject gameFilter = filter["games"][0].to<JsonObject>();
   gameFilter["id"] = true;
   gameFilter["gameState"] = true;
+  gameFilter["startTimeUTC"] = true;
+  gameFilter["periodDescriptor"]["number"] = true;
+  gameFilter["periodDescriptor"]["periodType"] = true;
+  gameFilter["clock"]["timeRemaining"] = true;
+  gameFilter["clock"]["inIntermission"] = true;
+  gameFilter["homeTeam"]["name"]["default"] = true;
+  gameFilter["homeTeam"]["sog"] = true;
+  gameFilter["awayTeam"]["name"]["default"] = true;
+  gameFilter["awayTeam"]["sog"] = true;
   gameFilter["homeTeam"]["abbrev"] = true;
   gameFilter["homeTeam"]["score"] = true;
   gameFilter["awayTeam"]["abbrev"] = true;
@@ -307,6 +535,11 @@ void pollNhl() {
     lastError = "NHL games unavailable";
     return;
   }
+  const uint32_t previouslyFeatured = gameCount ?
+      games[min((int)featuredIndex, (int)gameCount - 1)].id : 0;
+  String newScoreboardDate = doc["currentDate"].as<String>();
+  bool newDay = newScoreboardDate != scoreboardDate;
+  scoreboardDate = newScoreboardDate;
   gameCount = 0;
   for (JsonObject item : arr) {
     if (gameCount >= MAX_GAMES) break;
@@ -315,9 +548,35 @@ void pollNhl() {
     g.home = item["homeTeam"]["abbrev"].as<String>();
     g.away = item["awayTeam"]["abbrev"].as<String>();
     g.state = item["gameState"].as<String>();
+    g.startUTC = item["startTimeUTC"].as<String>();
+    g.homeName = item["homeTeam"]["name"]["default"].as<String>();
+    g.awayName = item["awayTeam"]["name"]["default"].as<String>();
+    g.periodType = item["periodDescriptor"]["periodType"].as<String>();
+    g.period = item["periodDescriptor"]["number"] | 0;
+    g.clock = item["clock"]["timeRemaining"].as<String>();
+    g.intermission = item["clock"]["inIntermission"] | false;
     g.homeScore = item["homeTeam"]["score"] | 0;
     g.awayScore = item["awayTeam"]["score"] | 0;
+    g.homeShots = item["homeTeam"]["sog"] | -1;
+    g.awayShots = item["awayTeam"]["sog"] | -1;
   }
+  if (newDay) {
+    featuredIndex = 0;
+    lastCarouselAdvance = millis();
+    needDetailLoad = false;
+    detail.loaded = false;
+  } else if (gameCount) {
+    bool found = false;
+    for (uint8_t i = 0; i < gameCount; ++i) {
+      if (games[i].id == previouslyFeatured) {
+        featuredIndex = i;
+        found = true;
+        break;
+      }
+    }
+    if (!found) featuredIndex = 0;
+  } else featuredIndex = 0;
+  if (gamePage * 3 >= gameCount) gamePage = 0;
   lastError = "";
   Game *g = selectedGame();
   if (g) {
@@ -335,7 +594,19 @@ void pollNhl() {
   } else {
     haveBaseline = false;
   }
-  if (gamesFingerprint() != previousFingerprint) needsDraw = true;
+  if (gamesFingerprint() != previousFingerprint || newDay) {
+    if (!newDay && screen == Screen::LIVE && gameCount > 0 &&
+        previouslyFeatured == games[featuredIndex % gameCount].id)
+      partialLiveUpdate = true;
+    else needsDraw = true;
+  }
+  // Force a newer comparison when the user is viewing live stats.
+  if (screen == Screen::STATS && detailGameId) {
+    Game *viewed = detailGame();
+    if (viewed && (viewed->state == "LIVE" || viewed->state == "CRIT")
+        && millis() - detail.updatedAt >= 30000)
+      needDetailLoad = true;
+  }
 }
 
 uint16_t to565(uint32_t rgb) {
@@ -352,6 +623,26 @@ void button(int x, int y, int w, int h, const String &label, bool active = false
   tft.drawString(label, x + w / 2, y + h / 2, 2);
   tft.setTextDatum(TL_DATUM);
 }
+// Paint only the changing score and clock regions on the 2.8" TFT.
+// The logos, team labels and navigation remain intact between NHL polls.
+void drawLiveReadout(const Game &g) {
+  tft.fillRect(103, 71, 114, 48, BG);
+  tft.fillRect(0, 130, 320, 37, BG);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE, BG);
+  tft.drawString(g.state == "FUT" || g.state == "PRE" ? "VS" :
+                 String(g.awayScore) + " - " + String(g.homeScore), 160, 93, 4);
+  tft.setTextColor(g.state == "LIVE" || g.state == "CRIT" ? ORANGE : WHITE, BG);
+  tft.drawString(gameStatus(g), 160, 140, 2);
+  tft.setTextColor(MUTED, BG);
+  if (g.awayShots >= 0 && g.homeShots >= 0)
+    tft.drawString("SHOTS  " + String(g.awayShots) + " - " +
+                   String(g.homeShots), 160, 156, 2);
+  else
+    tft.drawString("Tap matchup for team stats", 160, 156, 2);
+  tft.setTextDatum(TL_DATUM);
+}
+
 void drawCalibration() {
   tft.fillScreen(BG);
   textAt("Touch calibration", 14, 9, WHITE, 4);
@@ -366,49 +657,88 @@ void draw() {
   needsDraw = false;
   if (screen == Screen::CALIBRATE) { drawCalibration(); return; }
   tft.fillScreen(BG);
-  tft.fillRect(0, 0, 320, 34, PANEL);
+  tft.fillRect(0, 0, 320, 33, PANEL);
   tft.setTextColor(WHITE, PANEL);
-  tft.drawString("GLOWDECK", 10, 8, 2);
+  tft.drawString("GLOWDECK / NHL", 8, 8, 2);
   tft.setTextDatum(TR_DATUM);
-  tft.drawString(WiFi.status() == WL_CONNECTED ? "WiFi OK" : "SETUP AP", 309, 8, 2);
+  tft.drawString(WiFi.status() == WL_CONNECTED ? "ONLINE" : "SETUP AP", 310, 9, 2);
   tft.setTextDatum(TL_DATUM);
 
   if (screen == Screen::LIVE) {
-    Game *g = selectedGame();
-    if (g) {
-      textAt(g->away + "  " + String(g->awayScore), 18, 45, to565(teamRgb(g->away)), 4);
-      textAt("@", 154, 54, MUTED, 2);
-      textAt(g->home + "  " + String(g->homeScore), 191, 45, to565(teamRgb(g->home)), 4);
-      textAt(g->state == "LIVE" ? "LIVE GAME" :
-             g->state == "OFF" ? "FINAL" : g->state, 113, 92, ORANGE);
-      textAt("Goal celebrations", 12, 126, MUTED);
+    if (!gameCount) {
+      textAt("TODAY'S NHL", 16, 46, WHITE, 4);
+      textAt(lastError.isEmpty() ? "Waiting for games..." : lastError, 16, 90, ORANGE);
+      textAt("Connect Wi-Fi to load games", 16, 121, MUTED);
     } else {
-      textAt("No game selected", 18, 54, WHITE, 4);
-      textAt("Tap GAMES to pick a matchup", 18, 92, MUTED);
-      textAt("Goal celebrations", 12, 126, MUTED);
+      const Game &g = games[featuredIndex % gameCount];
+      tft.setTextDatum(MC_DATUM);
+      tft.setTextColor(MUTED, BG);
+      tft.drawString(scoreboardDate + "   " + String(featuredIndex + 1) +
+                    " / " + String(gameCount), 160, 47, 2);
+      drawTeamLogo(tft, g.away, 38, 66);
+      drawTeamLogo(tft, g.home, 234, 66);
+      tft.setTextDatum(MC_DATUM); // Logo renderer uses its own text datum.
+      tft.setTextColor(WHITE, BG);
+      tft.drawString(g.away, 62, 122, 2);
+      tft.drawString(g.home, 258, 122, 2);
+      drawLiveReadout(g);
+      button(8, 169, 65, 28, "PREV");
+      button(81, 169, 157, 28,
+             g.id == selectedGameId ? "ARMED FOR GOALS" : "ARM GOALS",
+             g.id == selectedGameId);
+      button(246, 169, 66, 28, "NEXT");
     }
-    for (int i = 0; i < 4; ++i)
-      button(6 + i * 79, 150, 74, 34, modeName(i), cfg.mode == i);
+  } else if (screen == Screen::STATS) {
+    Game *g = detailGame();
+    if (!g) {
+      textAt("Game unavailable", 14, 54, ORANGE, 4);
+    } else {
+      drawTeamLogo(tft, g->away, 23, 40);
+      drawTeamLogo(tft, g->home, 249, 40);
+      tft.setTextDatum(MC_DATUM);
+      tft.setTextColor(WHITE, BG);
+      tft.drawString(g->state == "FUT" || g->state == "PRE" ? "VS" :
+                     String(g->awayScore) + " - " + String(g->homeScore), 160, 57, 4);
+      tft.setTextColor(MUTED, BG);
+      tft.drawString(gameStatus(*g), 160, 89, 2);
+      tft.drawString(g->away, 47, 97, 2);
+      tft.drawString(g->home, 273, 97, 2);
+      if (detail.loaded && detail.gameId == g->id && detail.count) {
+        for (uint8_t i = 0; i < detail.count; ++i) {
+          int16_t y = 113 + i * 16;
+          tft.setTextColor(WHITE, BG);
+          tft.drawString(detail.away[i], 62, y, 2);
+          tft.drawString(detail.home[i], 258, y, 2);
+          tft.setTextColor(MUTED, BG);
+          tft.drawString(detail.label[i], 160, y, 2);
+        }
+      } else {
+        tft.setTextColor(MUTED, BG);
+        tft.drawString(detail.loaded ? detail.error : "Loading team stats...",
+                       160, 141, 2);
+      }
+      tft.setTextDatum(TL_DATUM);
+    }
   } else if (screen == Screen::GAMES) {
-    textAt("Select an NHL game", 12, 42, WHITE);
-    if (gameCount == 0) {
+    textAt("Select a goal-alert game", 12, 39, WHITE, 2);
+    if (!gameCount) {
       textAt(lastError.isEmpty() ? "Loading games..." : lastError, 12, 81, ORANGE);
       textAt("Wi-Fi connection required", 12, 105, MUTED);
     }
     for (uint8_t n = 0; n < 3; ++n) {
-      const uint8_t i = gamePage * 3 + n;
+      uint8_t i = gamePage * 3 + n;
       if (i >= gameCount) break;
       Game &g = games[i];
       button(8, 66 + n * 40, 304, 36,
              g.away + " " + String(g.awayScore) + "  @  " +
-             g.home + " " + String(g.homeScore) + "  " + g.state,
+             g.home + " " + String(g.homeScore) + "  " +
+             (g.id == selectedGameId ? "* ARMED" : g.state),
              g.id == selectedGameId);
     }
     if (gameCount > 3) {
       tft.setTextDatum(TR_DATUM);
-      textAt("", 0, 0); // keep font/background state deterministic
       tft.setTextColor(MUTED, BG);
-      tft.drawString("< prev       next >", 309, 40, 2);
+      tft.drawString("< PREV         NEXT >", 309, 40, 2);
       tft.setTextDatum(TL_DATUM);
     }
   } else if (screen == Screen::SETUP) {
@@ -421,9 +751,16 @@ void draw() {
     button(111, 161, 98, 29, "TOUCH");
     button(214, 161, 98, 29, "INVERT");
   }
-  button(6, 200, 99, 34, "LIVE", screen == Screen::LIVE);
-  button(111, 200, 99, 34, "GAMES", screen == Screen::GAMES);
-  button(216, 200, 98, 34, "SETUP", screen == Screen::SETUP);
+
+  if (screen == Screen::STATS) {
+    button(6, 200, 99, 34, "BACK");
+    button(111, 200, 99, 34, detailGameId == selectedGameId ? "ARMED" : "ARM");
+    button(216, 200, 98, 34, "SETUP");
+  } else {
+    button(6, 200, 99, 34, "TODAY", screen == Screen::LIVE);
+    button(111, 200, 99, 34, "GAMES", screen == Screen::GAMES);
+    button(216, 200, 98, 34, "SETUP", screen == Screen::SETUP);
+  }
 }
 
 void selectGame(uint32_t id) {
@@ -431,6 +768,9 @@ void selectGame(uint32_t id) {
   haveBaseline = false;
   prefs.putUInt("game", id);
   screen = Screen::LIVE;
+  for (uint8_t i = 0; i < gameCount; ++i)
+    if (games[i].id == id) { featuredIndex = i; break; }
+  lastCarouselAdvance = millis();
   needsDraw = true;
 }
 
@@ -467,10 +807,23 @@ void handleTouch() {
   const int x = constrain((int)map(p.x, cfg.touchX0, cfg.touchX1, 0, 319), 0, 319);
   const int y = constrain((int)map(p.y, cfg.touchY0, cfg.touchY1, 0, 239), 0, 239);
   if (y >= 198) {
-    screen = x < 107 ? Screen::LIVE : x < 214 ? Screen::GAMES : Screen::SETUP;
-  } else if (screen == Screen::LIVE && y >= 148 && y < 187) {
-    cfg.mode = constrain(x / 79, 0, 3);
-    prefs.putUChar("mode", cfg.mode);
+    if (screen == Screen::STATS) {
+      if (x < 107) screen = Screen::LIVE;
+      else if (x < 214) selectGame(detailGameId);
+      else screen = Screen::SETUP;
+    } else {
+      screen = x < 107 ? Screen::LIVE : x < 214 ? Screen::GAMES : Screen::SETUP;
+    }
+    lastCarouselAdvance = millis();
+  } else if (screen == Screen::LIVE && gameCount) {
+    if (y >= 168 && y < 199) {
+      if (x < 76) featuredIndex = (featuredIndex + gameCount - 1) % gameCount;
+      else if (x >= 243) featuredIndex = (featuredIndex + 1) % gameCount;
+      else selectGame(games[featuredIndex % gameCount].id);
+      lastCarouselAdvance = millis();
+    } else if (y >= 36 && y < 168) {
+      showDetail(games[featuredIndex % gameCount].id);
+    }
   } else if (screen == Screen::GAMES) {
     if (y >= 39 && y < 64 && gameCount > 3) {
       if (x > 170 && (gamePage + 1) * 3 < gameCount) ++gamePage;
@@ -503,7 +856,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1024> doc;
-    doc["version"] = "0.1.1";
+    doc["version"] = "0.2.0";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -511,6 +864,10 @@ void registerRoutes() {
     doc["mdns"] = mdnsStarted ? mdnsName + ".local" : "";
     doc["selectedId"] = selectedGameId;
     doc["mode"] = cfg.mode;
+    doc["scoreDate"] = scoreboardDate;
+    doc["featuredIndex"] = featuredIndex;
+    doc["cycleGames"] = cfg.cycleGames;
+    doc["cycleSeconds"] = cfg.cycleSeconds;
     doc["error"] = lastError;
     doc["freeHeap"] = ESP.getFreeHeap();
     doc["uptimeSeconds"] = millis() / 1000UL;
@@ -528,6 +885,34 @@ void registerRoutes() {
       g["homeScore"] = games[i].homeScore;
       g["awayScore"] = games[i].awayScore;
       g["state"] = games[i].state;
+      g["status"] = gameStatus(games[i]);
+      g["homeShots"] = games[i].homeShots;
+      g["awayShots"] = games[i].awayShots;
+      g["startTimeUTC"] = games[i].startUTC;
+      g["period"] = games[i].period;
+      g["periodType"] = games[i].periodType;
+      g["clock"] = games[i].clock;
+      g["intermission"] = games[i].intermission;
+    }
+    sendJson(doc);
+  });
+  server.on("/api/stats", HTTP_GET, []() {
+    if (!authorized()) return;
+    const uint32_t id = strtoul(server.arg("id").c_str(), nullptr, 10);
+    bool known = false;
+    for (uint8_t i = 0; i < gameCount; ++i)
+      if (games[i].id == id) known = true;
+    if (!known || id == 0) return errorResponse("Game is not in the daily scoreboard", 404);
+    fetchDetailStats(id);
+    StaticJsonDocument<2048> doc;
+    doc["gameId"] = id;
+    doc["error"] = detail.error;
+    JsonArray rows = doc.createNestedArray("stats");
+    for (uint8_t i = 0; i < detail.count; ++i) {
+      JsonObject row = rows.createNestedObject();
+      row["label"] = detail.label[i];
+      row["away"] = detail.away[i];
+      row["home"] = detail.home[i];
     }
     sendJson(doc);
   });
@@ -553,6 +938,9 @@ void registerRoutes() {
     doc["seconds"] = cfg.seconds;
     doc["horn"] = cfg.horn;
     doc["screenInverted"] = cfg.invertScreen;
+    doc["cycleGames"] = cfg.cycleGames;
+    doc["cycleSeconds"] = cfg.cycleSeconds;
+    doc["timezone"] = cfg.timezone;
     JsonArray wled = doc.createNestedArray("wled");
     for (uint8_t i = 0; i < MAX_WLED; ++i) {
       JsonObject d = wled.createNestedObject();
@@ -582,6 +970,14 @@ void registerRoutes() {
     cfg.brightness = constrain((int)(doc["brightness"] | cfg.brightness), 1, 255);
     cfg.seconds = constrain((int)(doc["seconds"] | cfg.seconds), 2, 30);
     cfg.horn = doc["horn"] | cfg.horn;
+    cfg.cycleGames = doc["cycleGames"] | cfg.cycleGames;
+    cfg.cycleSeconds = constrain((int)(doc["cycleSeconds"] | cfg.cycleSeconds), 5, 30);
+    uint8_t requestedTimezone = constrain((int)(doc["timezone"] | cfg.timezone), 0, 4);
+    if (requestedTimezone != cfg.timezone) {
+      cfg.timezone = requestedTimezone;
+      applyTimezone();
+      needsDraw = true;
+    }
     bool invert = doc["screenInverted"] | cfg.invertScreen;
     if (cfg.invertScreen != invert) {
       cfg.invertScreen = invert;
@@ -668,7 +1064,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.1.1 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.2.0 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
@@ -696,6 +1092,7 @@ void setup() {
   // Some ILI9341-compatible CYDs boot with visually inverted colors.
   // Runtime setting is stored in NVS, so the user can change it from web or touch.
   tft.invertDisplay(cfg.invertScreen);
+  applyTimezone();
 
   WiFi.persistent(false);
   WiFi.setSleep(false);
@@ -737,7 +1134,11 @@ void loop() {
       needsDraw = true;
       Serial.printf("STA: http://%s/\n", WiFi.localIP().toString().c_str());
     }
-    uint32_t interval = selectedGameId ? LIVE_POLL_MS : IDLE_POLL_MS;
+    bool liveGames = false;
+    for (uint8_t i = 0; i < gameCount; ++i)
+      if (games[i].state == "LIVE" || games[i].state == "CRIT")
+        liveGames = true;
+    uint32_t interval = (selectedGameId || liveGames) ? LIVE_POLL_MS : IDLE_POLL_MS;
     if (now - lastPoll >= interval) {
       lastPoll = now;
       pollNhl();
@@ -747,7 +1148,23 @@ void loop() {
     reconnectAt = now;
     needsDraw = true;
   }
-  if (needsDraw) draw();
+  if (screen == Screen::LIVE && cfg.cycleGames && gameCount > 1 &&
+      now - lastCarouselAdvance >= uint32_t(cfg.cycleSeconds) * 1000UL) {
+    featuredIndex = (featuredIndex + 1) % gameCount;
+    lastCarouselAdvance = now;
+    needsDraw = true;
+  }
+  if (needDetailLoad && screen == Screen::STATS) {
+    needDetailLoad = false;
+    fetchDetailStats(detailGameId);
+  }
+  if (needsDraw) {
+    partialLiveUpdate = false;
+    draw();
+  } else if (partialLiveUpdate && screen == Screen::LIVE && gameCount > 0) {
+    partialLiveUpdate = false;
+    drawLiveReadout(games[featuredIndex % gameCount]);
+  }
   if (rebootAt && int32_t(now - rebootAt) >= 0) ESP.restart();
   delay(5);
 }

@@ -8,3 +8,6 @@
 *.elf
 *.map
 secrets.h
+
+# Generated at build time from the NHL team's public SVG logo endpoints
+include/TeamLogos.h
