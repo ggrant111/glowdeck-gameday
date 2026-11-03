@@ -84,6 +84,8 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <div class="stats">
 <div class="stat"><span>Current screen</span><b id="displayGame">—</b></div>
 <div class="stat"><span>Scoreboard date</span><b id="displayDate">—</b></div>
+<div class="stat"><span>Local game date</span><b id="displayToday">—</b></div>
+<div class="stat"><span>Clock synchronization</span><b id="displayClock">—</b></div>
 </div>
 <div class="toggle" style="margin-top:18px"><input type="checkbox" id="cycleGames"><label for="cycleGames">Automatically cycle through games</label></div>
 <label for="cycleSeconds">Show each game for (seconds)</label>
@@ -127,7 +129,10 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <div class="card"><h2>Connection information</h2>
 <p>Setup hotspot: <code id="apName">—</code> at <code id="apIp">192.168.4.1</code></p>
 <p>Local hostname: <code id="mdns">—</code></p>
-<p>Uptime: <span id="uptime">—</span></p></div>
+<p>Uptime: <span id="uptime">—</span></p>
+<p>Local calendar date: <span id="localToday">—</span></p>
+<p>Time synchronization: <span id="clockState">—</span></p>
+<p class="small muted">GameDay automatically changes to the next day's NHL schedule without restarting. If the clock cannot synchronize, verify internet/NTP access.</p></div>
 </section>
 <section id="firmware" class="panel">
 <div class="card"><h2>Firmware update</h2>
@@ -177,6 +182,10 @@ function renderStatus(){
   $("rotationStatus").textContent=s.cycleGames?"Every "+s.cycleSeconds+" sec":"Paused";
   $("displayGame").textContent=showing?showing.away+" @ "+showing.home:"No games";
   $("displayDate").textContent=s.scoreDate||"Not loaded";
+  $("displayToday").textContent=s.today||"Synchronizing";
+  $("displayClock").textContent=s.clockSynced?"Synced":"Pending NTP";
+  $("localToday").textContent=s.today||"Pending time sync";
+  $("clockState").textContent=s.clockSynced?"Synchronized":"Waiting for network time";
   $("heap").textContent=Math.round(s.freeHeap/1024)+" KB";
   $("lastError").textContent=s.error||"";
   $("apName").textContent=s.apSsid;
@@ -189,7 +198,9 @@ function renderGames(){
   const list=$("gameList");list.replaceChildren();
   if(!currentGames.length){
     const p=document.createElement("p");
-    p.textContent="No NHL games available. Verify Wi-Fi and try again.";
+    p.textContent=currentStatus&&currentStatus.scoreboardLoaded
+      ? "No NHL games scheduled for "+(currentStatus.scoreDate||"today")+"."
+      : "Loading today's NHL games. "+(currentStatus&&currentStatus.error||"Check Wi-Fi and time synchronization.");
     list.append(p);return;
   }
   currentGames.forEach(g=>{
@@ -323,7 +334,11 @@ $("saveDevices").onclick=()=>perform(saveConfig);
 $("testHome").onclick=()=>perform(async()=>{await post("/api/test",{side:"home"});message("Home color test started")});
 $("testAway").onclick=()=>perform(async()=>{await post("/api/test",{side:"away"});message("Away color test started")});
 $("testLights").onclick=()=>perform(async()=>{await post("/api/test",{side:"home"});message("Test sent to enabled lights")});
-$("refreshGames").onclick=()=>perform(async()=>{await refresh();message("Scoreboard refreshed")});
+$("refreshGames").onclick=()=>perform(async()=>{
+  await post("/api/refresh",{});
+  message("Fresh NHL schedule requested; the device will update shortly.");
+  await refresh();
+});
 $("brightness").oninput=()=>{$("brightValue").textContent=$("brightness").value+" / 255"};
 $("scanWifi").onclick=()=>perform(async()=>{
   message("Scanning nearby Wi-Fi networks...");
