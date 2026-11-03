@@ -2,22 +2,25 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.1.1 display-correction build.** The initial touchscreen now boots and displays NHL scores on an ESP32 CYD; color correction and redraw reduction have passed CI compilation but still need physical validation.
+**Status: v0.2.0 daily-game carousel build.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
-- **LIVE:** Selected NHL matchup, scores and OFF / HOME / AWAY / BOTH celebration selector.
-- **GAMES:** Choose from today's NHL games. Use prev / next to page.
+- **TODAY:** Automatically cycles all of today's NHL games with embedded official team logos, scheduled start times (local time zone), live clock/period, scores and final results. Tap a matchup for team stats. Use PREV/NEXT or turn rotation off in the web dashboard.
+- **GAMES:** Choose the matchup that is armed for goal celebrations. Use prev / next to page.
 - **SETUP:** IP address, Wi-Fi hotspot credentials, test lights and touch calibration.
 
 The first score after selecting a game is used as a baseline and never replays an earlier goal.
+
+**Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
 
 ## Self-hosted web dashboard
 
 - **Dashboard:** status, current game, mode and home/away light tests.
-- **Games:** select the current game from your phone.
+- **Games:** arm the goal-alert matchup or inspect each game's team statistics from your phone.
+- **Display:** choose automatic rotation, interval (5–30 seconds) and local game time zone.
 - **Lights:** set up to four WLED IP addresses with individual enable switches.
 - **Setup:** scan Wi-Fi networks, enter Wi-Fi credentials, set brightness, duration, optional GPIO26 speaker horn and admin password.
 - **Update:** upload a compiled firmware BIN (OTA-capable partition layout).
@@ -53,7 +56,10 @@ Public scoreboard reporting may lag behind broadcasts. This is not video or audi
 
 | Feature | Status |
 | --- | --- |
-| Touchscreen game choice, team mode, light test | Implemented; physical validation pending |
+| Daily game carousel, official embedded logos, scores, live clock, scheduled times | Built, physical validation pending |
+| Touch-to-open team stats, game comparison, pregame records | Built, physical validation pending |
+| Configurable rotation (5–30 seconds), timezone ET/CT/MT/PT/AZ | Built, physical validation pending |
+| Touchscreen game choice, team mode, light test | Implemented |
 | Self-hosted mobile dashboard and Wi-Fi setup hotspot | Implemented |
 | NHL public API scores and goal detection | Implemented |
 | Four WLED IPv4 devices / snapshot and restore | Implemented |
@@ -70,12 +76,16 @@ Public scoreboard reporting may lag behind broadcasts. This is not video or audi
 ## Project structure
 
 - **platformio.ini** — one supported CYD board target and pin configuration.
+- **scripts/generate_logos.py** — generate compact 48x48 team-logo sprites from NHL SVG assets. Requires Pillow and CairoSVG when building locally. GitHub Actions runs this automatically.
+- **docs/CAROUSEL.md** — full daily carousel and team-stats guide, controls, time zones and validation steps.
 - **src/main.cpp** — firmware, NHL polling, WLED control, touch UI, web API and firmware update.
 - **include/WebUi.h** — built-in responsive browser dashboard.
 - **docs/HARDWARE.md** — board pins and architecture.
 - **docs/TROUBLESHOOTING.md** — boot loop, COM6, touch, Wi-Fi and WLED diagnosis.
 - **docs/SECURITY.md** — network security boundaries.
 - **.github/workflows/build-firmware.yml** — compile check and downloadable firmware.
+
+For local builds, first run `python -m pip install Pillow==11.3.0 CairoSVG==2.8.2` and `python scripts/generate_logos.py` before `pio run -e cyd`.
 
 For firmware downloads, open **Actions → Build CYD firmware** in this repository, select a **successful** run and download the artifact named **glowdeck-gameday-cyd-firmware**. It contains the PlatformIO-generated firmware.bin; use USB for the initial flash.
 
