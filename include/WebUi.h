@@ -59,6 +59,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <div class="stat"><span>Goal celebrations</span><b id="currentMode">Both teams</b></div>
 <div class="stat"><span>Device IP</span><b id="deviceIp">—</b></div>
 <div class="stat"><span>Free memory</span><b id="heap">—</b></div>
+<div class="stat"><span>Stack headroom (minimum)</span><b id="stackWatermark">—</b></div>
 <div class="stat"><span>Currently on screen</span><b id="showingGame">—</b></div>
 <div class="stat"><span>Rotation</span><b id="rotationStatus">—</b></div>
 <div class="stat"><span>NHL score check</span><b id="scorePollFrequency">—</b></div>
@@ -233,6 +234,7 @@ function renderStatus(){
   $("localToday").textContent=s.today||"Pending time sync";
   $("clockState").textContent=s.clockSynced?"Synchronized":"Waiting for network time";
   $("heap").textContent=Math.round(s.freeHeap/1024)+" KB";
+  $("stackWatermark").textContent=(s.stackLowWater===undefined?"Unavailable":s.stackLowWater+" bytes");
   $("lastError").textContent=s.error||"";
   $("apName").textContent=s.apSsid;
   $("apIp").textContent=s.apIp;

@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.2.8 NHL incomplete-JSON recovery.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.2.9 stack-canary crash recovery.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
@@ -21,6 +21,12 @@ The first score after selecting a game is used as a baseline and never replays a
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+
+## ESP32 crash / stack canary fix (v0.2.9)
+
+If v0.2.8 immediately reboots after connecting Wi-Fi with `Guru Meditation: Stack canary watchpoint triggered (loopTask)`, update to v0.2.9. The ESP32's default loop task uses an 8KB stack; HTTPS requests and a 2KB stack-allocated JSON filter exhausted headroom. v0.2.9 sets a 16KB loop stack, moves the NHL scoreboard filter to heap memory with capacity checks, moves large pregame standings scratch arrays out of the stack, and prints the free-stack low-water mark around NHL fetches. The web dashboard also shows **Stack headroom (minimum)**. This does not remove existing timeouts, retries, the daily date logic, WLED effects or settings.
+
+**A boot loop may prevent OTA upload.** For recovery, connect the CYD by USB to your computer and use the compiled firmware from the successful Actions run. The app binary starts at flash offset `0x10000`; if the bootloader still selects a previously OTA-updated partition, the OTA metadata at `0xE000` can be cleared to force booting the flashed primary application without wiping NVS settings. See `docs/STACK_RECOVERY.md` for exact Windows commands.
 
 ## Reliable NHL scoreboard downloads (v0.2.8)
 
