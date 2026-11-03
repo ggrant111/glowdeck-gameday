@@ -455,6 +455,7 @@ String deviceLocalDate() {
 }
 
 void saveSettings(); // Declaration: Preferences implementation follows later.
+void scheduleWledRestoreAll(); // Date rollover must retire old WLED events.
 
 void prepareNewScoreboardDate(const String &today) {
   if (today.isEmpty() || today == targetScoreboardDate) return;
@@ -481,6 +482,8 @@ void prepareNewScoreboardDate(const String &today) {
     for (auto &entry : conferenceSnapshots) entry = ConferenceSnapshot();
     lastConferenceFetch = 0;
     webPreviewGameId = 0;
+    scheduleWledRestoreAll();
+    lastArmedGameState = "";
     for (auto &entry : goalWatch) entry = GoalWatch();
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) cfg.followIds[i] = 0;
@@ -1220,7 +1223,10 @@ void scheduleWledRestoreAll() {
 void tickRestores() {
   const uint32_t now = millis();
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
-    if (!restoring[i] || int32_t(now - restoreAt[i]) < 0) continue;
+    // UINT32_MAX marks a WLED effect that must stay active until the shared
+    // event manager ends it (not a timestamp to compare using subtraction).
+    if (!restoring[i] || restoreAt[i] == UINT32_MAX ||
+        int32_t(now - restoreAt[i]) < 0) continue;
     const String body = wledRestoreBody(savedState[i]);
     const bool restored = !body.isEmpty() && postWled(cfg.wled[i], body);
     if (restored) {
@@ -1696,18 +1702,34 @@ void pollNhl() {
   Game *g = selectedGame();
   if (g) {
     if (haveBaseline && (g->state == "LIVE" || g->state == "CRIT")) {
-      bool homeGoal = g->homeScore > previousHome;
-      bool awayGoal = g->awayScore > previousAway;
+      const bool homeGoal = g->homeScore > previousHome;
+      const bool awayGoal = g->awayScore > previousAway;
       if (homeGoal && (cfg.mode == 1 || cfg.mode == 3))
         celebrate(teamRgb(g->home));
       if (awayGoal && (cfg.mode == 2 || cfg.mode == 3))
         celebrate(teamRgb(g->away));
     }
+    // Trigger game-start and final outcomes only when a previously observed
+    // state transitions; booting into a LIVE/FINAL game never replays events.
+    const bool homeWon = g->homeScore > g->awayScore;
+    const bool favoredWon = cfg.favoriteSide == 0 ? homeWon : !homeWon;
+    const CelebrationEngine::Event transition = CelebrationEngine::transition(
+        haveBaseline, lastArmedGameState.c_str(), g->state.c_str(), favoredWon);
+    if (transition == CelebrationEngine::Event::GAME_START &&
+        cfg.wledGameStart &&
+        wledActiveEvent != CelebrationEngine::Event::GOAL)
+      startWledEvent(transition, teamRgb(cfg.favoriteSide == 0 ? g->home : g->away));
+    else if ((transition == CelebrationEngine::Event::FINAL_WIN ||
+              transition == CelebrationEngine::Event::FINAL_LOSS) &&
+             cfg.wledFinal && wledActiveEvent != CelebrationEngine::Event::GOAL)
+      startWledEvent(transition, teamRgb(cfg.favoriteSide == 0 ? g->home : g->away));
     previousHome = g->homeScore;
     previousAway = g->awayScore;
+    lastArmedGameState = g->state;
     haveBaseline = true; // First fetch after choosing a game never replays old goals.
   } else {
     haveBaseline = false;
+    lastArmedGameState = "";
   }
   if (gamesFingerprint() != previousFingerprint || newDay) {
     if (!newDay && !showingStandingsPage() && screen == Screen::LIVE &&
@@ -2135,7 +2157,10 @@ void draw() {
 
 void selectGame(uint32_t id) {
   swallowLiveGesture = true;
+  // A new game should not inherit an in-progress goal/PP effect.
+  scheduleWledRestoreAll();
   selectedGameId = id;
+  lastArmedGameState = "";
   haveBaseline = false;
   prefs.putUInt("game", id);
   screen = Screen::LIVE;
@@ -2658,6 +2683,7 @@ void loop() {
   tickHorn();
   tickRestores();
   tickRearLed();
+  tickWledCelebrations();
 
   const uint32_t now = millis();
   const bool connected = WiFi.status() == WL_CONNECTED;
@@ -2714,7 +2740,8 @@ void loop() {
   }
   // PP is event-driven by real NHL manpower data, not by cumulative PP stats.
   // Poll only while relevant and never while WLED state restoration is pending.
-  if (connected && cfg.rearLedEnabled && cfg.rearPowerPlay &&
+  if (connected && ((cfg.rearLedEnabled && cfg.rearPowerPlay) ||
+                    (cfg.wledPP && selectedGameId)) &&
       uint32_t(now - lastPpFallback) >= 20000UL) {
     bool restoringLights = false, needSituation = false;
     for (uint8_t i = 0; i < MAX_WLED; ++i)
