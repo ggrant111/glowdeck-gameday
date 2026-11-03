@@ -61,7 +61,7 @@ String scoreboardDate;
 uint32_t selectedGameId = 0;
 int previousHome = 0, previousAway = 0;
 bool haveBaseline = false, mdnsStarted = false, mdnsAttempted = false, needsDraw = true;
-bool touchWasDown = false, wifiWasConnected = false;
+bool touchWasDown = false, wifiWasConnected = false, partialLiveUpdate = false;
 String apSsid, apPassword, mdnsName, lastError;
 uint32_t lastPoll = 0, reconnectAt = 0, rebootAt = 0;
 uint32_t lastTouch = 0;
@@ -585,7 +585,12 @@ void pollNhl() {
   } else {
     haveBaseline = false;
   }
-  if (gamesFingerprint() != previousFingerprint || newDay) needsDraw = true;
+  if (gamesFingerprint() != previousFingerprint || newDay) {
+    if (!newDay && screen == Screen::LIVE && gameCount > 0 &&
+        previouslyFeatured == games[featuredIndex % gameCount].id)
+      partialLiveUpdate = true;
+    else needsDraw = true;
+  }
   // Force a newer comparison when the user is viewing live stats.
   if (screen == Screen::STATS && detailGameId) {
     Game *viewed = detailGame();
@@ -609,6 +614,26 @@ void button(int x, int y, int w, int h, const String &label, bool active = false
   tft.drawString(label, x + w / 2, y + h / 2, 2);
   tft.setTextDatum(TL_DATUM);
 }
+// Paint only the changing score and clock regions on the 2.8" TFT.
+// The logos, team labels and navigation remain intact between NHL polls.
+void drawLiveReadout(const Game &g) {
+  tft.fillRect(103, 71, 114, 48, BG);
+  tft.fillRect(0, 130, 320, 37, BG);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE, BG);
+  tft.drawString(g.state == "FUT" || g.state == "PRE" ? "VS" :
+                 String(g.awayScore) + " - " + String(g.homeScore), 160, 93, 4);
+  tft.setTextColor(g.state == "LIVE" || g.state == "CRIT" ? ORANGE : WHITE, BG);
+  tft.drawString(gameStatus(g), 160, 140, 2);
+  tft.setTextColor(MUTED, BG);
+  if (g.awayShots >= 0 && g.homeShots >= 0)
+    tft.drawString("SHOTS  " + String(g.awayShots) + " - " +
+                   String(g.homeShots), 160, 156, 2);
+  else
+    tft.drawString("Tap matchup for team stats", 160, 156, 2);
+  tft.setTextDatum(TL_DATUM);
+}
+
 void drawCalibration() {
   tft.fillScreen(BG);
   textAt("Touch calibration", 14, 9, WHITE, 4);
@@ -643,23 +668,11 @@ void draw() {
                     " / " + String(gameCount), 160, 47, 2);
       drawTeamLogo(tft, g.away, 38, 66);
       drawTeamLogo(tft, g.home, 234, 66);
+      tft.setTextDatum(MC_DATUM); // Logo renderer uses its own text datum.
       tft.setTextColor(WHITE, BG);
-      tft.drawString(g.state == "FUT" || g.state == "PRE" ? "VS" :
-                     String(g.awayScore) + " - " + String(g.homeScore),
-                     160, 93, 4);
       tft.drawString(g.away, 62, 122, 2);
       tft.drawString(g.home, 258, 122, 2);
-      tft.setTextColor(g.state == "LIVE" || g.state == "CRIT" ? ORANGE : WHITE, BG);
-      tft.drawString(gameStatus(g), 160, 140, 2);
-      if (g.awayShots >= 0 && g.homeShots >= 0) {
-        tft.setTextColor(MUTED, BG);
-        tft.drawString("SHOTS  " + String(g.awayShots) + " - " +
-                       String(g.homeShots), 160, 156, 2);
-      } else {
-        tft.setTextColor(MUTED, BG);
-        tft.drawString("Tap matchup for team stats", 160, 156, 2);
-      }
-      tft.setTextDatum(TL_DATUM);
+      drawLiveReadout(g);
       button(8, 169, 65, 28, "PREV");
       button(81, 169, 157, 28,
              g.id == selectedGameId ? "ARMED FOR GOALS" : "ARM GOALS",
@@ -1112,7 +1125,11 @@ void loop() {
       needsDraw = true;
       Serial.printf("STA: http://%s/\n", WiFi.localIP().toString().c_str());
     }
-    uint32_t interval = selectedGameId ? LIVE_POLL_MS : IDLE_POLL_MS;
+    bool liveGames = false;
+    for (uint8_t i = 0; i < gameCount; ++i)
+      if (games[i].state == "LIVE" || games[i].state == "CRIT")
+        liveGames = true;
+    uint32_t interval = (selectedGameId || liveGames) ? LIVE_POLL_MS : IDLE_POLL_MS;
     if (now - lastPoll >= interval) {
       lastPoll = now;
       pollNhl();
@@ -1132,7 +1149,13 @@ void loop() {
     needDetailLoad = false;
     fetchDetailStats(detailGameId);
   }
-  if (needsDraw) draw();
+  if (needsDraw) {
+    partialLiveUpdate = false;
+    draw();
+  } else if (partialLiveUpdate && screen == Screen::LIVE && gameCount > 0) {
+    partialLiveUpdate = false;
+    drawLiveReadout(games[featuredIndex % gameCount]);
+  }
   if (rebootAt && int32_t(now - rebootAt) >= 0) ESP.restart();
   delay(5);
 }
