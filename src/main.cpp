@@ -13,6 +13,7 @@
 #include "WebUi.h"
 #include "TeamLogos.h"
 #include "GameDayDate.h"
+#include "GameDayCadence.h"
 #include "RearLedPattern.h"
 #include <time.h>
 
@@ -28,7 +29,6 @@ constexpr uint8_t PIN_RGB_R = 4, PIN_RGB_G = 16, PIN_RGB_B = 17;
 constexpr uint8_t RGB_CH_R = 2, RGB_CH_G = 3, RGB_CH_B = 4;
 constexpr uint8_t MAX_FOLLOWED_GAMES = 4;
 constexpr uint8_t MAX_GAMES = 20, MAX_WLED = 4;
-constexpr uint32_t LIVE_POLL_MS = 20000, IDLE_POLL_MS = 60000;
 constexpr uint16_t BG = 0x0841, PANEL = 0x10A2, WHITE = 0xFFFF;
 constexpr uint16_t MUTED = 0x9CF3, TEAL = 0x340F, ORANGE = 0xFD20;
 
@@ -203,6 +203,25 @@ bool rearFollows(uint32_t gameId) {
   for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
     if (cfg.followIds[i] == gameId) return true;
   return false;
+}
+
+// All games share the official date-scoped NHL scoreboard request. Prioritize
+// live matchups that drive lights, without hammering the API while idle.
+uint32_t currentScoreboardPollIntervalMs() {
+  bool anyLive = false;
+  bool priorityLive = false;
+  bool armedPregame = false;
+  for (uint8_t i = 0; i < gameCount; ++i) {
+    const Game &g = games[i];
+    const bool live = g.state == "LIVE" || g.state == "CRIT";
+    if (live) {
+      anyLive = true;
+      if (rearFollows(g.id)) priorityLive = true;
+    }
+    if (g.id == selectedGameId &&
+        (g.state == "FUT" || g.state == "PRE")) armedPregame = true;
+  }
+  return GameDayCadence::intervalMs(priorityLive, anyLive, armedPregame);
 }
 
 void setupRearLed() {
@@ -401,7 +420,7 @@ void prepareNewScoreboardDate(const String &today) {
   }
   // Poll the explicitly dated endpoint on the next loop, even when the
   // previous game was being polled on a slower idle interval.
-  lastPoll = millis() - IDLE_POLL_MS;
+  lastPoll = millis() - GameDayCadence::kIdleMs;
 }
 String formattedStart(const String &utc) {
   int yr = 0, mo = 0, dy = 0, hh = 0, mm = 0, sec = 0;
@@ -1344,6 +1363,8 @@ void selectGame(uint32_t id) {
   for (uint8_t i = 0; i < gameCount; ++i)
     if (games[i].id == id) { featuredIndex = i; break; }
   lastCarouselAdvance = millis();
+  // Fetch soon when the user arms a new matchup; first response is a baseline.
+  lastPoll = millis() - GameDayCadence::kIdleMs;
   needsDraw = true;
 }
 
@@ -1464,7 +1485,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1024> doc;
-    doc["version"] = "0.2.5";
+    doc["version"] = "0.2.6";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -1485,6 +1506,7 @@ void registerRoutes() {
     doc["featuredIndex"] = featuredIndex;
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
+    doc["scorePollSeconds"] = currentScoreboardPollIntervalMs() / 1000UL;
     doc["error"] = lastError;
     doc["freeHeap"] = ESP.getFreeHeap();
     doc["uptimeSeconds"] = millis() / 1000UL;
@@ -1537,7 +1559,7 @@ void registerRoutes() {
   });
   server.on("/api/refresh", HTTP_POST, []() {
     if (!authorized()) return;
-    lastPoll = millis() - IDLE_POLL_MS;
+    lastPoll = millis() - GameDayCadence::kIdleMs;
     StaticJsonDocument<96> ok;
     ok["queued"] = true;
     sendJson(ok);
@@ -1615,7 +1637,7 @@ void registerRoutes() {
       applyTimezone();
       // A new timezone can change what 'today' means on this CYD.
       lastDateCheck = millis() - 5000UL;
-      lastPoll = millis() - IDLE_POLL_MS;
+      lastPoll = millis() - GameDayCadence::kIdleMs;
       needsDraw = true;
     }
     bool invert = doc["screenInverted"] | cfg.invertScreen;
@@ -1762,7 +1784,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.2.5 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.2.6 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
@@ -1821,7 +1843,7 @@ void loop() {
     // SNTP runs asynchronously; neither boot nor web dashboard waits for it.
     configTzTime(timezoneRule(), "pool.ntp.org", "time.nist.gov");
     lastDateCheck = millis() - 5000UL;
-    lastPoll = millis() - IDLE_POLL_MS;
+    lastPoll = millis() - GameDayCadence::kIdleMs;
     needsDraw = true;
   } else if (!connected && wifiWasConnected) {
     wifiWasConnected = false;
@@ -1844,12 +1866,10 @@ void loop() {
       needsDraw = true;
       Serial.printf("STA: http://%s/\n", WiFi.localIP().toString().c_str());
     }
-    bool liveGames = false;
-    for (uint8_t i = 0; i < gameCount; ++i)
-      if (games[i].state == "LIVE" || games[i].state == "CRIT")
-        liveGames = true;
-    uint32_t interval = (selectedGameId || liveGames) ? LIVE_POLL_MS : IDLE_POLL_MS;
-    if (now - lastPoll >= interval) {
+    // 10s: live + armed/followed, 20s: other live, 30s: armed pregame,
+    // 60s: idle. A single fetch refreshes the entire daily carousel.
+    const uint32_t interval = currentScoreboardPollIntervalMs();
+    if (uint32_t(now - lastPoll) >= interval) {
       lastPoll = now;
       pollNhl();
     }
@@ -1861,14 +1881,15 @@ void loop() {
   // PP is event-driven by real NHL manpower data, not by cumulative PP stats.
   // Poll only while relevant and never while WLED state restoration is pending.
   if (connected && cfg.rearLedEnabled && cfg.rearPowerPlay &&
-      uint32_t(now - lastPpFallback) >= 45000UL) {
+      uint32_t(now - lastPpFallback) >= 20000UL) {
     bool restoringLights = false, needSituation = false;
     for (uint8_t i = 0; i < MAX_WLED; ++i)
       if (restoring[i]) restoringLights = true;
     for (uint8_t i = 0; i < gameCount; ++i)
       if (rearFollows(games[i].id) && (games[i].state == "LIVE" ||
            games[i].state == "CRIT") && !games[i].intermission &&
-           !games[i].ppDataKnown) needSituation = true;
+           (!games[i].ppDataKnown ||
+            uint32_t(now - games[i].ppUpdatedAt) >= 20000UL)) needSituation = true;
     if (needSituation && !restoringLights && rearEvent != RearEvent::GOAL) {
       lastPpFallback = millis();
       fetchFollowedPowerPlays();
