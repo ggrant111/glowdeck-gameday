@@ -1,3 +1,21 @@
+# v0.2.1 — Full-screen broadcast scoreboard
+
+The daily carousel has been restyled to match the supplied NHL scoreboard reference, adapted for 320x240 pixels. The full-screen layout presents a compact NHL header, a LIVE/NEXT/FINAL indicator, a large period/clock banner, large scores, authentic 56px transparent team logos, team-color underlines, a shots-on-goal strip, and contextual match information below. It uses a dark, vector-drawn arena/rink background without needing large bitmap framebuffers.
+
+**No persistent bottom navigation buttons appear on the carousel.** To navigate, **swipe left/right** for the next/previous game. **Tap the center of the scoreboard** to open team stats. **Tap the small top-right menu icon** to open the game list; from there you can select SETUP. The corners of the lower band also support previous/next tapping. Stats still has BACK / ARM / SETUP, and the Games page retains regular navigation.
+
+**Logos:** The logo generator packs 56x56 images as native 4-bit TFT sprites. Palette index 0 is now truly transparent and the display library skips those pixels, eliminating the opaque bluish/purple squares in the earlier screen photo. Source marks remain NHL/team trademarks.
+
+**Display refresh:** NHL polls that update the same game only redraw the period, score and SOG/stats panels, not the logos or full screen. Automatic carousel transitions repaint the full 320x240 screen, so display colors and the touch targets still require hardware validation.
+
+**Goal alerts:** Swiping/rotating the carousel does *not* change the armed game. To arm a new game, tap the main board to open stats then use ARM, or open the top-right menu and select a game in GAMES.
+
+**Unpublished data:** SOG shows a dash until reported. PP/PIM/faceoff values appear in the bottom band when loaded by the on-demand NHL game-stats endpoint. Before those stats have been fetched, the band uses game number, armed status and a stats hint; no made-up statistics are shown.
+
+**OTA:** As before, use the successful firmware artifact from GitHub Actions, unzip `firmware.bin`, and upload from the CYD's built-in Update page. Existing Preferences/NVS settings are retained.
+
+---
+
 # v0.2.0 — Daily NHL carousel & team stats
 
 ## New on the 2.8-inch CYD display
