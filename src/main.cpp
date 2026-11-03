@@ -13,6 +13,7 @@
 #include "WebUi.h"
 #include "TeamLogos.h"
 #include "GameDayDate.h"
+#include "RearLedPattern.h"
 #include <time.h>
 
 // GlowDeck GameDay — ESP32-2432S028R (2.8" resistive CYD).
@@ -23,6 +24,9 @@
 namespace {
 constexpr uint8_t PIN_BL = 21, PIN_AUDIO = 26, PIN_TOUCH_CS = 33, PIN_TOUCH_IRQ = 36;
 constexpr uint8_t AUDIO_CH = 6;
+constexpr uint8_t PIN_RGB_R = 4, PIN_RGB_G = 16, PIN_RGB_B = 17;
+constexpr uint8_t RGB_CH_R = 2, RGB_CH_G = 3, RGB_CH_B = 4;
+constexpr uint8_t MAX_FOLLOWED_GAMES = 4;
 constexpr uint8_t MAX_GAMES = 20, MAX_WLED = 4;
 constexpr uint32_t LIVE_POLL_MS = 20000, IDLE_POLL_MS = 60000;
 constexpr uint16_t BG = 0x0841, PANEL = 0x10A2, WHITE = 0xFFFF;
@@ -34,6 +38,9 @@ struct Game {
   int homeScore = 0, awayScore = 0, homeShots = -1, awayShots = -1;
   uint8_t period = 0;
   bool intermission = false;
+  uint8_t ppSide = 0; // 0=not known/no PP, 1=home PP, 2=away PP
+  bool ppDataKnown = false;
+  uint32_t ppUpdatedAt = 0;
 };
 struct Settings {
   String ssid, wifiPassword, adminPassword;
@@ -43,6 +50,12 @@ struct Settings {
   uint8_t brightness = 190;
   uint8_t seconds = 8;
   bool horn = false;
+  bool rearLedEnabled = true;
+  bool rearGoal = true;
+  bool rearPowerPlay = true;
+  uint8_t rearBrightness = 128;
+  uint8_t rearGoalSeconds = 6;
+  uint32_t followIds[MAX_FOLLOWED_GAMES] = {0, 0, 0, 0};
   bool invertScreen = true; // This CYD panel needs INVON to render dark colors correctly.
   bool cycleGames = true;
   uint8_t cycleSeconds = 9;
@@ -56,6 +69,26 @@ SPIClass touchSPI(VSPI);
 XPT2046_Touchscreen touch(PIN_TOUCH_CS, PIN_TOUCH_IRQ);
 WebServer server(80);
 Game games[MAX_GAMES];
+struct GoalWatch {
+  uint32_t id = 0;
+  int home = 0, away = 0;
+  bool baseline = false;
+};
+GoalWatch goalWatch[MAX_GAMES];
+struct PowerPlaySnapshot {
+  uint32_t id = 0, updatedAt = 0;
+  uint8_t side = 0;
+  bool known = false;
+};
+PowerPlaySnapshot ppCache[MAX_GAMES];
+enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY };
+RearEvent rearEvent = RearEvent::IDLE;
+uint32_t rearGoalAt = 0, rearGoalColor = 0, rearGoalDuration = 0;
+uint32_t rearPulseStart = 0;
+uint32_t rearLastTick = 0;
+uint8_t rearLastDuty[3] = {255, 255, 255};
+uint32_t lastPpFallback = 0;
+uint32_t rearTestPpUntil = 0, rearTestPpColor = 0;
 uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
 uint32_t lastCarouselAdvance = 0;
 String scoreboardDate;
@@ -164,6 +197,141 @@ uint32_t teamRgb(const String &code) {
   return 0x31837A;
 }
 
+bool rearFollows(uint32_t gameId) {
+  if (!gameId) return false;
+  if (gameId == selectedGameId) return true; // Armed WLED game also drives rear RGB.
+  for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
+    if (cfg.followIds[i] == gameId) return true;
+  return false;
+}
+
+void setupRearLed() {
+  // Active-LOW common-anode LED: PWM duty 255 is OFF.
+  const uint8_t pins[3] = {PIN_RGB_R, PIN_RGB_G, PIN_RGB_B};
+  const uint8_t channels[3] = {RGB_CH_R, RGB_CH_G, RGB_CH_B};
+  for (uint8_t i = 0; i < 3; ++i) {
+    pinMode(pins[i], OUTPUT);
+    digitalWrite(pins[i], HIGH); // OFF before PWM is attached.
+    ledcSetup(channels[i], 4000, 8);
+    ledcAttachPin(pins[i], channels[i]);
+    ledcWrite(channels[i], 255);
+  }
+}
+
+void writeRearLed(uint32_t rgb, uint8_t intensity) {
+  const uint8_t colors[3] = {
+    (uint8_t)((rgb >> 16) & 255), (uint8_t)((rgb >> 8) & 255),
+    (uint8_t)(rgb & 255)
+  };
+  const uint8_t channels[3] = {RGB_CH_R, RGB_CH_G, RGB_CH_B};
+  for (uint8_t i = 0; i < 3; ++i) {
+    const uint8_t duty = RearLedPattern::invertedDuty(
+      colors[i], cfg.rearBrightness, intensity);
+    if (duty != rearLastDuty[i]) {
+      rearLastDuty[i] = duty;
+      ledcWrite(channels[i], duty);
+    }
+  }
+}
+
+void triggerRearGoal(uint32_t rgb) {
+  if (!cfg.rearLedEnabled || !cfg.rearGoal) return;
+  rearGoalColor = rgb;
+  rearGoalAt = millis();
+  rearGoalDuration = uint32_t(cfg.rearGoalSeconds) * 1000UL;
+  rearEvent = RearEvent::GOAL;
+}
+
+void stopRearLed() {
+  rearEvent = RearEvent::IDLE;
+  rearGoalDuration = 0;
+  rearTestPpUntil = 0;
+  writeRearLed(0, 0);
+}
+
+// The NHL 'situation' object marks which team has "PP" and/or more skaters.
+// Treat missing data as UNKNOWN: no invented power-play event.
+uint8_t detectPowerPlay(JsonVariantConst situation) {
+  if (situation.isNull()) return 0;
+  JsonVariantConst home = situation["homeTeam"];
+  JsonVariantConst away = situation["awayTeam"];
+  auto hasPP = [](JsonVariantConst team) -> bool {
+    for (JsonVariantConst label : team["situationDescriptions"].as<JsonArrayConst>()) {
+      if (label.as<String>().indexOf("PP") >= 0) return true;
+    }
+    return false;
+  };
+  const bool homePP = hasPP(home), awayPP = hasPP(away);
+  if (homePP && !awayPP) return 1;
+  if (awayPP && !homePP) return 2;
+  if (!home["strength"].isNull() && !away["strength"].isNull()) {
+    const int h = home["strength"] | 0, a = away["strength"] | 0;
+    if (h > a) return 1;
+    if (a > h) return 2;
+  }
+  return 0;
+}
+
+uint8_t activePowerPlaySide(uint32_t now, uint32_t &color) {
+  for (uint8_t i = 0; i < gameCount; ++i) {
+    const Game &g = games[i];
+    if (!rearFollows(g.id) || (g.state != "LIVE" && g.state != "CRIT") ||
+        g.intermission || !g.ppDataKnown || !g.ppSide ||
+        uint32_t(now - g.ppUpdatedAt) > 80000UL) continue;
+    color = teamRgb(g.ppSide == 1 ? g.home : g.away);
+    return g.ppSide;
+  }
+  return 0;
+}
+
+void tickRearLed() {
+  const uint32_t now = millis();
+  if (uint32_t(now - rearLastTick) < 25UL) return;
+  rearLastTick = now;
+  if (!cfg.rearLedEnabled) { stopRearLed(); return; }
+  const uint32_t goalElapsed = uint32_t(now - rearGoalAt);
+  if (rearGoalDuration && goalElapsed < rearGoalDuration && cfg.rearGoal) {
+    rearEvent = RearEvent::GOAL;
+    writeRearLed(rearGoalColor,
+                 RearLedPattern::flash(goalElapsed, rearGoalDuration));
+    return;
+  }
+  rearGoalDuration = 0;
+  uint32_t ppColor = 0;
+  const bool testPulse = rearTestPpUntil &&
+      int32_t(rearTestPpUntil - now) > 0;
+  if (testPulse) ppColor = rearTestPpColor;
+  if (testPulse || (cfg.rearPowerPlay && activePowerPlaySide(now, ppColor))) {
+    if (rearEvent != RearEvent::POWER_PLAY) rearPulseStart = now;
+    rearEvent = RearEvent::POWER_PLAY;
+    writeRearLed(ppColor, RearLedPattern::pulse(uint32_t(now - rearPulseStart)));
+    return;
+  }
+  rearEvent = RearEvent::IDLE;
+  writeRearLed(0, 0);
+}
+
+// Every game gets an independent baseline, preventing false flashes on reboot,
+// date rollover, first fetch, or when following a game already in progress.
+void detectRearGoalChanges() {
+  for (uint8_t i = 0; i < gameCount; ++i) {
+    const Game &g = games[i];
+    GoalWatch &watch = goalWatch[i];
+    if (watch.id != g.id) {
+      watch = GoalWatch();
+      watch.id = g.id;
+    }
+    const bool live = g.state == "LIVE" || g.state == "CRIT";
+    if (watch.baseline && live && rearFollows(g.id)) {
+      if (g.homeScore > watch.home) triggerRearGoal(teamRgb(g.home));
+      if (g.awayScore > watch.away) triggerRearGoal(teamRgb(g.away));
+    }
+    watch.home = g.homeScore;
+    watch.away = g.awayScore;
+    watch.baseline = true;
+  }
+}
+
 Game *selectedGame() {
   for (uint8_t i = 0; i < gameCount; ++i)
     if (games[i].id == selectedGameId) return &games[i];
@@ -198,6 +366,8 @@ String deviceLocalDate() {
   return formatLocalGameDate(time(nullptr), date) ? String(date) : String("");
 }
 
+void saveSettings(); // Declaration: Preferences implementation follows later.
+
 void prepareNewScoreboardDate(const String &today) {
   if (today.isEmpty() || today == targetScoreboardDate) return;
   targetScoreboardDate = today;
@@ -215,6 +385,11 @@ void prepareNewScoreboardDate(const String &today) {
     needDetailLoad = false;
     detail.loaded = false;
     for (auto &entry : carouselStats) entry = CarouselStats();
+    for (auto &entry : goalWatch) entry = GoalWatch();
+    for (auto &entry : ppCache) entry = PowerPlaySnapshot();
+    for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) cfg.followIds[i] = 0;
+    saveSettings();
+    stopRearLed();
     if (screen == Screen::STATS) screen = Screen::LIVE;
     if (selectedGameId) {
       selectedGameId = 0;
@@ -426,6 +601,13 @@ void loadSettings() {
   cfg.brightness = constrain(prefs.getUChar("bright", 190), 1, 255);
   cfg.seconds = constrain(prefs.getUChar("seconds", 8), 2, 30);
   cfg.horn = prefs.getBool("horn", false);
+  cfg.rearLedEnabled = prefs.getBool("rearOn", true);
+  cfg.rearGoal = prefs.getBool("rearGoal", true);
+  cfg.rearPowerPlay = prefs.getBool("rearPP", true);
+  cfg.rearBrightness = prefs.getUChar("rearBri", 128);
+  cfg.rearGoalSeconds = constrain(prefs.getUChar("rearDur", 6), 2, 12);
+  for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
+    cfg.followIds[i] = prefs.getUInt(("follow" + String(i)).c_str(), 0);
   cfg.invertScreen = prefs.getBool("invert", true);
   cfg.cycleGames = prefs.getBool("carousel", true);
   cfg.cycleSeconds = constrain(prefs.getUChar("cycleSec", 9), 5, 30);
@@ -449,6 +631,13 @@ void saveSettings() {
   prefs.putUChar("bright", cfg.brightness);
   prefs.putUChar("seconds", cfg.seconds);
   prefs.putBool("horn", cfg.horn);
+  prefs.putBool("rearOn", cfg.rearLedEnabled);
+  prefs.putBool("rearGoal", cfg.rearGoal);
+  prefs.putBool("rearPP", cfg.rearPowerPlay);
+  prefs.putUChar("rearBri", cfg.rearBrightness);
+  prefs.putUChar("rearDur", cfg.rearGoalSeconds);
+  for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
+    prefs.putUInt(("follow" + String(i)).c_str(), cfg.followIds[i]);
   prefs.putBool("invert", cfg.invertScreen);
   prefs.putBool("carousel", cfg.cycleGames);
   prefs.putUChar("cycleSec", cfg.cycleSeconds);
@@ -591,6 +780,59 @@ uint32_t gamesFingerprint() {
   return (hash ^ gameCount) * 16777619UL;
 }
 
+// The NHL's cross-day scoreboard currently exposes PP 'situation' even when
+// the date-scoped /score endpoint omits it. Use a small filtered parse, and
+// only fetch for live games the user actually follows.
+void fetchFollowedPowerPlays() {
+  bool relevant = false;
+  for (uint8_t i = 0; i < gameCount; ++i)
+    if (rearFollows(games[i].id) &&
+        (games[i].state == "LIVE" || games[i].state == "CRIT")) relevant = true;
+  if (!relevant || WiFi.status() != WL_CONNECTED) return;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.setTimeout(3500);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.useHTTP10(true);
+  if (!http.begin(client, "https://api-web.nhle.com/v1/scoreboard/now"))
+    return;
+  if (http.GET() != HTTP_CODE_OK) { http.end(); return; }
+
+  StaticJsonDocument<512> filter;
+  JsonObject fg = filter["gamesByDate"][0]["games"][0].to<JsonObject>();
+  fg["id"] = true;
+  fg["situation"]["homeTeam"]["strength"] = true;
+  fg["situation"]["awayTeam"]["strength"] = true;
+  fg["situation"]["homeTeam"]["situationDescriptions"][0] = true;
+  fg["situation"]["awayTeam"]["situationDescriptions"][0] = true;
+  DynamicJsonDocument doc(24576);
+  const DeserializationError err = deserializeJson(
+    doc, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  if (err) { Serial.printf("Rear PP fallback JSON: %s\n", err.c_str()); return; }
+
+  JsonArray dates = doc["gamesByDate"].as<JsonArray>();
+  for (JsonObject date : dates) for (JsonObject entry : date["games"].as<JsonArray>()) {
+    const uint32_t id = entry["id"] | 0U;
+    for (uint8_t i = 0; i < gameCount; ++i) {
+      Game &g = games[i];
+      if (g.id != id || !rearFollows(id)) continue;
+      JsonVariantConst situation = entry["situation"];
+      const uint8_t side = detectPowerPlay(situation);
+      g.ppSide = side;
+      g.ppDataKnown = true; // Present in standings; absent situation == no PP.
+      g.ppUpdatedAt = millis();
+      ppCache[i].id = id;
+      ppCache[i].side = side;
+      ppCache[i].known = true;
+      ppCache[i].updatedAt = g.ppUpdatedAt;
+      break;
+    }
+  }
+}
+
 void pollNhl() {
   const uint32_t previousFingerprint = gamesFingerprint();
   if (WiFi.status() != WL_CONNECTED) return;
@@ -624,6 +866,10 @@ void pollNhl() {
   gameFilter["periodDescriptor"]["periodType"] = true;
   gameFilter["clock"]["timeRemaining"] = true;
   gameFilter["clock"]["inIntermission"] = true;
+  gameFilter["situation"]["homeTeam"]["strength"] = true;
+  gameFilter["situation"]["awayTeam"]["strength"] = true;
+  gameFilter["situation"]["homeTeam"]["situationDescriptions"][0] = true;
+  gameFilter["situation"]["awayTeam"]["situationDescriptions"][0] = true;
   gameFilter["homeTeam"]["name"]["default"] = true;
   gameFilter["homeTeam"]["sog"] = true;
   gameFilter["awayTeam"]["name"]["default"] = true;
@@ -677,10 +923,33 @@ void pollNhl() {
     g.period = item["periodDescriptor"]["number"] | 0;
     g.clock = item["clock"]["timeRemaining"].as<String>();
     g.intermission = item["clock"]["inIntermission"] | false;
+    // Reset PP state every NHL poll before applying the fresh situation or
+    // a bounded fallback snapshot. Never reuse stale values from Game[] RAM.
+    g.ppSide = 0;
+    g.ppDataKnown = false;
+    g.ppUpdatedAt = 0;
     g.homeScore = item["homeTeam"]["score"] | 0;
     g.awayScore = item["awayTeam"]["score"] | 0;
     g.homeShots = item["homeTeam"]["sog"] | -1;
     g.awayShots = item["awayTeam"]["sog"] | -1;
+    JsonVariantConst situation = item["situation"];
+    if (!situation.isNull()) {
+      g.ppSide = detectPowerPlay(situation);
+      g.ppDataKnown = true;
+      g.ppUpdatedAt = millis();
+      ppCache[gameCount - 1].id = g.id;
+      ppCache[gameCount - 1].side = g.ppSide;
+      ppCache[gameCount - 1].known = true;
+      ppCache[gameCount - 1].updatedAt = g.ppUpdatedAt;
+    } else {
+      const PowerPlaySnapshot &cached = ppCache[gameCount - 1];
+      if (cached.id == g.id && cached.known &&
+          uint32_t(millis() - cached.updatedAt) < 80000UL) {
+        g.ppSide = cached.side;
+        g.ppDataKnown = true;
+        g.ppUpdatedAt = cached.updatedAt;
+      }
+    }
   }
   if (newDay) {
     featuredIndex = 0;
@@ -708,6 +977,21 @@ void pollNhl() {
     prefs.putUInt("game", 0);
     haveBaseline = false;
   }
+  // A followed game is a game-ID from today's schedule, not a season-wide team.
+  // Remove followers after a date change so old IDs cannot trigger new events.
+  bool followedChanged = false;
+  for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) {
+    if (!cfg.followIds[i]) continue;
+    bool present = false;
+    for (uint8_t j = 0; j < gameCount; ++j)
+      if (games[j].id == cfg.followIds[i]) present = true;
+    if (!present) {
+      cfg.followIds[i] = 0;
+      followedChanged = true;
+    }
+  }
+  if (followedChanged) saveSettings();
+  detectRearGoalChanges();
   Game *g = selectedGame();
   if (g) {
     if (haveBaseline && (g->state == "LIVE" || g->state == "CRIT")) {
@@ -1180,7 +1464,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1024> doc;
-    doc["version"] = "0.2.4";
+    doc["version"] = "0.2.5";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -1188,6 +1472,12 @@ void registerRoutes() {
     doc["mdns"] = mdnsStarted ? mdnsName + ".local" : "";
     doc["selectedId"] = selectedGameId;
     doc["mode"] = cfg.mode;
+    doc["rearEnabled"] = cfg.rearLedEnabled;
+    doc["rearEvent"] = rearEvent == RearEvent::GOAL ? "GOAL" :
+                       rearEvent == RearEvent::POWER_PLAY ? "POWER_PLAY" : "IDLE";
+    JsonArray followed = doc.createNestedArray("followed");
+    for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
+      if (cfg.followIds[i]) followed.add(cfg.followIds[i]);
     doc["scoreDate"] = scoreboardDate;
     doc["today"] = targetScoreboardDate;
     doc["clockSynced"] = deviceLocalDate().length() == 10;
@@ -1220,6 +1510,8 @@ void registerRoutes() {
       g["periodType"] = games[i].periodType;
       g["clock"] = games[i].clock;
       g["intermission"] = games[i].intermission;
+      g["powerPlaySide"] = games[i].ppSide;
+      g["followed"] = rearFollows(games[i].id);
     }
     sendJson(doc);
   });
@@ -1271,6 +1563,11 @@ void registerRoutes() {
     doc["brightness"] = cfg.brightness;
     doc["seconds"] = cfg.seconds;
     doc["horn"] = cfg.horn;
+    doc["rearEnabled"] = cfg.rearLedEnabled;
+    doc["rearGoal"] = cfg.rearGoal;
+    doc["rearPowerPlay"] = cfg.rearPowerPlay;
+    doc["rearBrightness"] = cfg.rearBrightness;
+    doc["rearGoalSeconds"] = cfg.rearGoalSeconds;
     doc["screenInverted"] = cfg.invertScreen;
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
@@ -1304,6 +1601,12 @@ void registerRoutes() {
     cfg.brightness = constrain((int)(doc["brightness"] | cfg.brightness), 1, 255);
     cfg.seconds = constrain((int)(doc["seconds"] | cfg.seconds), 2, 30);
     cfg.horn = doc["horn"] | cfg.horn;
+    cfg.rearLedEnabled = doc["rearEnabled"] | cfg.rearLedEnabled;
+    cfg.rearGoal = doc["rearGoal"] | cfg.rearGoal;
+    cfg.rearPowerPlay = doc["rearPowerPlay"] | cfg.rearPowerPlay;
+    cfg.rearBrightness = constrain((int)(doc["rearBrightness"] | cfg.rearBrightness), 1, 255);
+    cfg.rearGoalSeconds = constrain((int)(doc["rearGoalSeconds"] | cfg.rearGoalSeconds), 2, 12);
+    if (!cfg.rearLedEnabled) stopRearLed();
     cfg.cycleGames = doc["cycleGames"] | cfg.cycleGames;
     cfg.cycleSeconds = constrain((int)(doc["cycleSeconds"] | cfg.cycleSeconds), 5, 30);
     uint8_t requestedTimezone = constrain((int)(doc["timezone"] | cfg.timezone), 0, 4);
@@ -1354,6 +1657,64 @@ void registerRoutes() {
     WiFi.scanDelete();
     sendJson(doc);
   });
+  server.on("/api/rear/follow", HTTP_POST, []() {
+    if (!authorized()) return;
+    StaticJsonDocument<160> doc;
+    if (deserializeJson(doc, server.arg("plain"))) return errorResponse("Invalid JSON");
+    const uint32_t id = doc["id"] | 0U;
+    bool exists = false;
+    for (uint8_t i = 0; i < gameCount; ++i)
+      if (games[i].id == id) exists = true;
+    if (!id || !exists) return errorResponse("Choose a game on today's schedule", 404);
+    const bool followed = doc["follow"] | false;
+    if (followed) {
+      bool present = false;
+      for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
+        if (cfg.followIds[i] == id) present = true;
+      if (!present) {
+        bool added = false;
+        for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) {
+          if (cfg.followIds[i] == 0) { cfg.followIds[i] = id; added = true; break; }
+        }
+        if (!added) return errorResponse("Up to 4 additional followed games", 409);
+      }
+    } else {
+      for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
+        if (cfg.followIds[i] == id) cfg.followIds[i] = 0;
+    }
+    saveSettings();
+    StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
+  });
+  server.on("/api/rear/test", HTTP_POST, []() {
+    if (!authorized()) return;
+    StaticJsonDocument<160> doc;
+    if (deserializeJson(doc, server.arg("plain"))) return errorResponse("Invalid JSON");
+    const String mode = doc["mode"] | String("goal");
+    const String side = doc["side"] | String("home");
+    if (side != "home" && side != "away") return errorResponse("Invalid team side");
+    if (mode != "goal" && mode != "powerplay" && mode != "off")
+      return errorResponse("Invalid effect");
+    if (mode != "off" && !cfg.rearLedEnabled)
+      return errorResponse("Enable the rear LED and save settings first");
+    Game *g = selectedGame();
+    if (!g && gameCount) g = &games[featuredIndex % gameCount];
+    const uint32_t color = teamRgb(g ? (side == "home" ? g->home : g->away)
+                                      : String("UTA"));
+    if (mode == "off") stopRearLed();
+    else if (mode == "goal") {
+      rearTestPpUntil = 0;
+      rearGoalColor = color;
+      rearGoalAt = millis();
+      rearGoalDuration = uint32_t(cfg.rearGoalSeconds) * 1000UL;
+      rearEvent = RearEvent::GOAL;
+    } else {
+      rearGoalDuration = 0;
+      rearTestPpColor = color;
+      rearTestPpUntil = millis() + 9000UL;
+      rearEvent = RearEvent::IDLE;
+    }
+    StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
+  });
   server.on("/api/test", HTTP_POST, []() {
     if (!authorized()) return;
     StaticJsonDocument<160> doc;
@@ -1401,7 +1762,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.2.4 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.2.5 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
@@ -1418,6 +1779,7 @@ void setup() {
   ledcSetup(AUDIO_CH, 2000, 8);
   ledcAttachPin(PIN_AUDIO, AUDIO_CH);
   ledcWriteTone(AUDIO_CH, 0);
+  setupRearLed();
 
   char suffix[7];
   snprintf(suffix, sizeof(suffix), "%06X", (unsigned)(ESP.getEfuseMac() & 0xFFFFFF));
@@ -1449,6 +1811,7 @@ void loop() {
   handleTouch();
   tickHorn();
   tickRestores();
+  tickRearLed();
 
   const uint32_t now = millis();
   const bool connected = WiFi.status() == WL_CONNECTED;
@@ -1494,6 +1857,22 @@ void loop() {
     WiFi.reconnect();
     reconnectAt = now;
     needsDraw = true;
+  }
+  // PP is event-driven by real NHL manpower data, not by cumulative PP stats.
+  // Poll only while relevant and never while WLED state restoration is pending.
+  if (connected && cfg.rearLedEnabled && cfg.rearPowerPlay &&
+      uint32_t(now - lastPpFallback) >= 45000UL) {
+    bool restoringLights = false, needSituation = false;
+    for (uint8_t i = 0; i < MAX_WLED; ++i)
+      if (restoring[i]) restoringLights = true;
+    for (uint8_t i = 0; i < gameCount; ++i)
+      if (rearFollows(games[i].id) && (games[i].state == "LIVE" ||
+           games[i].state == "CRIT") && !games[i].intermission &&
+           !games[i].ppDataKnown) needSituation = true;
+    if (needSituation && !restoringLights && rearEvent != RearEvent::GOAL) {
+      lastPpFallback = millis();
+      fetchFollowedPowerPlays();
+    }
   }
   if (screen == Screen::LIVE && cfg.cycleGames && gameCount > 1 &&
       now - lastCarouselAdvance >= uint32_t(cfg.cycleSeconds) * 1000UL) {

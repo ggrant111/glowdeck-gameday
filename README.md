@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.2.4 automatic NHL day rollover.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.2.5 onboard rear RGB NHL event lighting.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
@@ -21,6 +21,10 @@ The first score after selecting a game is used as a baseline and never replays a
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+
+## Rear RGB LED NHL reactions (v0.2.5)
+
+The built-in active-low RGB LED (GPIO4 red, 16 green, 17 blue) can flash the scoring team's color during goals and pulse during power plays. The existing armed game is always followed for rear RGB events, plus up to four additional NHL games that can be selected in the new **CYD LED** web-dashboard tab. Configure brightness, goal duration, effects, and preview animations in a browser. No separate WLED or speaker is required. Settings persist across reboots. See [Rear RGB LED guide](docs/REAR_RGB_LED.md).
 
 ## Self-hosted web dashboard
 

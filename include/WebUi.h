@@ -48,6 +48,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <button class="tab" data-tab="games">Games</button>
 <button class="tab" data-tab="display">Display</button>
 <button class="tab" data-tab="devices">Lights</button>
+<button class="tab" data-tab="rear">CYD LED</button>
 <button class="tab" data-tab="settings">Setup</button>
 <button class="tab" data-tab="firmware">Update</button>
 </nav>
@@ -106,6 +107,38 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <div class="actions"><button class="primary" id="saveDevices">Save light settings</button><button id="testLights">Test all enabled lights</button></div>
 <p class="small muted">Enter IPv4 addresses such as 192.168.1.71. For stable operation, reserve those IPs in your router. This release controls segment 0; per-segment routing is planned.</p></div>
 </section>
+<section id="rear" class="panel">
+<div class="card"><h2>Rear RGB LED</h2>
+<p>Make the CYD's own rear light react to NHL events. No WLED controller or extra wiring is required.</p>
+<div class="stats">
+<div class="stat"><span>Current LED effect</span><b id="rearEvent">Idle</b></div>
+<div class="stat"><span>Followed games</span><b id="rearFollowCount">—</b></div>
+</div>
+<div class="toggle" style="margin-top:18px"><input id="rearEnabled" type="checkbox"><label for="rearEnabled">Enable rear RGB LED</label></div>
+<div class="toggle" style="margin-top:13px"><input id="rearGoal" type="checkbox"><label for="rearGoal">Flash scoring team's color for goals</label></div>
+<div class="toggle" style="margin-top:13px"><input id="rearPowerPlay" type="checkbox"><label for="rearPowerPlay">Pulse attacking team's color during power plays</label></div>
+<div class="row">
+<div><label for="rearBrightness">Maximum brightness</label>
+<input id="rearBrightness" type="range" min="1" max="255" value="128">
+<div id="rearBrightValue" class="small muted">128 / 255</div></div>
+<div><label for="rearGoalSeconds">Goal flash duration (seconds)</label>
+<input id="rearGoalSeconds" type="number" min="2" max="12" step="1" value="6"></div>
+</div>
+<div class="actions"><button id="saveRear" class="primary">Save rear LED settings</button></div>
+<div class="hint">The armed matchup always drives the rear LED while enabled. Follow up to four more games below. The rear LED is completely independent from WLED segment control.</div>
+</div>
+<div class="card"><h2>Follow games for rear LED</h2>
+<p>Check games to monitor even while the screen carousel displays a different matchup. This selection lasts for today's schedule.</p>
+<div id="rearFollowedList"></div>
+</div>
+<div class="card"><h2>Test without waiting for a game</h2>
+<p>Test team colors and both patterns. Power-play preview ends automatically after nine seconds.</p>
+<div class="actions">
+<button id="rearTestHome">Flash home goal</button>
+<button id="rearTestAway">Flash away goal</button>
+<button id="rearTestPP">Pulse power play</button>
+<button id="rearTestOff">Stop</button>
+</div></div></section>
 <section id="settings" class="panel">
 <div class="twocol">
 <div class="card"><h2>Wi-Fi</h2><p>Connect the CYD to the network used by your WLED controllers.</p>
@@ -177,6 +210,9 @@ function renderStatus(){
   $("deviceIp").textContent=s.ip;
   $("currentGame").textContent=game?game.away+" @ "+game.home:"Not selected";
   $("currentMode").textContent=modes[s.mode]||"Unknown";
+  $("rearEvent").textContent=(s.rearEvent||"IDLE").replaceAll("_"," ");
+  $("rearFollowCount").textContent=(s.followed||[]).length+
+    (s.selectedId?" additional + armed":" additional");
   const showing=currentGames[s.featuredIndex]||null;
   $("showingGame").textContent=showing?showing.away+" @ "+showing.home:"No games";
   $("rotationStatus").textContent=s.cycleGames?"Every "+s.cycleSeconds+" sec":"Paused";
@@ -275,7 +311,7 @@ function renderGames(){
 async function refresh(){
   const [s,g]=await Promise.all([api("/api/status"),api("/api/games")]);
   currentStatus=s;currentGames=g.games||[];
-  renderStatus();renderGames();
+  renderStatus();renderGames();renderRearFollowed();
 }
 function renderDevices(){
   const list=$("deviceList");list.replaceChildren();
@@ -290,6 +326,47 @@ function renderDevices(){
     row.append(enable,lbl);card.append(title,label,ip,row);list.append(card);
   });
 }
+function renderRearFollowed(){
+  const list=$("rearFollowedList");
+  list.replaceChildren();
+  if(!currentGames.length){
+    const p=document.createElement("p");p.className="muted";
+    p.textContent="No NHL games listed for today.";list.append(p);return;
+  }
+  currentGames.forEach(game=>{
+    const row=document.createElement("div");
+    row.className="game";row.style.alignItems="center";
+    const label=document.createElement("label");
+    label.style.margin="0";label.style.flex="1";
+    label.textContent=game.away+" @ "+game.home+" · "+(game.status||game.state);
+    const checkbox=document.createElement("input");
+    checkbox.type="checkbox";
+    checkbox.style.width="22px";checkbox.style.minHeight="22px";
+    checkbox.style.accentColor="#31837a";
+    const isArmed=currentStatus&&currentStatus.selectedId===game.id;
+    checkbox.checked=!!game.followed||!!isArmed;
+    checkbox.disabled=!!isArmed;
+    checkbox.setAttribute("aria-label","Follow "+game.away+" at "+game.home);
+    checkbox.onchange=()=>perform(async()=>{
+      checkbox.disabled=true;
+      try{
+        await post("/api/rear/follow",{id:game.id,follow:checkbox.checked});
+        await refresh();
+        message((checkbox.checked?"Following ":"Stopped following ")+game.away+" @ "+game.home);
+      }catch(err){
+        checkbox.disabled=false;
+        await refresh();
+        throw err;
+      }
+    });
+    row.append(label,checkbox);
+    if(isArmed){
+      const note=document.createElement("span");
+      note.className="badge";note.textContent="Armed";row.append(note);
+    }
+    list.append(row);
+  });
+}
 function deviceSettings(){
   return Array.from({length:4},(_,i)=>({ip:$("ip"+i).value.trim(),enabled:$("enabled"+i).checked}));
 }
@@ -299,6 +376,10 @@ function formConfig(){
     mode:currentStatus?currentStatus.mode:currentConfig.mode,
     brightness:Number($("brightness").value),seconds:Number($("seconds").value),
     horn:$("horn").checked,screenInverted:$("screenInverted").checked,
+    rearEnabled:$("rearEnabled").checked,rearGoal:$("rearGoal").checked,
+    rearPowerPlay:$("rearPowerPlay").checked,
+    rearBrightness:Number($("rearBrightness").value),
+    rearGoalSeconds:Number($("rearGoalSeconds").value),
     cycleGames:$("cycleGames").checked,cycleSeconds:Number($("cycleSeconds").value),
     timezone:Number($("displayTimezone").value),wled:deviceSettings()};
 }
@@ -317,6 +398,12 @@ async function loadConfig(){
   $("brightValue").textContent=currentConfig.brightness+" / 255";
   $("seconds").value=currentConfig.seconds;
   $("horn").checked=!!currentConfig.horn;
+  $("rearEnabled").checked=!!currentConfig.rearEnabled;
+  $("rearGoal").checked=!!currentConfig.rearGoal;
+  $("rearPowerPlay").checked=!!currentConfig.rearPowerPlay;
+  $("rearBrightness").value=currentConfig.rearBrightness||128;
+  $("rearBrightValue").textContent=$("rearBrightness").value+" / 255";
+  $("rearGoalSeconds").value=currentConfig.rearGoalSeconds||6;
   $("screenInverted").checked=!!currentConfig.screenInverted;
   $("cycleGames").checked=!!currentConfig.cycleGames;
   $("cycleSeconds").value=currentConfig.cycleSeconds||9;
@@ -331,6 +418,19 @@ document.querySelectorAll("[data-mode]").forEach(b=>b.addEventListener("click",(
 $("saveSettings").onclick=()=>perform(saveConfig);
 $("saveDisplay").onclick=()=>perform(saveConfig);
 $("saveDevices").onclick=()=>perform(saveConfig);
+$("saveRear").onclick=()=>perform(saveConfig);
+$("rearBrightness").oninput=()=>$("rearBrightValue").textContent=$("rearBrightness").value+" / 255";
+function rearPreview(mode,side="home"){
+  perform(async()=>{
+    await post("/api/rear/test",{mode,side});
+    message(mode==="off"?"Rear LED stopped":mode==="goal"?
+      "Rear LED goal flash started":"Power-play pulse preview started");
+  });
+}
+$("rearTestHome").onclick=()=>rearPreview("goal","home");
+$("rearTestAway").onclick=()=>rearPreview("goal","away");
+$("rearTestPP").onclick=()=>rearPreview("powerplay","home");
+$("rearTestOff").onclick=()=>rearPreview("off");
 $("testHome").onclick=()=>perform(async()=>{await post("/api/test",{side:"home"});message("Home color test started")});
 $("testAway").onclick=()=>perform(async()=>{await post("/api/test",{side:"away"});message("Away color test started")});
 $("testLights").onclick=()=>perform(async()=>{await post("/api/test",{side:"home"});message("Test sent to enabled lights")});
