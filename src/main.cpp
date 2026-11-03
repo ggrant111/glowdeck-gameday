@@ -1194,6 +1194,7 @@ String wledEffectBody(const String &snapshot,
     // Some older WLED builds omit segment bounds from their state JSON.
     JsonObject out = segments.createNestedObject();
     out["id"] = 0;
+    out["on"] = true;
     out["fx"] = effect.fx;
     out["sx"] = effect.speed;
     out["ix"] = effect.intensity;
