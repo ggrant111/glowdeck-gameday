@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.2.9 stack-canary crash recovery.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.3.0 full NHL conference/division standings carousel.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
@@ -21,6 +21,16 @@ The first score after selecting a game is used as a baseline and never replays a
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+
+## Full NHL conference and division standings (v0.3.0)
+
+Swipe through every current-day matchup, followed by **eight additional standings slides**: Eastern and Western conference rankings in two readable 8-team halves each, plus full Atlantic, Metropolitan, Central and Pacific division rankings. The compact CYD tables show official team rank, games played, W-L-OT and points. The armed game's two teams receive a subtle accent. Games can still be armed and monitored while a rankings slide is displayed.
+
+Standings use the NHL's official dated rankings and refresh separately from the faster 10-second armed live-game score polling. The web Display tab can enable/disable all rankings slides (default on) and shows the current carousel slide. The display works on days with no scheduled NHL games.
+
+**Logo contrast correction:** During asset generation, prefer each team's NHL `darkLogo` / `*_dark.svg` artwork, rather than using `*_light.svg` intended for light backgrounds. The TFT screen's global invert setting is unchanged; verify the contrast of previously inverted team logos on hardware.
+
+See [Full league standings](docs/FULL_LEAGUE_STANDINGS.md) for slide sequence, source data, hardware tests and details.
 
 ## ESP32 crash / stack canary fix (v0.2.9)
 
