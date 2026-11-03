@@ -193,6 +193,9 @@ SeasonStanding seasonStandings[32];
 bool standingsReady = false;
 uint32_t standingsLastAttempt = 0;
 String standingsForDate;
+String standingsError;  // Shown on the standings slide and /api/status.
+int standingsLastHttpCode = 0;
+uint8_t standingsLastTeamCount = 0;
 
 // The NHL standings feed has conference *rank*, not record vs conference.
 // Derive the W-L-OT vs-conference split from each team's season schedule,
@@ -482,6 +485,9 @@ void prepareNewScoreboardDate(const String &today) {
     standingsReady = false;
     standingsLastAttempt = 0;
     standingsForDate = "";
+    standingsError = "";
+    standingsLastHttpCode = 0;
+    standingsLastTeamCount = 0;
     for (auto &entry : seasonStandings) entry = SeasonStanding();
     for (auto &entry : conferenceSnapshots) entry = ConferenceSnapshot();
     lastConferenceFetch = 0;
@@ -615,25 +621,38 @@ bool loadSeasonStandings() {
   if (WiFi.status() != WL_CONNECTED) return standingsReady;
 
   standingsLastAttempt = now;
+  standingsError = "";
+  standingsLastHttpCode = 0;
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
   http.setConnectTimeout(4500);
-  http.setTimeout(10000);
+  http.setTimeout(15000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.useHTTP10(true);
   const String url = "https://api-web.nhle.com/v1/standings/" +
                      (today.length() == 10 ? today : String("now"));
-  if (!http.begin(client, url)) return standingsReady;
+  if (!http.begin(client, url)) {
+    standingsError = "NHL standings connect failed";
+    Serial.println("[NHL] " + standingsError);
+    return standingsReady;
+  }
   http.addHeader("Accept-Encoding", "identity");
-  if (http.GET() != HTTP_CODE_OK) {
+  standingsLastHttpCode = http.GET();
+  if (standingsLastHttpCode != HTTP_CODE_OK) {
+    standingsError = "NHL standings HTTP " + String(standingsLastHttpCode);
+    Serial.println("[NHL] " + standingsError);
     http.end();
     return standingsReady;
   }
   // These NHL fields are shared with the pregame preview. Allocate the
   // expanded filter on heap to protect the loopTask stack on the CYD.
   DynamicJsonDocument filter(1024);
-  if (filter.capacity() < 1024) { http.end(); return standingsReady; }
+  if (filter.capacity() < 1024) {
+    standingsError = "NHL standings filter memory low";
+    http.end();
+    return standingsReady;
+  }
   JsonObject first = filter["standings"][0].to<JsonObject>();
   first["teamAbbrev"]["default"] = true;
   first["wins"] = true;
@@ -646,23 +665,34 @@ bool loadSeasonStandings() {
   first["divisionSequence"] = true;
   first["gamesPlayed"] = true;
   if (filter.overflowed()) {
-    Serial.println("[NHL] Standings filter capacity exceeded");
+    standingsError = "Standings JSON filter full";
+    Serial.println("[NHL] " + standingsError);
     http.end();
     return standingsReady;
   }
-  DynamicJsonDocument parsed(20480);
-  if (parsed.capacity() < 20480) { http.end(); return standingsReady; }
+  DynamicJsonDocument parsed(24576);
+  if (parsed.capacity() < 24576) {
+    standingsError = "NHL standings JSON memory low";
+    http.end();
+    return standingsReady;
+  }
   Stream &stream = http.getStream();
-  stream.setTimeout(10000);
+  stream.setTimeout(15000);
   const DeserializationError err = deserializeJson(
       parsed, stream, DeserializationOption::Filter(filter));
   http.end();
-  if (err) {
-    Serial.printf("Pregame standings JSON: %s\n", err.c_str());
+  if (err || parsed.overflowed()) {
+    standingsError = "Standings JSON: " +
+                     String(err ? err.c_str() : "NoMemory");
+    Serial.println("[NHL] " + standingsError);
     return standingsReady;
   }
   JsonArray teams = parsed["standings"].as<JsonArray>();
-  if (teams.isNull()) return standingsReady;
+  if (teams.isNull()) {
+    standingsError = "NHL standings rows missing";
+    Serial.println("[NHL] " + standingsError);
+    return standingsReady;
+  }
   uint8_t loaded = 0;
   // 32 Arduino String-based records need not reside on the loopTask stack.
   // Standings requests are serialized on this single Arduino task.
@@ -692,16 +722,27 @@ bool loadSeasonStandings() {
     record.division = StandingsCarousel::groupFor(conf.c_str(), div.c_str());
     if (rank > 0) record.conferenceRank = "#" + String(rank);
   }
-  if (loaded < 24) {
-    // A truncated-but-parseable partial standings object must never overwrite
-    // a good 32-team cache; it would make the table silently drop teams.
-    Serial.printf("[NHL] Only %u valid standings teams; keeping cache\n", loaded);
+  standingsLastTeamCount = loaded;
+  uint8_t ranked = 0;
+  for (uint8_t i = 0; i < loaded; ++i) {
+    const SeasonStanding &t = fresh[i];
+    if (t.conferenceSequence > 0 && t.divisionSequence > 0 &&
+        t.division != StandingsCarousel::Group::EAST &&
+        t.division != StandingsCarousel::Group::WEST)
+      ++ranked;
+  }
+  if (loaded < 24 || ranked < 24) {
+    // Do not replace a good table with a truncated or unrated one.
+    standingsError = "NHL: " + String(loaded) + " teams / " +
+                     String(ranked) + " ranked";
+    Serial.println("[NHL] " + standingsError);
     return standingsReady;
   }
   for (uint8_t i = 0; i < 32; ++i)
     seasonStandings[i] = i < loaded ? fresh[i] : SeasonStanding();
   standingsForDate = today;
   standingsReady = true;
+  standingsError = "";
   if (screen == Screen::LIVE && showingStandingsPage()) needsDraw = true;
   Serial.printf("[NHL] League standings loaded: %u teams, stack=%u heap=%u\n",
                 loaded, (unsigned)uxTaskGetStackHighWaterMark(nullptr),
@@ -1605,6 +1646,8 @@ void pollNhl() {
       games[min((int)featuredIndex, (int)gameCount - 1)].id : 0;
   const int8_t previouslyStandingPage = showingStandingsPage()
       ? (int8_t)(carouselSlide - gameCount) : -1;
+  const uint32_t previouslyShownGameId = !showingStandingsPage() &&
+      carouselSlide < gameCount ? games[carouselSlide].id : 0;
   String newScoreboardDate = doc["currentDate"].as<String>();
   if (newScoreboardDate.length() != 10) {
     markNhlFetchFailure("Invalid NHL scoreboard date");
@@ -1673,6 +1716,9 @@ void pollNhl() {
     standingsReady = false;
     standingsLastAttempt = 0;
     standingsForDate = "";
+    standingsError = "";
+    standingsLastHttpCode = 0;
+    standingsLastTeamCount = 0;
     for (auto &entry : seasonStandings) entry = SeasonStanding();
     for (auto &entry : conferenceSnapshots) entry = ConferenceSnapshot();
     lastConferenceFetch = 0;
@@ -1688,12 +1734,11 @@ void pollNhl() {
     }
     if (!found) featuredIndex = 0;
   } else featuredIndex = 0;
-  // Retain the same standings slide across a fresh game list, or follow the
-  // originally displayed matchup if NHL reorders today's games.
-  if (!newDay && previouslyStandingPage >= 0 && cfg.showStandings)
-    carouselSlide = gameCount + (uint8_t)previouslyStandingPage;
-  else
-    carouselSlide = featuredIndex;
+  // A score poll must never reset the visible game or standings page.
+  // Keep its ID across NHL game reordering without changing the armed game.
+  carouselSlide = newDay ? 0 : StandingsCarousel::restoreSlide(
+      previouslyStandingPage, previouslyShownGameId, games, gameCount,
+      cfg.showStandings, featuredIndex);
   if (carouselSlide >= carouselPageCount()) carouselSlide = 0;
   if (gamePage * 3 >= gameCount) gamePage = 0;
   // A valid full JSON document (including games: []) resets retry backoff.
@@ -1932,9 +1977,13 @@ void drawStandingsSlide() {
   const String localDay = deviceLocalDate();
   if (!standingsReady || (localDay.length() && standingsForDate != localDay)) {
     tft.setTextColor(WHITE, ARENA_BLACK);
-    tft.drawString("Loading NHL standings...", 160, 145, 2);
+    tft.drawString(standingsLastAttempt ?
+        "Retrying NHL standings..." : "Loading NHL standings...", 160, 145, 2);
     tft.setTextColor(ICE_TEXT, ARENA_BLACK);
-    tft.drawString("Updates automatically", 160, 175, 2);
+    String reason = standingsError.isEmpty() ?
+                    String("Updates automatically") : standingsError;
+    if (reason.length() > 32) reason = reason.substring(0, 32);
+    tft.drawString(reason, 160, 175, 2);
   } else {
     uint8_t sorted[32] = {};
     const uint8_t n = StandingsCarousel::collectAndSort(
@@ -1965,7 +2014,7 @@ void drawStandingsSlide() {
     }
     if (n == 0) {
       tft.setTextColor(WHITE, ARENA_BLACK);
-      tft.drawString("Standings unavailable", 160, 145, 2);
+      tft.drawString("No ranked teams for this page", 160, 145, 2);
     }
   }
 
@@ -2368,6 +2417,9 @@ void registerRoutes() {
     doc["standingsPage"] = showingStandingsPage()
         ? StandingsCarousel::page(carouselSlide - gameCount).title : "";
     doc["standingsReady"] = standingsReady;
+    doc["standingsError"] = standingsError;
+    doc["standingsHttpCode"] = standingsLastHttpCode;
+    doc["standingsTeams"] = standingsLastTeamCount;
     doc["showStandings"] = cfg.showStandings;
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
