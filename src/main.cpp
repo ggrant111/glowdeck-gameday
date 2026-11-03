@@ -1881,14 +1881,15 @@ void loop() {
   // PP is event-driven by real NHL manpower data, not by cumulative PP stats.
   // Poll only while relevant and never while WLED state restoration is pending.
   if (connected && cfg.rearLedEnabled && cfg.rearPowerPlay &&
-      uint32_t(now - lastPpFallback) >= 45000UL) {
+      uint32_t(now - lastPpFallback) >= 20000UL) {
     bool restoringLights = false, needSituation = false;
     for (uint8_t i = 0; i < MAX_WLED; ++i)
       if (restoring[i]) restoringLights = true;
     for (uint8_t i = 0; i < gameCount; ++i)
       if (rearFollows(games[i].id) && (games[i].state == "LIVE" ||
            games[i].state == "CRIT") && !games[i].intermission &&
-           !games[i].ppDataKnown) needSituation = true;
+           (!games[i].ppDataKnown ||
+            uint32_t(now - games[i].ppUpdatedAt) >= 20000UL)) needSituation = true;
     if (needSituation && !restoringLights && rearEvent != RearEvent::GOAL) {
       lastPpFallback = millis();
       fetchFollowedPowerPlays();
