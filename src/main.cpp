@@ -457,6 +457,7 @@ void prepareNewScoreboardDate(const String &today) {
     gameCount = 0;
     gamePage = 0;
     featuredIndex = 0;
+    carouselSlide = 0;
     lastCarouselAdvance = millis();
     needDetailLoad = false;
     detail.loaded = false;
@@ -1293,6 +1294,8 @@ void pollNhl() {
   }
   const uint32_t previouslyFeatured = gameCount ?
       games[min((int)featuredIndex, (int)gameCount - 1)].id : 0;
+  const int8_t previouslyStandingPage = showingStandingsPage()
+      ? (int8_t)(carouselSlide - gameCount) : -1;
   String newScoreboardDate = doc["currentDate"].as<String>();
   if (newScoreboardDate.length() != 10) {
     markNhlFetchFailure("Invalid NHL scoreboard date");
@@ -1353,6 +1356,7 @@ void pollNhl() {
   }
   if (newDay) {
     featuredIndex = 0;
+    carouselSlide = 0;
     lastCarouselAdvance = millis();
     needDetailLoad = false;
     detail.loaded = false;
@@ -1375,6 +1379,13 @@ void pollNhl() {
     }
     if (!found) featuredIndex = 0;
   } else featuredIndex = 0;
+  // Retain the same standings slide across a fresh game list, or follow the
+  // originally displayed matchup if NHL reorders today's games.
+  if (!newDay && previouslyStandingPage >= 0 && cfg.showStandings)
+    carouselSlide = gameCount + (uint8_t)previouslyStandingPage;
+  else
+    carouselSlide = featuredIndex;
+  if (carouselSlide >= carouselPageCount()) carouselSlide = 0;
   if (gamePage * 3 >= gameCount) gamePage = 0;
   // A valid full JSON document (including games: []) resets retry backoff.
   if (nhlConsecutiveFailures)
@@ -1423,8 +1434,8 @@ void pollNhl() {
     haveBaseline = false;
   }
   if (gamesFingerprint() != previousFingerprint || newDay) {
-    if (!newDay && screen == Screen::LIVE && gameCount > 0 &&
-        previouslyFeatured == games[featuredIndex % gameCount].id)
+    if (!newDay && !showingStandingsPage() && screen == Screen::LIVE &&
+        gameCount > 0 && previouslyFeatured == games[featuredIndex].id)
       partialLiveUpdate = true;
     else needsDraw = true;
   }
@@ -1885,20 +1896,19 @@ void handleTouch() {
       touchWasDown = false;
       const int dx = gestureEndX - gestureStartX;
       const int dy = gestureEndY - gestureStartY;
-      if (gameCount > 1 && abs(dx) > 48 && abs(dy) < 90) {
-        if (dx < 0) featuredIndex = (featuredIndex + 1) % gameCount;
-        else featuredIndex = (featuredIndex + gameCount - 1) % gameCount;
+      if (carouselPageCount() > 1 && abs(dx) > 48 && abs(dy) < 90) {
+        advanceCarousel(dx < 0 ? 1 : -1);
       } else if (gestureStartY <= 35 && gestureStartX >= 263) {
-        screen = Screen::GAMES; // Access setup and arming from existing menu.
-      } else if (gameCount > 1 && gestureStartY >= 213 && gestureStartX < 58) {
-        featuredIndex = (featuredIndex + gameCount - 1) % gameCount;
-      } else if (gameCount > 1 && gestureStartY >= 213 && gestureStartX > 263) {
-        featuredIndex = (featuredIndex + 1) % gameCount;
-      } else if (gameCount) {
-        showDetail(games[featuredIndex % gameCount].id);
-      } else {
+        screen = Screen::GAMES; // Menu is available on every slide.
+      } else if (carouselPageCount() > 1 && gestureStartY >= 213 && gestureStartX < 58) {
+        advanceCarousel(-1);
+      } else if (carouselPageCount() > 1 && gestureStartY >= 213 && gestureStartX > 263) {
+        advanceCarousel(1);
+      } else if (!showingStandingsPage() && gameCount) {
+        showDetail(games[carouselSlide].id);
+      } else if (!showingStandingsPage()) {
         screen = Screen::GAMES;
-      }
+      } // Standings rows are informational, not game-arm buttons.
       lastCarouselAdvance = millis();
       needsDraw = true;
     }
@@ -2425,11 +2435,9 @@ void loop() {
       fetchFollowedPowerPlays();
     }
   }
-  if (screen == Screen::LIVE && cfg.cycleGames && gameCount > 1 &&
-      now - lastCarouselAdvance >= uint32_t(cfg.cycleSeconds) * 1000UL) {
-    featuredIndex = (featuredIndex + 1) % gameCount;
-    lastCarouselAdvance = now;
-    needsDraw = true;
+  if (screen == Screen::LIVE && cfg.cycleGames && carouselPageCount() > 1 &&
+      uint32_t(now - lastCarouselAdvance) >= uint32_t(cfg.cycleSeconds) * 1000UL) {
+    advanceCarousel(1);
   }
   if (needDetailLoad && screen == Screen::STATS) {
     needDetailLoad = false;
@@ -2438,7 +2446,7 @@ void loop() {
   // Prefetch stats for the displayed carousel game; the background request
   // happens only once per game/TTL, never once per frame. Defer requests
   // while a WLED restoration is pending to avoid delaying light recovery.
-  if (screen == Screen::LIVE && gameCount && connected &&
+  if (screen == Screen::LIVE && !showingStandingsPage() && gameCount && connected &&
       uint32_t(now - lastCarouselStatsCheck) >= 2500UL) {
     bool lightRestorePending = false;
     for (uint8_t i = 0; i < MAX_WLED; ++i)
@@ -2453,7 +2461,8 @@ void loop() {
   if (needsDraw) {
     partialLiveUpdate = false;
     draw();
-  } else if (partialLiveUpdate && screen == Screen::LIVE && gameCount > 0) {
+  } else if (partialLiveUpdate && screen == Screen::LIVE &&
+             !showingStandingsPage() && gameCount > 0) {
     partialLiveUpdate = false;
     drawLiveReadout(games[featuredIndex % gameCount]);
   }
