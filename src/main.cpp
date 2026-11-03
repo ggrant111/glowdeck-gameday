@@ -50,7 +50,8 @@ Game games[MAX_GAMES];
 uint8_t gameCount = 0, gamePage = 0;
 uint32_t selectedGameId = 0;
 int previousHome = 0, previousAway = 0;
-bool haveBaseline = false, mdnsStarted = false, needsDraw = true;
+bool haveBaseline = false, mdnsStarted = false, mdnsAttempted = false, needsDraw = true;
+bool touchWasDown = false, wifiWasConnected = false;
 String apSsid, apPassword, mdnsName, lastError;
 uint32_t lastPoll = 0, reconnectAt = 0, rebootAt = 0;
 uint32_t lastTouch = 0;
@@ -411,7 +412,11 @@ void selectGame(uint32_t id) {
 }
 
 void handleTouch() {
-  if (!touch.touched() || millis() - lastTouch < 220) return;
+  // Act on touch DOWN only; a held press must never advance two calibration steps.
+  bool pressed = touch.touched();
+  if (!pressed) { touchWasDown = false; return; }
+  if (touchWasDown || millis() - lastTouch < 120) return;
+  touchWasDown = true;
   TS_Point p = touch.getPoint();
   lastTouch = millis();
   if (screen == Screen::CALIBRATE) {
@@ -675,8 +680,21 @@ void loop() {
   tickRestores();
 
   const uint32_t now = millis();
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!mdnsStarted) {
+  const bool connected = WiFi.status() == WL_CONNECTED;
+  if (connected && !wifiWasConnected) {
+    wifiWasConnected = true;
+    mdnsAttempted = false;
+    lastPoll = millis() - IDLE_POLL_MS; // Fetch soon after connection, not 60 seconds later.
+    needsDraw = true;
+  } else if (!connected && wifiWasConnected) {
+    wifiWasConnected = false;
+    mdnsStarted = false;
+    mdnsAttempted = false;
+    needsDraw = true;
+  }
+  if (connected) {
+    if (!mdnsAttempted) {
+      mdnsAttempted = true;
       mdnsStarted = MDNS.begin(mdnsName.c_str());
       if (mdnsStarted) MDNS.addService("http", "tcp", 80);
       needsDraw = true;
