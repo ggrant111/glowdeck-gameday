@@ -24,7 +24,7 @@ BG = (4, 12, 22)  # color used to preblend translucent antialiasing edges
 
 
 def scoreboard_logo_urls() -> dict[str, str]:
-    """Use the official per-team logo field returned by the current NHL score JSON."""
+    """Prefer each team darkLogo (the variant for a dark-mode display)."""
     urls: dict[str, str] = {}
     req = Request("https://api-web.nhle.com/v1/score/now",
                   headers={"User-Agent": "GlowDeck-GameDay/0.2.3"})
@@ -34,12 +34,13 @@ def scoreboard_logo_urls() -> dict[str, str]:
         for game in data.get("games", []):
             for side in ("awayTeam", "homeTeam"):
                 entry = game.get(side, {})
-                abbr, logo = entry.get("abbrev", ""), entry.get("logo", "")
+                abbr = entry.get("abbrev", "")
+                logo = entry.get("darkLogo") or entry.get("logo", "")
                 if (abbr in TEAMS and isinstance(logo, str)
                     and logo.startswith("https://assets.nhle.com/logos/nhl/svg/")
                     and logo.endswith(".svg")):
                     urls[abbr] = logo
-        print(f"[NHL scoreboard] {len(urls)} official game-logo URLs available")
+        print(f"[NHL scoreboard] {len(urls)} official game dark-logo URLs available")
     except Exception as error:
         print(f"[NHL scoreboard] Logo lookup unavailable; use official CDN fallback: {error}")
     return urls
@@ -47,11 +48,15 @@ def scoreboard_logo_urls() -> dict[str, str]:
 
 def load_logo(team: str, returned_logo: str | None) -> Image.Image:
     last_error = None
-    # Prioritize the exact image URL provided in the scoreboard's JSON.
-    candidates = ([returned_logo] if returned_logo else []) + [
-        f"https://assets.nhle.com/logos/nhl/svg/{team}_light.svg",
-        f"https://assets.nhle.com/logos/nhl/svg/{team}_dark.svg",
-    ]
+    # Prefer the NHL dark-mode artwork: score JSON "logo" usually points to
+    # a *_light.svg asset intended for white backgrounds, making some logos
+    # look inverted or lose detail against this CYD's dark arena UI.
+    dark = f"https://assets.nhle.com/logos/nhl/svg/{team}_dark.svg"
+    light = f"https://assets.nhle.com/logos/nhl/svg/{team}_light.svg"
+    candidates = ([returned_logo] if returned_logo and "_dark.svg" in returned_logo else []) + [dark]
+    if returned_logo and "_dark.svg" not in returned_logo:
+        candidates.append(returned_logo)
+    candidates.append(light)
     for url in dict.fromkeys(candidates):
         try:
             req = Request(url, headers={

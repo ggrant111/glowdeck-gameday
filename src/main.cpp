@@ -16,6 +16,7 @@
 #include "GameDayCadence.h"
 #include "ConferenceRecords.h"
 #include "GameDetailMode.h"
+#include "StandingsCarousel.h"
 #include "NhlFetchPolicy.h"
 #include "RearLedPattern.h"
 #include <time.h>
@@ -61,6 +62,7 @@ struct Settings {
   uint32_t followIds[MAX_FOLLOWED_GAMES] = {0, 0, 0, 0};
   bool invertScreen = true; // This CYD panel needs INVON to render dark colors correctly.
   bool cycleGames = true;
+  bool showStandings = true; // Add 4 conference + 4 division table slides.
   uint8_t cycleSeconds = 9;
   uint8_t timezone = 1; // 0=ET, 1=CT, 2=MT, 3=PT, 4=AZ
   int touchX0 = 300, touchX1 = 3800, touchY0 = 300, touchY1 = 3800;
@@ -93,6 +95,7 @@ uint8_t rearLastDuty[3] = {255, 255, 255};
 uint32_t lastPpFallback = 0;
 uint32_t rearTestPpUntil = 0, rearTestPpColor = 0;
 uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
+uint8_t carouselSlide = 0; // Independent of the armed game and game-detail index.
 uint32_t lastCarouselAdvance = 0;
 String scoreboardDate;
 String targetScoreboardDate;
@@ -148,7 +151,28 @@ uint32_t lastCarouselStatsCheck = 0;
 // repeatedly fetching the same 32-team feed on every carousel advance.
 struct SeasonStanding {
   String team, seasonRecord, points, conferenceRank;
+  StandingsCarousel::Group division = StandingsCarousel::Group::EAST;
+  uint8_t conferenceSequence = 0, divisionSequence = 0;
+  uint8_t gamesPlayed = 0, wins = 0, losses = 0, otLosses = 0;
 };
+// The carousel can show games followed by eight league-wide standings slides.
+// Browsing a standings slide must NEVER change the WLED armed game, score
+// baselines, live polls or the selected game detail.
+uint8_t carouselPageCount() {
+  return StandingsCarousel::totalSlides(gameCount, cfg.showStandings);
+}
+bool showingStandingsPage() {
+  return cfg.showStandings && carouselSlide >= gameCount &&
+         carouselSlide < carouselPageCount();
+}
+void advanceCarousel(int direction) {
+  const uint8_t total = carouselPageCount();
+  carouselSlide = StandingsCarousel::advance(carouselSlide, total, direction);
+  if (carouselSlide < gameCount) featuredIndex = carouselSlide;
+  lastCarouselAdvance = millis();
+  needsDraw = true;
+}
+
 SeasonStanding seasonStandings[32];
 bool standingsReady = false;
 uint32_t standingsLastAttempt = 0;
@@ -433,6 +457,7 @@ void prepareNewScoreboardDate(const String &today) {
     gameCount = 0;
     gamePage = 0;
     featuredIndex = 0;
+    carouselSlide = 0;
     lastCarouselAdvance = millis();
     needDetailLoad = false;
     detail.loaded = false;
@@ -558,8 +583,14 @@ String knownConferenceRecord(const String &team, uint32_t season) {
 bool loadSeasonStandings() {
   const String today = scoreboardDate.length() ? scoreboardDate : deviceLocalDate();
   const uint32_t now = millis();
+  // League standings need not refresh on every score poll. During live NHL
+  // games refresh at most every 3 minutes, otherwise every 15 minutes.
+  bool anyLive = false;
+  for (uint8_t i = 0; i < gameCount; ++i)
+    if (games[i].state == "LIVE" || games[i].state == "CRIT") anyLive = true;
+  const uint32_t ttl = anyLive ? 180000UL : 900000UL;
   if (standingsReady && standingsForDate == today &&
-      uint32_t(now - standingsLastAttempt) < 900000UL) return true;
+      uint32_t(now - standingsLastAttempt) < ttl) return true;
   if (!standingsReady && standingsLastAttempt &&
       uint32_t(now - standingsLastAttempt) < 60000UL) return false;
   if (WiFi.status() != WL_CONNECTED) return standingsReady;
@@ -568,17 +599,22 @@ bool loadSeasonStandings() {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  http.setTimeout(4500);
+  http.setConnectTimeout(4500);
+  http.setTimeout(10000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.useHTTP10(true);
   const String url = "https://api-web.nhle.com/v1/standings/" +
                      (today.length() == 10 ? today : String("now"));
   if (!http.begin(client, url)) return standingsReady;
+  http.addHeader("Accept-Encoding", "identity");
   if (http.GET() != HTTP_CODE_OK) {
     http.end();
     return standingsReady;
   }
-  StaticJsonDocument<512> filter;
+  // These NHL fields are shared with the pregame preview. Allocate the
+  // expanded filter on heap to protect the loopTask stack on the CYD.
+  DynamicJsonDocument filter(1024);
+  if (filter.capacity() < 1024) { http.end(); return standingsReady; }
   JsonObject first = filter["standings"][0].to<JsonObject>();
   first["teamAbbrev"]["default"] = true;
   first["wins"] = true;
@@ -586,9 +622,21 @@ bool loadSeasonStandings() {
   first["otLosses"] = true;
   first["points"] = true;
   first["conferenceSequence"] = true;
-  DynamicJsonDocument parsed(10800);
+  first["conferenceAbbrev"] = true;
+  first["divisionAbbrev"] = true;
+  first["divisionSequence"] = true;
+  first["gamesPlayed"] = true;
+  if (filter.overflowed()) {
+    Serial.println("[NHL] Standings filter capacity exceeded");
+    http.end();
+    return standingsReady;
+  }
+  DynamicJsonDocument parsed(20480);
+  if (parsed.capacity() < 20480) { http.end(); return standingsReady; }
+  Stream &stream = http.getStream();
+  stream.setTimeout(10000);
   const DeserializationError err = deserializeJson(
-      parsed, http.getStream(), DeserializationOption::Filter(filter));
+      parsed, stream, DeserializationOption::Filter(filter));
   http.end();
   if (err) {
     Serial.printf("Pregame standings JSON: %s\n", err.c_str());
@@ -608,20 +656,37 @@ bool loadSeasonStandings() {
         row["losses"].isNull() || row["otLosses"].isNull()) continue;
     SeasonStanding &record = fresh[loaded++];
     record.team = team;
-    record.seasonRecord = String(row["wins"].as<int>()) + "-" +
-                          String(row["losses"].as<int>()) + "-" +
-                          String(row["otLosses"].as<int>());
+    record.wins = (uint8_t)constrain(row["wins"].as<int>(), 0, 255);
+    record.losses = (uint8_t)constrain(row["losses"].as<int>(), 0, 255);
+    record.otLosses = (uint8_t)constrain(row["otLosses"].as<int>(), 0, 255);
+    record.gamesPlayed = (uint8_t)constrain((int)(row["gamesPlayed"] | 0), 0, 255);
+    record.seasonRecord = String(record.wins) + "-" + String(record.losses) +
+                          "-" + String(record.otLosses);
     if (!row["points"].isNull())
       record.points = String(row["points"].as<int>());
     const int rank = row["conferenceSequence"] | 0;
+    record.conferenceSequence = (uint8_t)constrain(rank, 0, 255);
+    record.divisionSequence =
+        (uint8_t)constrain((int)(row["divisionSequence"] | 0), 0, 255);
+    const String div = row["divisionAbbrev"].as<String>();
+    const String conf = row["conferenceAbbrev"].as<String>();
+    record.division = StandingsCarousel::groupFor(conf.c_str(), div.c_str());
     if (rank > 0) record.conferenceRank = "#" + String(rank);
   }
-  if (!loaded) return standingsReady;
+  if (loaded < 24) {
+    // A truncated-but-parseable partial standings object must never overwrite
+    // a good 32-team cache; it would make the table silently drop teams.
+    Serial.printf("[NHL] Only %u valid standings teams; keeping cache\n", loaded);
+    return standingsReady;
+  }
   for (uint8_t i = 0; i < 32; ++i)
     seasonStandings[i] = i < loaded ? fresh[i] : SeasonStanding();
   standingsForDate = today;
   standingsReady = true;
-  Serial.printf("Pregame standings loaded: %u teams\n", loaded);
+  if (screen == Screen::LIVE && showingStandingsPage()) needsDraw = true;
+  Serial.printf("[NHL] League standings loaded: %u teams, stack=%u heap=%u\n",
+                loaded, (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+                (unsigned)ESP.getFreeHeap());
   return true;
 }
 
@@ -887,6 +952,7 @@ void loadSettings() {
     cfg.followIds[i] = prefs.getUInt(("follow" + String(i)).c_str(), 0);
   cfg.invertScreen = prefs.getBool("invert", true);
   cfg.cycleGames = prefs.getBool("carousel", true);
+  cfg.showStandings = prefs.getBool("standPages", true);
   cfg.cycleSeconds = constrain(prefs.getUChar("cycleSec", 9), 5, 30);
   cfg.timezone = constrain(prefs.getUChar("timezone", 1), 0, 4);
   cfg.touchX0 = prefs.getInt("tx0", 300);
@@ -917,6 +983,7 @@ void saveSettings() {
     prefs.putUInt(("follow" + String(i)).c_str(), cfg.followIds[i]);
   prefs.putBool("invert", cfg.invertScreen);
   prefs.putBool("carousel", cfg.cycleGames);
+  prefs.putBool("standPages", cfg.showStandings);
   prefs.putUChar("cycleSec", cfg.cycleSeconds);
   prefs.putUChar("timezone", cfg.timezone);
 }
@@ -1230,6 +1297,8 @@ void pollNhl() {
   }
   const uint32_t previouslyFeatured = gameCount ?
       games[min((int)featuredIndex, (int)gameCount - 1)].id : 0;
+  const int8_t previouslyStandingPage = showingStandingsPage()
+      ? (int8_t)(carouselSlide - gameCount) : -1;
   String newScoreboardDate = doc["currentDate"].as<String>();
   if (newScoreboardDate.length() != 10) {
     markNhlFetchFailure("Invalid NHL scoreboard date");
@@ -1290,6 +1359,7 @@ void pollNhl() {
   }
   if (newDay) {
     featuredIndex = 0;
+    carouselSlide = 0;
     lastCarouselAdvance = millis();
     needDetailLoad = false;
     detail.loaded = false;
@@ -1312,6 +1382,13 @@ void pollNhl() {
     }
     if (!found) featuredIndex = 0;
   } else featuredIndex = 0;
+  // Retain the same standings slide across a fresh game list, or follow the
+  // originally displayed matchup if NHL reorders today's games.
+  if (!newDay && previouslyStandingPage >= 0 && cfg.showStandings)
+    carouselSlide = gameCount + (uint8_t)previouslyStandingPage;
+  else
+    carouselSlide = featuredIndex;
+  if (carouselSlide >= carouselPageCount()) carouselSlide = 0;
   if (gamePage * 3 >= gameCount) gamePage = 0;
   // A valid full JSON document (including games: []) resets retry backoff.
   if (nhlConsecutiveFailures)
@@ -1360,8 +1437,8 @@ void pollNhl() {
     haveBaseline = false;
   }
   if (gamesFingerprint() != previousFingerprint || newDay) {
-    if (!newDay && screen == Screen::LIVE && gameCount > 0 &&
-        previouslyFeatured == games[featuredIndex % gameCount].id)
+    if (!newDay && !showingStandingsPage() && screen == Screen::LIVE &&
+        gameCount > 0 && previouslyFeatured == games[featuredIndex].id)
       partialLiveUpdate = true;
     else needsDraw = true;
   }
@@ -1467,13 +1544,94 @@ void drawScoreboardHeader(const Game &g) {
                  gameIsFuture(g) ? "NEXT" : "FINAL", 81, 16, 2);
   if (gameIsLive(g)) tft.fillCircle(56, 16, 2, WHITE);
   tft.setTextColor(ICE_TEXT, ARENA_BLACK);
-  tft.drawString(String(featuredIndex + 1) + "/" + String(gameCount), 228, 16, 2);
+  tft.drawString(String(carouselSlide + 1) + "/" + String(carouselPageCount()), 228, 16, 2);
   tft.setTextColor(WiFi.status() == WL_CONNECTED ? ICE_BLUE : ORANGE, ARENA_BLACK);
   tft.drawString(WiFi.status() == WL_CONNECTED ? "WiFi" : "AP", 281, 16, 2);
   // Small menu glyph replaces the former three large navigation buttons.
   tft.drawFastHLine(305, 9, 10, WHITE);
   tft.drawFastHLine(305, 15, 10, WHITE);
   tft.drawFastHLine(305, 21, 10, WHITE);
+  tft.setTextDatum(TL_DATUM);
+}
+
+// 320x240: 8 rank rows, full NHL team list across eight carousel slides.
+// All drawing is simple TFT primitives; no image buffers or extra tasks.
+void drawStandingsSlide() {
+  const uint8_t slideNumber = carouselSlide - gameCount;
+  const StandingsCarousel::Page page = StandingsCarousel::page(slideNumber);
+  tft.fillScreen(ARENA_BLACK);
+  tft.fillRect(0, 0, 320, 28, ARENA_PLATE);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(WHITE, ARENA_PLATE);
+  tft.drawString("NHL STANDINGS", 8, 6, 2);
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(ICE_TEXT, ARENA_PLATE);
+  tft.drawString(String(carouselSlide + 1) + "/" +
+                 String(carouselPageCount()), 255, 8, 1);
+  tft.drawString(WiFi.status() == WL_CONNECTED ? "WiFi" : "AP", 298, 7, 2);
+  tft.drawFastHLine(306, 7, 11, WHITE);
+  tft.drawFastHLine(306, 13, 11, WHITE);
+  tft.drawFastHLine(306, 19, 11, WHITE);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE, ARENA_BLACK);
+  tft.drawString(page.title, 160, 41, 4);
+  tft.setTextColor(ICE_BLUE, ARENA_BLACK);
+  tft.drawString(page.range, 160, 61, 2);
+
+  tft.fillRect(5, 71, 310, 17, ARENA_LINE);
+  tft.setTextColor(WHITE, ARENA_LINE);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("#", 18, 79, 2);
+  tft.drawString("TEAM", 74, 79, 2);
+  tft.drawString("GP", 145, 79, 2);
+  tft.drawString("W-L-OT", 215, 79, 2);
+  tft.drawString("PTS", 293, 79, 2);
+
+  const String localDay = deviceLocalDate();
+  if (!standingsReady || (localDay.length() && standingsForDate != localDay)) {
+    tft.setTextColor(WHITE, ARENA_BLACK);
+    tft.drawString("Loading NHL standings...", 160, 145, 2);
+    tft.setTextColor(ICE_TEXT, ARENA_BLACK);
+    tft.drawString("Updates automatically", 160, 175, 2);
+  } else {
+    uint8_t sorted[32] = {};
+    const uint8_t n = StandingsCarousel::collectAndSort(
+       seasonStandings, 32, page, sorted, 32);
+    const Game *armed = selectedGame();
+    for (uint8_t row = 0; row < StandingsCarousel::kRowsPerPage; ++row) {
+      const uint8_t position = page.offset + row;
+      if (position >= n) break;
+      const SeasonStanding &entry = seasonStandings[sorted[position]];
+      const uint16_t bg = row % 2 ? 0x1084 : 0x0822;
+      const int16_t y = 90 + row * 17;
+      tft.fillRect(5, y, 310, 17, bg);
+      if (armed && (entry.team == armed->home ||
+                    entry.team == armed->away))
+        tft.fillRect(6, y, 3, 17, ICE_BLUE);
+      tft.fillRect(41, y + 3, 4, 11, to565(teamRgb(entry.team)));
+      tft.setTextColor(WHITE, bg);
+      tft.drawString(String(StandingsCarousel::rank(
+          page.group, entry.conferenceSequence, entry.divisionSequence)),
+          20, y + 8, 2);
+      tft.drawString(entry.team, 72, y + 8, 2);
+      tft.setTextColor(ICE_TEXT, bg);
+      tft.drawString(String(entry.gamesPlayed), 145, y + 8, 2);
+      tft.drawString(entry.seasonRecord, 215, y + 8, 2);
+      tft.setTextColor(WHITE, bg);
+      tft.drawString(entry.points.length() ? entry.points : "--",
+                     293, y + 8, 2);
+    }
+    if (n == 0) {
+      tft.setTextColor(WHITE, ARENA_BLACK);
+      tft.drawString("Standings unavailable", 160, 145, 2);
+    }
+  }
+
+  tft.fillRect(0, 229, 320, 11, ARENA_PLATE);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(ICE_TEXT, ARENA_PLATE);
+  tft.drawString("Swipe for games / more rankings", 160, 234, 1);
   tft.setTextDatum(TL_DATUM);
 }
 
@@ -1583,7 +1741,9 @@ void draw() {
   needsDraw = false;
   if (screen == Screen::CALIBRATE) { drawCalibration(); return; }
   if (screen == Screen::LIVE) {
-    if (!gameCount) {
+    if (showingStandingsPage()) {
+      drawStandingsSlide();
+    } else if (!gameCount) {
       tft.fillScreen(ARENA_BLACK);
       tft.setTextDatum(MC_DATUM);
       tft.setTextColor(WHITE, ARENA_BLACK);
@@ -1739,20 +1899,19 @@ void handleTouch() {
       touchWasDown = false;
       const int dx = gestureEndX - gestureStartX;
       const int dy = gestureEndY - gestureStartY;
-      if (gameCount > 1 && abs(dx) > 48 && abs(dy) < 90) {
-        if (dx < 0) featuredIndex = (featuredIndex + 1) % gameCount;
-        else featuredIndex = (featuredIndex + gameCount - 1) % gameCount;
+      if (carouselPageCount() > 1 && abs(dx) > 48 && abs(dy) < 90) {
+        advanceCarousel(dx < 0 ? 1 : -1);
       } else if (gestureStartY <= 35 && gestureStartX >= 263) {
-        screen = Screen::GAMES; // Access setup and arming from existing menu.
-      } else if (gameCount > 1 && gestureStartY >= 213 && gestureStartX < 58) {
-        featuredIndex = (featuredIndex + gameCount - 1) % gameCount;
-      } else if (gameCount > 1 && gestureStartY >= 213 && gestureStartX > 263) {
-        featuredIndex = (featuredIndex + 1) % gameCount;
-      } else if (gameCount) {
-        showDetail(games[featuredIndex % gameCount].id);
-      } else {
+        screen = Screen::GAMES; // Menu is available on every slide.
+      } else if (carouselPageCount() > 1 && gestureStartY >= 213 && gestureStartX < 58) {
+        advanceCarousel(-1);
+      } else if (carouselPageCount() > 1 && gestureStartY >= 213 && gestureStartX > 263) {
+        advanceCarousel(1);
+      } else if (!showingStandingsPage() && gameCount) {
+        showDetail(games[carouselSlide].id);
+      } else if (!showingStandingsPage()) {
         screen = Screen::GAMES;
-      }
+      } // Standings rows are informational, not game-arm buttons.
       lastCarouselAdvance = millis();
       needsDraw = true;
     }
@@ -1830,8 +1989,10 @@ void registerRoutes() {
   });
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
-    StaticJsonDocument<1536> doc;
-    doc["version"] = "0.2.9";
+    // New slide/standings metadata should not enlarge the loopTask stack.
+    DynamicJsonDocument doc(2304);
+    if (doc.capacity() < 2304) return errorResponse("Status memory unavailable", 503);
+    doc["version"] = "0.3.0";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -1850,6 +2011,13 @@ void registerRoutes() {
     doc["clockSynced"] = deviceLocalDate().length() == 10;
     doc["scoreboardLoaded"] = scoreboardLoaded;
     doc["featuredIndex"] = featuredIndex;
+    doc["carouselSlide"] = carouselSlide;
+    doc["carouselTotal"] = carouselPageCount();
+    doc["slideStandings"] = showingStandingsPage();
+    doc["standingsPage"] = showingStandingsPage()
+        ? StandingsCarousel::page(carouselSlide - gameCount).title : "";
+    doc["standingsReady"] = standingsReady;
+    doc["showStandings"] = cfg.showStandings;
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
     doc["scorePollSeconds"] = NhlFetchPolicy::pollIntervalMs(
@@ -1961,6 +2129,7 @@ void registerRoutes() {
     doc["rearBrightness"] = cfg.rearBrightness;
     doc["rearGoalSeconds"] = cfg.rearGoalSeconds;
     doc["screenInverted"] = cfg.invertScreen;
+    doc["showStandings"] = cfg.showStandings;
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
     doc["timezone"] = cfg.timezone;
@@ -2000,6 +2169,14 @@ void registerRoutes() {
     cfg.rearGoalSeconds = constrain((int)(doc["rearGoalSeconds"] | cfg.rearGoalSeconds), 2, 12);
     if (!cfg.rearLedEnabled) stopRearLed();
     cfg.cycleGames = doc["cycleGames"] | cfg.cycleGames;
+    const bool newShowStandings = doc["showStandings"] | cfg.showStandings;
+    if (newShowStandings != cfg.showStandings) {
+      cfg.showStandings = newShowStandings;
+      if (!cfg.showStandings || carouselSlide >= carouselPageCount())
+        carouselSlide = gameCount ? featuredIndex : 0;
+      lastCarouselAdvance = millis();
+      needsDraw = true;
+    }
     cfg.cycleSeconds = constrain((int)(doc["cycleSeconds"] | cfg.cycleSeconds), 5, 30);
     uint8_t requestedTimezone = constrain((int)(doc["timezone"] | cfg.timezone), 0, 4);
     if (requestedTimezone != cfg.timezone) {
@@ -2154,7 +2331,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.2.9 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.3.0 — CYD only");
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),
@@ -2279,20 +2456,32 @@ void loop() {
       fetchFollowedPowerPlays();
     }
   }
-  if (screen == Screen::LIVE && cfg.cycleGames && gameCount > 1 &&
-      now - lastCarouselAdvance >= uint32_t(cfg.cycleSeconds) * 1000UL) {
-    featuredIndex = (featuredIndex + 1) % gameCount;
-    lastCarouselAdvance = now;
-    needsDraw = true;
+  if (screen == Screen::LIVE && cfg.cycleGames && carouselPageCount() > 1 &&
+      uint32_t(now - lastCarouselAdvance) >= uint32_t(cfg.cycleSeconds) * 1000UL) {
+    advanceCarousel(1);
   }
   if (needDetailLoad && screen == Screen::STATS) {
     needDetailLoad = false;
     fetchDetailStats(detailGameId);
   }
+  // Standings are requested only while their slide is displayed, with shared
+  // pregame cache and 3m live / 15m idle refresh. Keep goal-restoration
+  // latency higher priority and never allocate a second full NHL scoreboard.
+  static uint32_t lastSlideStandingsCheck = 0;
+  if (connected && screen == Screen::LIVE && showingStandingsPage() &&
+      uint32_t(millis() - lastSlideStandingsCheck) > 5000UL) {
+    bool restoringLights = false;
+    for (uint8_t i = 0; i < MAX_WLED; ++i)
+      if (restoring[i]) restoringLights = true;
+    if (!restoringLights && rearEvent != RearEvent::GOAL) {
+      lastSlideStandingsCheck = millis();
+      loadSeasonStandings();
+    }
+  }
   // Prefetch stats for the displayed carousel game; the background request
   // happens only once per game/TTL, never once per frame. Defer requests
   // while a WLED restoration is pending to avoid delaying light recovery.
-  if (screen == Screen::LIVE && gameCount && connected &&
+  if (screen == Screen::LIVE && !showingStandingsPage() && gameCount && connected &&
       uint32_t(now - lastCarouselStatsCheck) >= 2500UL) {
     bool lightRestorePending = false;
     for (uint8_t i = 0; i < MAX_WLED; ++i)
@@ -2307,7 +2496,8 @@ void loop() {
   if (needsDraw) {
     partialLiveUpdate = false;
     draw();
-  } else if (partialLiveUpdate && screen == Screen::LIVE && gameCount > 0) {
+  } else if (partialLiveUpdate && screen == Screen::LIVE &&
+             !showingStandingsPage() && gameCount > 0) {
     partialLiveUpdate = false;
     drawLiveReadout(games[featuredIndex % gameCount]);
   }
