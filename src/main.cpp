@@ -1989,7 +1989,9 @@ void registerRoutes() {
   });
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
-    StaticJsonDocument<1536> doc;
+    // New slide/standings metadata should not enlarge the loopTask stack.
+    DynamicJsonDocument doc(2304);
+    if (doc.capacity() < 2304) return errorResponse("Status memory unavailable", 503);
     doc["version"] = "0.3.0";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
