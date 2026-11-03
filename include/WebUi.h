@@ -183,6 +183,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 "use strict";
 const $ = id => document.getElementById(id);
 let currentConfig = null, currentStatus = null, currentGames = [], noticeTimeout;
+let detailPreviewToken = 0;
 const modes = ["Off","Home only","Away only","Both teams"];
 function message(text){
   const box = $("notice");box.textContent=text;box.style.display="block";
