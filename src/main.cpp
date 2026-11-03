@@ -130,6 +130,8 @@ uint8_t wledPhase = 0;
 String wledDeviceResult[MAX_WLED];
 String lastArmedGameState;
 uint32_t wledPpTestUntil = 0, wledSuppressPpUntil = 0;
+CelebrationEngine::Event queuedWledEvent = CelebrationEngine::Event::NONE;
+uint32_t queuedWledColor = 0;
 bool restoring[MAX_WLED] = {false, false, false, false};
 uint32_t restoreAt[MAX_WLED] = {0, 0, 0, 0};
 uint8_t restoreRetries[MAX_WLED] = {0, 0, 0, 0};
@@ -1219,6 +1221,7 @@ void scheduleWledRestoreAll() {
   wledActiveEvent = CelebrationEngine::Event::NONE;
   wledEventDuration = 0;
   wledPpTestUntil = 0;
+  queuedWledEvent = CelebrationEngine::Event::NONE;
 }
 
 void tickRestores() {
@@ -1363,6 +1366,14 @@ void tickWledCelebrations() {
         }
       }
       return;
+    }
+    // A final result can arrive in the same score poll as a winning goal.
+    // Finish the goal celebration before playing the queued final animation.
+    if (queuedWledEvent != CelebrationEngine::Event::NONE) {
+      const CelebrationEngine::Event pending = queuedWledEvent;
+      const uint32_t pendingColor = queuedWledColor;
+      queuedWledEvent = CelebrationEngine::Event::NONE;
+      if (startWledEvent(pending, pendingColor)) return;
     }
     // After goal or game-start, return to power-play breathing if NHL still
     // reports an advantage, otherwise restore the original WLED state.
@@ -1729,14 +1740,18 @@ void pollNhl() {
     const bool favoredWon = cfg.favoriteSide == 0 ? homeWon : !homeWon;
     const CelebrationEngine::Event transition = CelebrationEngine::transition(
         haveBaseline, lastArmedGameState.c_str(), g->state.c_str(), favoredWon);
-    if (transition == CelebrationEngine::Event::GAME_START &&
-        cfg.wledGameStart &&
-        wledActiveEvent != CelebrationEngine::Event::GOAL)
-      startWledEvent(transition, teamRgb(cfg.favoriteSide == 0 ? g->home : g->away));
-    else if ((transition == CelebrationEngine::Event::FINAL_WIN ||
-              transition == CelebrationEngine::Event::FINAL_LOSS) &&
-             cfg.wledFinal && wledActiveEvent != CelebrationEngine::Event::GOAL)
-      startWledEvent(transition, teamRgb(cfg.favoriteSide == 0 ? g->home : g->away));
+    if ((transition == CelebrationEngine::Event::GAME_START && cfg.wledGameStart) ||
+        ((transition == CelebrationEngine::Event::FINAL_WIN ||
+          transition == CelebrationEngine::Event::FINAL_LOSS) && cfg.wledFinal)) {
+      const uint32_t teamColor =
+          teamRgb(cfg.favoriteSide == 0 ? g->home : g->away);
+      if (wledActiveEvent == CelebrationEngine::Event::GOAL) {
+        queuedWledEvent = transition;
+        queuedWledColor = teamColor;
+      } else {
+        startWledEvent(transition, teamColor);
+      }
+    }
     previousHome = g->homeScore;
     previousAway = g->awayScore;
     lastArmedGameState = g->state;
