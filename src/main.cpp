@@ -63,6 +63,7 @@ int previousHome = 0, previousAway = 0;
 bool haveBaseline = false, mdnsStarted = false, mdnsAttempted = false, needsDraw = true;
 bool touchWasDown = false, wifiWasConnected = false, partialLiveUpdate = false;
 int16_t gestureStartX = 0, gestureStartY = 0, gestureEndX = 0, gestureEndY = 0;
+bool swallowLiveGesture = false;
 String apSsid, apPassword, mdnsName, lastError;
 uint32_t lastPoll = 0, reconnectAt = 0, rebootAt = 0;
 uint32_t lastTouch = 0;
@@ -898,6 +899,7 @@ void draw() {
 }
 
 void selectGame(uint32_t id) {
+  swallowLiveGesture = true;
   selectedGameId = id;
   haveBaseline = false;
   prefs.putUInt("game", id);
@@ -914,6 +916,10 @@ void handleTouch() {
   // swipe left/right to change games, tap a matchup for stats, tap top-right
   // menu glyph to open GAMES (which provides SETUP in its footer).
   if (screen == Screen::LIVE) {
+    if (swallowLiveGesture) {
+      if (!pressed) { swallowLiveGesture = false; touchWasDown = false; }
+      return;
+    }
     if (pressed) {
       TS_Point p = touch.getPoint();
       const int16_t x = constrain((int)map(p.x, cfg.touchX0, cfg.touchX1, 0, 319), 0, 319);
@@ -987,6 +993,7 @@ void handleTouch() {
     } else {
       screen = x < 107 ? Screen::LIVE : x < 214 ? Screen::GAMES : Screen::SETUP;
     }
+    if (screen == Screen::LIVE) swallowLiveGesture = true;
     lastCarouselAdvance = millis();
   } else if (screen == Screen::GAMES) {
     if (y >= 39 && y < 64 && gameCount > 3) {
