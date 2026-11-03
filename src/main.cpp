@@ -842,6 +842,10 @@ void registerRoutes() {
     doc["mdns"] = mdnsStarted ? mdnsName + ".local" : "";
     doc["selectedId"] = selectedGameId;
     doc["mode"] = cfg.mode;
+    doc["scoreDate"] = scoreboardDate;
+    doc["featuredIndex"] = featuredIndex;
+    doc["cycleGames"] = cfg.cycleGames;
+    doc["cycleSeconds"] = cfg.cycleSeconds;
     doc["error"] = lastError;
     doc["freeHeap"] = ESP.getFreeHeap();
     doc["uptimeSeconds"] = millis() / 1000UL;
@@ -859,6 +863,34 @@ void registerRoutes() {
       g["homeScore"] = games[i].homeScore;
       g["awayScore"] = games[i].awayScore;
       g["state"] = games[i].state;
+      g["status"] = gameStatus(games[i]);
+      g["homeShots"] = games[i].homeShots;
+      g["awayShots"] = games[i].awayShots;
+      g["startTimeUTC"] = games[i].startUTC;
+      g["period"] = games[i].period;
+      g["periodType"] = games[i].periodType;
+      g["clock"] = games[i].clock;
+      g["intermission"] = games[i].intermission;
+    }
+    sendJson(doc);
+  });
+  server.on("/api/stats", HTTP_GET, []() {
+    if (!authorized()) return;
+    const uint32_t id = strtoul(server.arg("id").c_str(), nullptr, 10);
+    bool known = false;
+    for (uint8_t i = 0; i < gameCount; ++i)
+      if (games[i].id == id) known = true;
+    if (!known || id == 0) return errorResponse("Game is not in the daily scoreboard", 404);
+    fetchDetailStats(id);
+    StaticJsonDocument<2048> doc;
+    doc["gameId"] = id;
+    doc["error"] = detail.error;
+    JsonArray rows = doc.createNestedArray("stats");
+    for (uint8_t i = 0; i < detail.count; ++i) {
+      JsonObject row = rows.createNestedObject();
+      row["label"] = detail.label[i];
+      row["away"] = detail.away[i];
+      row["home"] = detail.home[i];
     }
     sendJson(doc);
   });
@@ -884,6 +916,9 @@ void registerRoutes() {
     doc["seconds"] = cfg.seconds;
     doc["horn"] = cfg.horn;
     doc["screenInverted"] = cfg.invertScreen;
+    doc["cycleGames"] = cfg.cycleGames;
+    doc["cycleSeconds"] = cfg.cycleSeconds;
+    doc["timezone"] = cfg.timezone;
     JsonArray wled = doc.createNestedArray("wled");
     for (uint8_t i = 0; i < MAX_WLED; ++i) {
       JsonObject d = wled.createNestedObject();
@@ -913,6 +948,14 @@ void registerRoutes() {
     cfg.brightness = constrain((int)(doc["brightness"] | cfg.brightness), 1, 255);
     cfg.seconds = constrain((int)(doc["seconds"] | cfg.seconds), 2, 30);
     cfg.horn = doc["horn"] | cfg.horn;
+    cfg.cycleGames = doc["cycleGames"] | cfg.cycleGames;
+    cfg.cycleSeconds = constrain((int)(doc["cycleSeconds"] | cfg.cycleSeconds), 5, 30);
+    uint8_t requestedTimezone = constrain((int)(doc["timezone"] | cfg.timezone), 0, 4);
+    if (requestedTimezone != cfg.timezone) {
+      cfg.timezone = requestedTimezone;
+      applyTimezone();
+      needsDraw = true;
+    }
     bool invert = doc["screenInverted"] | cfg.invertScreen;
     if (cfg.invertScreen != invert) {
       cfg.invertScreen = invert;
