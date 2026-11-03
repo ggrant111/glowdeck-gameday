@@ -93,6 +93,8 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <label for="seconds">Celebration duration (seconds)</label><input id="seconds" type="number" min="2" max="30" step="1" value="8">
 <div class="toggle" style="margin-top:18px"><input id="horn" type="checkbox"><label for="horn">Enable built-in horn (GPIO26 speaker)</label></div>
 <p class="small muted">The onboard horn is a simple tone sequence. Custom WAV playback is not yet included.</p>
+<div class="toggle" style="margin-top:18px"><input id="screenInverted" type="checkbox"><label for="screenInverted">Correct inverted CYD display colors</label></div>
+<p class="small muted">Enable if the screen is pale blue or buttons appear pink instead of dark teal. It can also be toggled under SETUP directly on the touchscreen.</p>
 <label for="adminPassword">Change dashboard password</label><input id="adminPassword" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing">
 <p class="small muted">Web username is always admin. Enter at least 8 characters to change its password.</p>
 </div></div>
@@ -196,7 +198,7 @@ function formConfig(){
     adminPassword:$("adminPassword").value,
     mode:currentStatus?currentStatus.mode:currentConfig.mode,
     brightness:Number($("brightness").value),seconds:Number($("seconds").value),
-    horn:$("horn").checked,wled:deviceSettings()};
+    horn:$("horn").checked,screenInverted:$("screenInverted").checked,wled:deviceSettings()};
 }
 async function saveConfig(){
   const data=formConfig();
@@ -213,6 +215,7 @@ async function loadConfig(){
   $("brightValue").textContent=currentConfig.brightness+" / 255";
   $("seconds").value=currentConfig.seconds;
   $("horn").checked=!!currentConfig.horn;
+  $("screenInverted").checked=!!currentConfig.screenInverted;
   renderDevices();
 }
 document.querySelectorAll("[data-mode]").forEach(b=>b.addEventListener("click",()=>perform(async()=>{
