@@ -117,6 +117,186 @@ Game *selectedGame() {
   return nullptr;
 }
 
+// Timezone follows the user's chosen local zone, including daylight saving
+// transitions. NHL start times are sent in UTC and don't need a local NTP clock.
+const char *timezoneRule() {
+  switch (cfg.timezone) {
+    case 0: return "EST5EDT,M3.2.0/2,M11.1.0/2";
+    case 1: return "CST6CDT,M3.2.0/2,M11.1.0/2";
+    case 2: return "MST7MDT,M3.2.0/2,M11.1.0/2";
+    case 3: return "PST8PDT,M3.2.0/2,M11.1.0/2";
+    case 4: return "MST7";
+    default: return "CST6CDT,M3.2.0/2,M11.1.0/2";
+  }
+}
+const char *timezoneLabel() {
+  static const char *names[] = {"ET", "CT", "MT", "PT", "AZ"};
+  return names[constrain(cfg.timezone, 0, 4)];
+}
+void applyTimezone() {
+  setenv("TZ", timezoneRule(), 1);
+  tzset();
+}
+String formattedStart(const String &utc) {
+  int yr = 0, mo = 0, dy = 0, hh = 0, mm = 0, sec = 0;
+  if (sscanf(utc.c_str(), "%d-%d-%dT%d:%d:%d",
+             &yr, &mo, &dy, &hh, &mm, &sec) != 6)
+    return "Time TBA";
+  struct tm utcTime = {};
+  utcTime.tm_year = yr - 1900;
+  utcTime.tm_mon = mo - 1;
+  utcTime.tm_mday = dy;
+  utcTime.tm_hour = hh;
+  utcTime.tm_min = mm;
+  utcTime.tm_sec = sec;
+  const time_t epoch = timegm(&utcTime);
+  struct tm localTime = {};
+  localtime_r(&epoch, &localTime);
+  char timeBuffer[24] = {};
+  strftime(timeBuffer, sizeof(timeBuffer), "%I:%M %p", &localTime);
+  String result = timeBuffer;
+  if (result.startsWith("0")) result.remove(0, 1);
+  return result + " " + timezoneLabel();
+}
+String gameStatus(const Game &g) {
+  if (g.state == "FUT" || g.state == "PRE")
+    return "START " + formattedStart(g.startUTC);
+  if (g.state == "LIVE" || g.state == "CRIT") {
+    const String period = g.periodType == "SO" ? "SO" :
+                          g.periodType == "OT" ? "OT" : "P" + String(g.period);
+    if (g.intermission) return "INTERMISSION " + period;
+    return period + (g.clock.isEmpty() ? String("  LIVE") : String("  ") + g.clock);
+  }
+  if (g.state == "OFF" || g.state == "FINAL")
+    return g.periodType == "SO" ? "FINAL / SO" :
+           g.periodType == "OT" ? "FINAL / OT" : "FINAL";
+  return g.state.isEmpty() ? "SCHEDULED" : g.state;
+}
+void showDetail(uint32_t id) {
+  if (!id) return;
+  detailGameId = id;
+  if (detail.gameId != id) detail.loaded = false;
+  needDetailLoad = true;
+  screen = Screen::STATS;
+  needsDraw = true;
+}
+Game *detailGame() {
+  for (uint8_t i = 0; i < gameCount; ++i)
+    if (games[i].id == detailGameId) return &games[i];
+  return nullptr;
+}
+void addDetailRow(const String &name, const String &away, const String &home) {
+  if (detail.count >= 5) return;
+  detail.label[detail.count] = name;
+  detail.away[detail.count] = away;
+  detail.home[detail.count] = home;
+  ++detail.count;
+}
+void fetchDetailStats(uint32_t id) {
+  Game *g = nullptr;
+  for (uint8_t i = 0; i < gameCount; ++i)
+    if (games[i].id == id) { g = &games[i]; break; }
+  if (!g) return;
+  if (detail.gameId == id && detail.loaded) {
+    const uint32_t ttl = (g->state == "LIVE" || g->state == "CRIT") ? 30000 : 180000;
+    if (millis() - detail.updatedAt < ttl) return;
+  }
+  detail.gameId = id;
+  detail.loaded = false;
+  detail.count = 0;
+  detail.error = "";
+  if (WiFi.status() != WL_CONNECTED) {
+    detail.error = "Wi-Fi unavailable";
+    detail.loaded = true;
+    detail.updatedAt = millis();
+    return;
+  }
+  WiFiClientSecure client;
+  client.setInsecure(); // Same trusted-read limitation as the scoreboard.
+  HTTPClient http;
+  http.setTimeout(4000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.useHTTP10(true);
+
+  if (g->state == "FUT" || g->state == "PRE") {
+    if (http.begin(client, "https://api-web.nhle.com/v1/standings/now")
+        && http.GET() == HTTP_CODE_OK) {
+      StaticJsonDocument<448> filter;
+      JsonObject row = filter["standings"][0].to<JsonObject>();
+      row["teamAbbrev"]["default"] = true;
+      row["wins"] = true;
+      row["losses"] = true;
+      row["otLosses"] = true;
+      row["points"] = true;
+      DynamicJsonDocument parsed(8192);
+      DeserializationError err = deserializeJson(
+        parsed, http.getStream(), DeserializationOption::Filter(filter));
+      if (!err) {
+        String records[2], points[2];
+        JsonArray standings = parsed["standings"].as<JsonArray>();
+        for (JsonObject team : standings) {
+          String code = team["teamAbbrev"]["default"].as<String>();
+          int side = code == g->away ? 0 : code == g->home ? 1 : -1;
+          if (side == -1) continue;
+          records[side] = String((int)(team["wins"] | 0)) + "-" +
+                          String((int)(team["losses"] | 0)) + "-" +
+                          String((int)(team["otLosses"] | 0));
+          points[side] = String((int)(team["points"] | 0));
+        }
+        if (records[0].length() && records[1].length()) {
+          addDetailRow("W-L-OT", records[0], records[1]);
+          addDetailRow("POINTS", points[0], points[1]);
+        }
+      }
+    }
+  } else {
+    if (g->awayShots >= 0 && g->homeShots >= 0)
+      addDetailRow("SHOTS", String(g->awayShots), String(g->homeShots));
+    const String url = "https://api-web.nhle.com/v1/gamecenter/" +
+                       String(id) + "/right-rail";
+    if (http.begin(client, url) && http.GET() == HTTP_CODE_OK) {
+      StaticJsonDocument<384> filter;
+      JsonObject row = filter["teamGameStats"][0].to<JsonObject>();
+      row["category"] = true;
+      row["awayValue"] = true;
+      row["homeValue"] = true;
+      DynamicJsonDocument parsed(4096);
+      DeserializationError err = deserializeJson(
+        parsed, http.getStream(), DeserializationOption::Filter(filter));
+      if (!err) {
+        const struct { const char *id; const char *name; } targets[] = {
+          {"faceoffWinningPctg", "FACEOFFS"},
+          {"powerPlay", "POWER PLAY"},
+          {"hits", "HITS"},
+          {"blockedShotAttempts", "BLOCKS"},
+          {"pim", "PEN. MIN"},
+          {"giveaways", "GIVEAWAYS"},
+          {"sog", "SHOTS"}
+        };
+        JsonArray values = parsed["teamGameStats"].as<JsonArray>();
+        for (const auto &target : targets) {
+          for (JsonObject row : values) {
+            String category = row["category"].as<String>();
+            if (!category.equalsIgnoreCase(target.id)) continue;
+            if (detail.count >= 5) break;
+            if (category == "sog" && g->awayShots >= 0) break;
+            addDetailRow(target.name,
+                         row["awayValue"].as<String>(),
+                         row["homeValue"].as<String>());
+            break;
+          }
+        }
+      }
+    }
+  }
+  http.end();
+  if (!detail.count) detail.error = (g->state == "FUT" || g->state == "PRE")
+      ? "Team records not yet available" : "Game stats not yet available";
+  detail.loaded = true;
+  detail.updatedAt = millis();
+  needsDraw = true;
+}
+
 void loadSettings() {
   prefs.begin("gameday", false);
   cfg.ssid = prefs.getString("ssid", "");
@@ -720,6 +900,7 @@ void setup() {
   // Some ILI9341-compatible CYDs boot with visually inverted colors.
   // Runtime setting is stored in NVS, so the user can change it from web or touch.
   tft.invertDisplay(cfg.invertScreen);
+  applyTimezone();
 
   WiFi.persistent(false);
   WiFi.setSleep(false);
