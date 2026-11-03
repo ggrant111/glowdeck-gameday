@@ -597,7 +597,10 @@ bool loadSeasonStandings() {
   JsonArray teams = parsed["standings"].as<JsonArray>();
   if (teams.isNull()) return standingsReady;
   uint8_t loaded = 0;
-  SeasonStanding fresh[32];
+  // 32 Arduino String-based records need not reside on the loopTask stack.
+  // Standings requests are serialized on this single Arduino task.
+  static SeasonStanding fresh[32];
+  for (auto &entry : fresh) entry = SeasonStanding();
   for (JsonObject row : teams) {
     if (loaded >= 32) break;
     const String team = row["teamAbbrev"]["default"].as<String>();
@@ -1859,6 +1862,7 @@ void registerRoutes() {
         ? (int32_t)((millis() - nhlLastSuccessAt) / 1000UL) : -1;
     doc["error"] = lastError;
     doc["freeHeap"] = ESP.getFreeHeap();
+    doc["stackLowWater"] = uxTaskGetStackHighWaterMark(nullptr);
     doc["uptimeSeconds"] = millis() / 1000UL;
     sendJson(doc);
   });
@@ -2151,6 +2155,10 @@ void setup() {
   Serial.begin(115200);
   delay(100);
   Serial.println("\nGlowDeck GameDay v0.2.9 — CYD only");
+  Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
+  Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
+                (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+                (unsigned)ESP.getFreeHeap());
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
