@@ -428,6 +428,12 @@ void prepareNewScoreboardDate(const String &today) {
     needDetailLoad = false;
     detail.loaded = false;
     for (auto &entry : carouselStats) entry = CarouselStats();
+    standingsReady = false;
+    standingsLastAttempt = 0;
+    standingsForDate = "";
+    for (auto &entry : seasonStandings) entry = SeasonStanding();
+    for (auto &entry : conferenceSnapshots) entry = ConferenceSnapshot();
+    lastConferenceFetch = 0;
     for (auto &entry : goalWatch) entry = GoalWatch();
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) cfg.followIds[i] = 0;
@@ -1208,6 +1214,12 @@ void pollNhl() {
     needDetailLoad = false;
     detail.loaded = false;
     for (auto &entry : carouselStats) entry = CarouselStats();
+    standingsReady = false;
+    standingsLastAttempt = 0;
+    standingsForDate = "";
+    for (auto &entry : seasonStandings) entry = SeasonStanding();
+    for (auto &entry : conferenceSnapshots) entry = ConferenceSnapshot();
+    lastConferenceFetch = 0;
     if (screen == Screen::STATS) screen = Screen::LIVE;
   } else if (gameCount) {
     bool found = false;
@@ -1265,12 +1277,25 @@ void pollNhl() {
       partialLiveUpdate = true;
     else needsDraw = true;
   }
-  // Force a newer comparison when the user is viewing live stats.
+  // If puck drop occurs while the pregame detail page is open, replace
+  // season/conference rows with the live shots, faceoffs, PP and hits view
+  // promptly, without waiting for the previous pregame cache TTL.
   if (screen == Screen::STATS && detailGameId) {
     Game *viewed = detailGame();
-    if (viewed && (viewed->state == "LIVE" || viewed->state == "CRIT")
-        && millis() - detail.updatedAt >= 30000)
-      needDetailLoad = true;
+    if (viewed) {
+      const bool pregame = viewed->state == "FUT" || viewed->state == "PRE";
+      if (detail.gameId == viewed->id &&
+          detail.loaded && detail.fetchedPregame != pregame) {
+        detail.loaded = false;
+        detail.count = 0;
+        needDetailLoad = true;
+        needsDraw = true;
+      } else if (!pregame &&
+                 (viewed->state == "LIVE" || viewed->state == "CRIT") &&
+                 uint32_t(millis() - detail.updatedAt) >= 30000UL) {
+        needDetailLoad = true;
+      }
+    }
   }
 }
 
@@ -1428,11 +1453,11 @@ void drawLiveReadout(const Game &g) {
   String footerLeft = "PP --", footerMid = "PIM --", footerRight = "FO --";
   const CarouselStats &cached = statsFor(featuredIndex % gameCount);
   if (gameIsFuture(g)) {
-    footerLeft = cached.recordAway.length() && cached.recordHome.length()
-        ? "REC " + cached.recordAway + "|" + cached.recordHome : "REC --";
-    footerMid = cached.pointsAway.length() && cached.pointsHome.length()
-        ? "PTS " + cached.pointsAway + "-" + cached.pointsHome : "PTS --";
-    footerRight = "PREGAME";
+    // Fit both clubs' season records into separate cells. The old combined
+    // "REC 11-2-2|9-5-0" overflowed a single cell on the 320px TFT.
+    footerLeft = cached.recordAway.length() ? cached.recordAway : "--";
+    footerMid = "W-L-OT";
+    footerRight = cached.recordHome.length() ? cached.recordHome : "--";
   } else {
     if (cached.ppAway.length() && cached.ppHome.length())
       footerLeft = "PP " + cached.ppAway + "|" + cached.ppHome;
@@ -1717,7 +1742,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1024> doc;
-    doc["version"] = "0.2.6";
+    doc["version"] = "0.2.7";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -2016,7 +2041,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.2.6 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.2.7 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
@@ -2159,6 +2184,9 @@ void loop() {
     partialLiveUpdate = false;
     drawLiveReadout(games[featuredIndex % gameCount]);
   }
+  // Update one optional pregame conference record after the current frame
+  // is painted. This keeps the first season/standings view responsive.
+  tickPregameConferenceRecords();
   if (rebootAt && int32_t(now - rebootAt) >= 0) ESP.restart();
   delay(5);
 }
