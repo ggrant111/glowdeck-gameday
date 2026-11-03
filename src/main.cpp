@@ -1811,7 +1811,7 @@ void registerRoutes() {
   });
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
-    StaticJsonDocument<1024> doc;
+    StaticJsonDocument<1536> doc;
     doc["version"] = "0.2.8";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
@@ -1833,7 +1833,14 @@ void registerRoutes() {
     doc["featuredIndex"] = featuredIndex;
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
-    doc["scorePollSeconds"] = currentScoreboardPollIntervalMs() / 1000UL;
+    doc["scorePollSeconds"] = NhlFetchPolicy::pollIntervalMs(
+      currentScoreboardPollIntervalMs(), nhlConsecutiveFailures) / 1000UL;
+    doc["nhlFailures"] = nhlConsecutiveFailures;
+    doc["nhlLastHttp"] = nhlLastHttpCode;
+    doc["nhlExpectedBytes"] = nhlLastContentLength;
+    doc["nhlLastDurationMs"] = nhlLastDurationMs;
+    doc["nhlLastSuccessAgeSeconds"] = nhlLastSuccessAt
+        ? (int32_t)((millis() - nhlLastSuccessAt) / 1000UL) : -1;
     doc["error"] = lastError;
     doc["freeHeap"] = ESP.getFreeHeap();
     doc["uptimeSeconds"] = millis() / 1000UL;
