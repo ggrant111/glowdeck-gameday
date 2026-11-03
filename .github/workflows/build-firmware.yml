@@ -40,6 +40,12 @@ jobs:
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_standings_carousel.cpp -o /tmp/glowdeck-standings-test
           /tmp/glowdeck-standings-test
+      - name: Test WLED celebration event masks, phases and NHL transitions
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_celebration_engine.cpp -o /tmp/glowdeck-celebration-test
+          /tmp/glowdeck-celebration-test
+      - name: Validate embedded web dashboard JavaScript
+        run: python tests/check_web_ui.py
       - name: Install PlatformIO
         run: pip install platformio==6.1.18
       - name: Install logo build dependencies
