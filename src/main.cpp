@@ -58,6 +58,9 @@ Game games[MAX_GAMES];
 uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
 uint32_t lastCarouselAdvance = 0;
 String scoreboardDate;
+String targetScoreboardDate;
+bool scoreboardLoaded = false;
+uint32_t lastDateCheck = 0;
 uint32_t selectedGameId = 0;
 int previousHome = 0, previousAway = 0;
 bool haveBaseline = false, mdnsStarted = false, mdnsAttempted = false, needsDraw = true;
@@ -185,6 +188,49 @@ const char *timezoneLabel() {
 void applyTimezone() {
   setenv("TZ", timezoneRule(), 1);
   tzset();
+}
+
+// Local date is authoritative for the calendar displayed by the CYD.
+// The NHL's /score/now redirect can remain on yesterday well into the morning.
+String deviceLocalDate() {
+  const time_t utcNow = time(nullptr);
+  if (utcNow < 1735689600) return ""; // UTC clock not synchronized (before 2025).
+  struct tm date = {};
+  localtime_r(&utcNow, &date);
+  char result[11] = {};
+  if (!strftime(result, sizeof(result), "%Y-%m-%d", &date)) return "";
+  return String(result);
+}
+
+void prepareNewScoreboardDate(const String &today) {
+  if (today.isEmpty() || today == targetScoreboardDate) return;
+  targetScoreboardDate = today;
+  // If the device was displaying yesterday, immediately retire that slate.
+  // This also avoids accidental goal alerts for previous-day games.
+  if (scoreboardLoaded && scoreboardDate != today) {
+    Serial.printf("GameDay rollover: %s -> %s\n",
+                  scoreboardDate.c_str(), today.c_str());
+    scoreboardLoaded = false;
+    scoreboardDate = "";
+    gameCount = 0;
+    gamePage = 0;
+    featuredIndex = 0;
+    lastCarouselAdvance = millis();
+    needDetailLoad = false;
+    detail.loaded = false;
+    for (auto &entry : carouselStats) entry = CarouselStats();
+    if (screen == Screen::STATS) screen = Screen::LIVE;
+    if (selectedGameId) {
+      selectedGameId = 0;
+      prefs.putUInt("game", 0);
+    }
+    haveBaseline = false;
+    previousHome = previousAway = 0;
+    needsDraw = true;
+  }
+  // Poll the explicitly dated endpoint on the next loop, even when the
+  // previous game was being polled on a slower idle interval.
+  lastPoll = millis() - IDLE_POLL_MS;
 }
 String formattedStart(const String &utc) {
   int yr = 0, mo = 0, dy = 0, hh = 0, mm = 0, sec = 0;
@@ -559,7 +605,10 @@ void pollNhl() {
   http.setTimeout(4500);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.useHTTP10(true); // JSON stream will not contain chunked transfer framing.
-  if (!http.begin(client, "https://api-web.nhle.com/v1/score/now")) {
+  const String requestedDate = deviceLocalDate();
+  const String endpoint = "https://api-web.nhle.com/v1/score/" +
+                          (requestedDate.length() ? requestedDate : String("now"));
+  if (!http.begin(client, endpoint)) {
     lastError = "NHL connection setup failed";
     return;
   }
@@ -603,8 +652,20 @@ void pollNhl() {
   const uint32_t previouslyFeatured = gameCount ?
       games[min((int)featuredIndex, (int)gameCount - 1)].id : 0;
   String newScoreboardDate = doc["currentDate"].as<String>();
+  if (newScoreboardDate.length() != 10) {
+    lastError = "Invalid NHL scoreboard date";
+    return;
+  }
+  // Never replace today's schedule with stale /now data or a mismatched
+  // redirect. A successful empty games[] still counts as today's schedule.
+  if (requestedDate.length() && newScoreboardDate != requestedDate) {
+    lastError = "NHL returned " + newScoreboardDate + ", expected " + requestedDate;
+    return;
+  }
   bool newDay = newScoreboardDate != scoreboardDate;
   scoreboardDate = newScoreboardDate;
+  scoreboardLoaded = true;
+  if (requestedDate.length()) targetScoreboardDate = requestedDate;
   gameCount = 0;
   for (JsonObject item : arr) {
     if (gameCount >= MAX_GAMES) break;
@@ -630,6 +691,8 @@ void pollNhl() {
     lastCarouselAdvance = millis();
     needDetailLoad = false;
     detail.loaded = false;
+    for (auto &entry : carouselStats) entry = CarouselStats();
+    if (screen == Screen::STATS) screen = Screen::LIVE;
   } else if (gameCount) {
     bool found = false;
     for (uint8_t i = 0; i < gameCount; ++i) {
@@ -643,6 +706,12 @@ void pollNhl() {
   } else featuredIndex = 0;
   if (gamePage * 3 >= gameCount) gamePage = 0;
   lastError = "";
+  if (selectedGameId && !selectedGame()) {
+    // Do not keep an old, invisible matchup armed after a calendar rollover.
+    selectedGameId = 0;
+    prefs.putUInt("game", 0);
+    haveBaseline = false;
+  }
   Game *g = selectedGame();
   if (g) {
     if (haveBaseline && (g->state == "LIVE" || g->state == "CRIT")) {
@@ -874,9 +943,13 @@ void draw() {
       tft.setTextDatum(MC_DATUM);
       tft.setTextColor(WHITE, ARENA_BLACK);
       tft.drawString("NHL GAMEDAY", 160, 46, 4);
-      tft.drawString(lastError.length() ? lastError : "Waiting for games...", 160, 108, 2);
+      const String message = lastError.length() ? lastError
+          : scoreboardLoaded ? String("No NHL games scheduled")
+          : String("Loading today's games...");
+      tft.drawString(message, 160, 108, 2);
       tft.setTextColor(ICE_TEXT, ARENA_BLACK);
-      tft.drawString("Tap the top-right for the menu", 160, 193, 2);
+      tft.drawString(targetScoreboardDate.length() ? targetScoreboardDate : scoreboardDate, 160, 144, 2);
+      tft.drawString("Tap top-right for the menu", 160, 193, 2);
       tft.setTextDatum(TL_DATUM);
     } else {
       const Game &g = games[featuredIndex % gameCount];
@@ -938,8 +1011,11 @@ void draw() {
   } else if (screen == Screen::GAMES) {
     textAt("Select a goal-alert game", 12, 39, WHITE, 2);
     if (!gameCount) {
-      textAt(lastError.isEmpty() ? "Loading games..." : lastError, 12, 81, ORANGE);
-      textAt("Wi-Fi connection required", 12, 105, MUTED);
+      textAt(!lastError.isEmpty() ? lastError
+             : scoreboardLoaded ? "No NHL games today" : "Loading games...", 12, 81, ORANGE);
+      textAt(targetScoreboardDate.length() ? targetScoreboardDate :
+             WiFi.status() == WL_CONNECTED ? "NHL connection required" : "Wi-Fi connection required",
+             12, 105, MUTED);
     }
     for (uint8_t n = 0; n < 3; ++n) {
       uint8_t i = gamePage * 3 + n;
@@ -1108,7 +1184,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1024> doc;
-    doc["version"] = "0.2.3";
+    doc["version"] = "0.2.4";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -1117,6 +1193,9 @@ void registerRoutes() {
     doc["selectedId"] = selectedGameId;
     doc["mode"] = cfg.mode;
     doc["scoreDate"] = scoreboardDate;
+    doc["today"] = targetScoreboardDate;
+    doc["clockSynced"] = deviceLocalDate().length() == 10;
+    doc["scoreboardLoaded"] = scoreboardLoaded;
     doc["featuredIndex"] = featuredIndex;
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
@@ -1228,6 +1307,9 @@ void registerRoutes() {
     if (requestedTimezone != cfg.timezone) {
       cfg.timezone = requestedTimezone;
       applyTimezone();
+      // A new timezone can change what 'today' means on this CYD.
+      lastDateCheck = millis() - 5000UL;
+      lastPoll = millis() - IDLE_POLL_MS;
       needsDraw = true;
     }
     bool invert = doc["screenInverted"] | cfg.invertScreen;
@@ -1316,7 +1398,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.2.3 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.2.4 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
@@ -1370,13 +1452,23 @@ void loop() {
   if (connected && !wifiWasConnected) {
     wifiWasConnected = true;
     mdnsAttempted = false;
-    lastPoll = millis() - IDLE_POLL_MS; // Fetch soon after connection, not 60 seconds later.
+    // SNTP runs asynchronously; neither boot nor web dashboard waits for it.
+    configTzTime(timezoneRule(), "pool.ntp.org", "time.nist.gov");
+    lastDateCheck = millis() - 5000UL;
+    lastPoll = millis() - IDLE_POLL_MS;
     needsDraw = true;
   } else if (!connected && wifiWasConnected) {
     wifiWasConnected = false;
     mdnsStarted = false;
     mdnsAttempted = false;
     needsDraw = true;
+  }
+  // Independent of NHL polling, check calendar rollover even with an
+  // unarmed game, an empty schedule, or while Wi-Fi is temporarily offline.
+  if (uint32_t(now - lastDateCheck) >= 5000UL) {
+    lastDateCheck = now;
+    const String today = deviceLocalDate();
+    if (today.length()) prepareNewScoreboardDate(today);
   }
   if (connected) {
     if (!mdnsAttempted) {
