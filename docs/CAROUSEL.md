@@ -1,10 +1,10 @@
-# v0.2.1 — Full-screen broadcast scoreboard
+# v0.2.2 — Full-screen broadcast scoreboard
 
 The daily carousel has been restyled to match the supplied NHL scoreboard reference, adapted for 320x240 pixels. The full-screen layout presents a compact NHL header, a LIVE/NEXT/FINAL indicator, a large period/clock banner, large scores, authentic 56px transparent team logos, team-color underlines, a shots-on-goal strip, and contextual match information below. It uses a dark, vector-drawn arena/rink background without needing large bitmap framebuffers.
 
 **No persistent bottom navigation buttons appear on the carousel.** To navigate, **swipe left/right** for the next/previous game. **Tap the center of the scoreboard** to open team stats. **Tap the small top-right menu icon** to open the game list; from there you can select SETUP. The corners of the lower band also support previous/next tapping. Stats still has BACK / ARM / SETUP, and the Games page retains regular navigation.
 
-**Logos:** The logo generator packs 56x56 images as native 4-bit TFT sprites. Palette index 0 is now truly transparent and the display library skips those pixels, eliminating the opaque bluish/purple squares in the earlier screen photo. Source marks remain NHL/team trademarks.
+**Logos:** The logo generator packs 56x56 images as 4-bit palette indices in flash. The v0.2.2 renderer explicitly decodes each row to ordinary 16-bit RGB565 runs and skips transparent pixels, avoiding the striped result from the previous indexed pushImage call. Source marks remain NHL/team trademarks.
 
 **Display refresh:** NHL polls that update the same game only redraw the period, score and SOG/stats panels, not the logos or full screen. Automatic carousel transitions repaint the full 320x240 screen, so display colors and the touch targets still require hardware validation.
 
@@ -82,3 +82,9 @@ Once the successful CI build artifact is ready, unzip its \`firmware.bin\`, open
 The NHL public, unofficially documented API may change its JSON structure. Scoreboard fallback is designed to keep displaying previous data if a poll fails; stats are fetched only when requested. See [Games API reference](https://github.com/pseudo-r/Public-NHL-API/blob/main/docs/web-api/games.md) and [right-rail schema](https://rdrr.io/cran/fastRhockey/man/nhl_gamecenter_right_rail.html).
 
 NHL team logos are used for identifying game participants; all NHL logos remain the trademarks of the NHL and their respective teams. This is a personal hobby display and no affiliation with the NHL is claimed.
+
+## v0.2.2 hardware fixes
+
+After two device photos showed striped team logos, an overly blue arena, and decimal faceoff ratios, this release changes the drawing path without altering Wi-Fi, WLED, OTA or game selection. Team logos use 16-bit row runs with transparent gaps; the background is much darker; faceoff values render as percentages such as 37.9% rather than 0.37931. The stats page has a higher-contrast dark comparison panel.
+
+**Hardware smoke test:** Verify both team logos on at least two games, confirm the background is dark navy, tap through to see shots/faceoffs, swipe the carousel, and check that OTA/settings and armed-game selections still work. GitHub compilation alone cannot verify the physical panel rendering.

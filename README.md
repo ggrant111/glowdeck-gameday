@@ -2,15 +2,17 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.2.1 full-screen broadcast UI build.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.2.2 CYD screen-fix build.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
-- **TODAY:** Full-screen NHL broadcast-style scoreboard with transparent logos, larger scores, live clock/period and SOG. Swipe left/right to rotate games, tap the matchup for stats, and tap the small top-right menu to reach Games/Setup. No persistent bottom navigation.
+- **TODAY:** Full-screen NHL broadcast-style scoreboard with corrected 16-bit RGB565 logos, larger scores, live clock/period and SOG. Swipe left/right to rotate games, tap the matchup for stats, and tap the small top-right menu to reach Games/Setup. No persistent bottom navigation.
 - **GAMES:** Choose the matchup that is armed for goal celebrations. Use prev / next to page.
 - **SETUP:** IP address, Wi-Fi hotspot credentials, test lights and touch calibration.
 
 The first score after selecting a game is used as a baseline and never replays an earlier goal.
+
+**v0.2.2 display correction:** Fixes horizontal striped team logos seen in physical CYD photos, darkens the electric-blue arena background, and formats faceoff fractions as percentages. Hardware confirmation is still needed after OTA.
 
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
