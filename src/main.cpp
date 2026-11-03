@@ -88,6 +88,7 @@ uint32_t rearPulseStart = 0;
 uint32_t rearLastTick = 0;
 uint8_t rearLastDuty[3] = {255, 255, 255};
 uint32_t lastPpFallback = 0;
+uint32_t rearTestPpUntil = 0, rearTestPpColor = 0;
 uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
 uint32_t lastCarouselAdvance = 0;
 String scoreboardDate;
@@ -244,6 +245,7 @@ void triggerRearGoal(uint32_t rgb) {
 void stopRearLed() {
   rearEvent = RearEvent::IDLE;
   rearGoalDuration = 0;
+  rearTestPpUntil = 0;
   writeRearLed(0, 0);
 }
 
@@ -296,7 +298,10 @@ void tickRearLed() {
   }
   rearGoalDuration = 0;
   uint32_t ppColor = 0;
-  if (cfg.rearPowerPlay && activePowerPlaySide(now, ppColor)) {
+  const bool testPulse = rearTestPpUntil &&
+      int32_t(rearTestPpUntil - now) > 0;
+  if (testPulse) ppColor = rearTestPpColor;
+  if (testPulse || (cfg.rearPowerPlay && activePowerPlaySide(now, ppColor))) {
     if (rearEvent != RearEvent::POWER_PLAY) rearPulseStart = now;
     rearEvent = RearEvent::POWER_PLAY;
     writeRearLed(ppColor, RearLedPattern::pulse(uint32_t(now - rearPulseStart)));
@@ -380,6 +385,8 @@ void prepareNewScoreboardDate(const String &today) {
     for (auto &entry : carouselStats) entry = CarouselStats();
     for (auto &entry : goalWatch) entry = GoalWatch();
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
+    for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) cfg.followIds[i] = 0;
+    saveSettings();
     stopRearLed();
     if (screen == Screen::STATS) screen = Screen::LIVE;
     if (selectedGameId) {
@@ -963,6 +970,20 @@ void pollNhl() {
     prefs.putUInt("game", 0);
     haveBaseline = false;
   }
+  // A followed game is a game-ID from today's schedule, not a season-wide team.
+  // Remove followers after a date change so old IDs cannot trigger new events.
+  bool followedChanged = false;
+  for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) {
+    if (!cfg.followIds[i]) continue;
+    bool present = false;
+    for (uint8_t j = 0; j < gameCount; ++j)
+      if (games[j].id == cfg.followIds[i]) present = true;
+    if (!present) {
+      cfg.followIds[i] = 0;
+      followedChanged = true;
+    }
+  }
+  if (followedChanged) saveSettings();
   detectRearGoalChanges();
   Game *g = selectedGame();
   if (g) {
@@ -1436,7 +1457,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1024> doc;
-    doc["version"] = "0.2.4";
+    doc["version"] = "0.2.5";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -1444,6 +1465,12 @@ void registerRoutes() {
     doc["mdns"] = mdnsStarted ? mdnsName + ".local" : "";
     doc["selectedId"] = selectedGameId;
     doc["mode"] = cfg.mode;
+    doc["rearEnabled"] = cfg.rearLedEnabled;
+    doc["rearEvent"] = rearEvent == RearEvent::GOAL ? "GOAL" :
+                       rearEvent == RearEvent::POWER_PLAY ? "POWER_PLAY" : "IDLE";
+    JsonArray followed = doc.createNestedArray("followed");
+    for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
+      if (cfg.followIds[i]) followed.add(cfg.followIds[i]);
     doc["scoreDate"] = scoreboardDate;
     doc["today"] = targetScoreboardDate;
     doc["clockSynced"] = deviceLocalDate().length() == 10;
@@ -1476,6 +1503,8 @@ void registerRoutes() {
       g["periodType"] = games[i].periodType;
       g["clock"] = games[i].clock;
       g["intermission"] = games[i].intermission;
+      g["powerPlaySide"] = games[i].ppSide;
+      g["followed"] = rearFollows(games[i].id);
     }
     sendJson(doc);
   });
@@ -1527,6 +1556,11 @@ void registerRoutes() {
     doc["brightness"] = cfg.brightness;
     doc["seconds"] = cfg.seconds;
     doc["horn"] = cfg.horn;
+    doc["rearEnabled"] = cfg.rearLedEnabled;
+    doc["rearGoal"] = cfg.rearGoal;
+    doc["rearPowerPlay"] = cfg.rearPowerPlay;
+    doc["rearBrightness"] = cfg.rearBrightness;
+    doc["rearGoalSeconds"] = cfg.rearGoalSeconds;
     doc["screenInverted"] = cfg.invertScreen;
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
@@ -1560,6 +1594,12 @@ void registerRoutes() {
     cfg.brightness = constrain((int)(doc["brightness"] | cfg.brightness), 1, 255);
     cfg.seconds = constrain((int)(doc["seconds"] | cfg.seconds), 2, 30);
     cfg.horn = doc["horn"] | cfg.horn;
+    cfg.rearLedEnabled = doc["rearEnabled"] | cfg.rearLedEnabled;
+    cfg.rearGoal = doc["rearGoal"] | cfg.rearGoal;
+    cfg.rearPowerPlay = doc["rearPowerPlay"] | cfg.rearPowerPlay;
+    cfg.rearBrightness = constrain((int)(doc["rearBrightness"] | cfg.rearBrightness), 1, 255);
+    cfg.rearGoalSeconds = constrain((int)(doc["rearGoalSeconds"] | cfg.rearGoalSeconds), 2, 12);
+    if (!cfg.rearLedEnabled) stopRearLed();
     cfg.cycleGames = doc["cycleGames"] | cfg.cycleGames;
     cfg.cycleSeconds = constrain((int)(doc["cycleSeconds"] | cfg.cycleSeconds), 5, 30);
     uint8_t requestedTimezone = constrain((int)(doc["timezone"] | cfg.timezone), 0, 4);
@@ -1610,6 +1650,64 @@ void registerRoutes() {
     WiFi.scanDelete();
     sendJson(doc);
   });
+  server.on("/api/rear/follow", HTTP_POST, []() {
+    if (!authorized()) return;
+    StaticJsonDocument<160> doc;
+    if (deserializeJson(doc, server.arg("plain"))) return errorResponse("Invalid JSON");
+    const uint32_t id = doc["id"] | 0U;
+    bool exists = false;
+    for (uint8_t i = 0; i < gameCount; ++i)
+      if (games[i].id == id) exists = true;
+    if (!id || !exists) return errorResponse("Choose a game on today's schedule", 404);
+    const bool followed = doc["follow"] | false;
+    if (followed) {
+      bool present = false;
+      for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
+        if (cfg.followIds[i] == id) present = true;
+      if (!present) {
+        bool added = false;
+        for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) {
+          if (cfg.followIds[i] == 0) { cfg.followIds[i] = id; added = true; break; }
+        }
+        if (!added) return errorResponse("Up to 4 additional followed games", 409);
+      }
+    } else {
+      for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
+        if (cfg.followIds[i] == id) cfg.followIds[i] = 0;
+    }
+    saveSettings();
+    StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
+  });
+  server.on("/api/rear/test", HTTP_POST, []() {
+    if (!authorized()) return;
+    StaticJsonDocument<160> doc;
+    if (deserializeJson(doc, server.arg("plain"))) return errorResponse("Invalid JSON");
+    const String mode = doc["mode"] | String("goal");
+    const String side = doc["side"] | String("home");
+    if (side != "home" && side != "away") return errorResponse("Invalid team side");
+    if (mode != "goal" && mode != "powerplay" && mode != "off")
+      return errorResponse("Invalid effect");
+    if (mode != "off" && !cfg.rearLedEnabled)
+      return errorResponse("Enable the rear LED and save settings first");
+    Game *g = selectedGame();
+    if (!g && gameCount) g = &games[featuredIndex % gameCount];
+    const uint32_t color = teamRgb(g ? (side == "home" ? g->home : g->away)
+                                      : String("UTA"));
+    if (mode == "off") stopRearLed();
+    else if (mode == "goal") {
+      rearTestPpUntil = 0;
+      rearGoalColor = color;
+      rearGoalAt = millis();
+      rearGoalDuration = uint32_t(cfg.rearGoalSeconds) * 1000UL;
+      rearEvent = RearEvent::GOAL;
+    } else {
+      rearGoalDuration = 0;
+      rearTestPpColor = color;
+      rearTestPpUntil = millis() + 9000UL;
+      rearEvent = RearEvent::IDLE;
+    }
+    StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
+  });
   server.on("/api/test", HTTP_POST, []() {
     if (!authorized()) return;
     StaticJsonDocument<160> doc;
@@ -1657,7 +1755,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.2.4 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.2.5 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
@@ -1674,6 +1772,7 @@ void setup() {
   ledcSetup(AUDIO_CH, 2000, 8);
   ledcAttachPin(PIN_AUDIO, AUDIO_CH);
   ledcWriteTone(AUDIO_CH, 0);
+  setupRearLed();
 
   char suffix[7];
   snprintf(suffix, sizeof(suffix), "%06X", (unsigned)(ESP.getEfuseMac() & 0xFFFFFF));
