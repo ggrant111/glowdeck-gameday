@@ -461,7 +461,12 @@ uint32_t gamesFingerprint() {
     hash = (hash ^ g.id) * 16777619UL;
     hash = (hash ^ uint32_t(g.homeScore)) * 16777619UL;
     hash = (hash ^ uint32_t(g.awayScore)) * 16777619UL;
-    const String *fields[] = {&g.home, &g.away, &g.state};
+    hash = (hash ^ uint32_t(g.homeShots + 1)) * 16777619UL;
+    hash = (hash ^ uint32_t(g.awayShots + 1)) * 16777619UL;
+    hash = (hash ^ uint32_t(g.period)) * 16777619UL;
+    hash = (hash ^ uint32_t(g.intermission)) * 16777619UL;
+    const String *fields[] = {&g.home, &g.away, &g.state, &g.clock,
+                              &g.periodType, &g.startUTC};
     for (const String *str : fields) {
       for (size_t j = 0; j < str->length(); ++j)
         hash = (hash ^ uint8_t((*str)[j])) * 16777619UL;
@@ -490,10 +495,20 @@ void pollNhl() {
     http.end();
     return;
   }
-  StaticJsonDocument<640> filter;
+  StaticJsonDocument<1280> filter;
+  filter["currentDate"] = true;
   JsonObject gameFilter = filter["games"][0].to<JsonObject>();
   gameFilter["id"] = true;
   gameFilter["gameState"] = true;
+  gameFilter["startTimeUTC"] = true;
+  gameFilter["periodDescriptor"]["number"] = true;
+  gameFilter["periodDescriptor"]["periodType"] = true;
+  gameFilter["clock"]["timeRemaining"] = true;
+  gameFilter["clock"]["inIntermission"] = true;
+  gameFilter["homeTeam"]["name"]["default"] = true;
+  gameFilter["homeTeam"]["sog"] = true;
+  gameFilter["awayTeam"]["name"]["default"] = true;
+  gameFilter["awayTeam"]["sog"] = true;
   gameFilter["homeTeam"]["abbrev"] = true;
   gameFilter["homeTeam"]["score"] = true;
   gameFilter["awayTeam"]["abbrev"] = true;
@@ -511,6 +526,11 @@ void pollNhl() {
     lastError = "NHL games unavailable";
     return;
   }
+  const uint32_t previouslyFeatured = gameCount ?
+      games[min((int)featuredIndex, (int)gameCount - 1)].id : 0;
+  String newScoreboardDate = doc["currentDate"].as<String>();
+  bool newDay = newScoreboardDate != scoreboardDate;
+  scoreboardDate = newScoreboardDate;
   gameCount = 0;
   for (JsonObject item : arr) {
     if (gameCount >= MAX_GAMES) break;
@@ -519,9 +539,35 @@ void pollNhl() {
     g.home = item["homeTeam"]["abbrev"].as<String>();
     g.away = item["awayTeam"]["abbrev"].as<String>();
     g.state = item["gameState"].as<String>();
+    g.startUTC = item["startTimeUTC"].as<String>();
+    g.homeName = item["homeTeam"]["name"]["default"].as<String>();
+    g.awayName = item["awayTeam"]["name"]["default"].as<String>();
+    g.periodType = item["periodDescriptor"]["periodType"].as<String>();
+    g.period = item["periodDescriptor"]["number"] | 0;
+    g.clock = item["clock"]["timeRemaining"].as<String>();
+    g.intermission = item["clock"]["inIntermission"] | false;
     g.homeScore = item["homeTeam"]["score"] | 0;
     g.awayScore = item["awayTeam"]["score"] | 0;
+    g.homeShots = item["homeTeam"]["sog"] | -1;
+    g.awayShots = item["awayTeam"]["sog"] | -1;
   }
+  if (newDay) {
+    featuredIndex = 0;
+    lastCarouselAdvance = millis();
+    needDetailLoad = false;
+    detail.loaded = false;
+  } else if (gameCount) {
+    bool found = false;
+    for (uint8_t i = 0; i < gameCount; ++i) {
+      if (games[i].id == previouslyFeatured) {
+        featuredIndex = i;
+        found = true;
+        break;
+      }
+    }
+    if (!found) featuredIndex = 0;
+  } else featuredIndex = 0;
+  if (gamePage * 3 >= gameCount) gamePage = 0;
   lastError = "";
   Game *g = selectedGame();
   if (g) {
@@ -539,7 +585,14 @@ void pollNhl() {
   } else {
     haveBaseline = false;
   }
-  if (gamesFingerprint() != previousFingerprint) needsDraw = true;
+  if (gamesFingerprint() != previousFingerprint || newDay) needsDraw = true;
+  // Force a newer comparison when the user is viewing live stats.
+  if (screen == Screen::STATS && detailGameId) {
+    Game *viewed = detailGame();
+    if (viewed && (viewed->state == "LIVE" || viewed->state == "CRIT")
+        && millis() - detail.updatedAt >= 30000)
+      needDetailLoad = true;
+  }
 }
 
 uint16_t to565(uint32_t rgb) {
