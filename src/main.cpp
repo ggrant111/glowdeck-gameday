@@ -2302,9 +2302,9 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     // New slide/standings metadata should not enlarge the loopTask stack.
-    DynamicJsonDocument doc(2304);
-    if (doc.capacity() < 2304) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.0";
+    DynamicJsonDocument doc(3072);
+    if (doc.capacity() < 3072) return errorResponse("Status memory unavailable", 503);
+    doc["version"] = "0.3.1";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -2312,6 +2312,13 @@ void registerRoutes() {
     doc["mdns"] = mdnsStarted ? mdnsName + ".local" : "";
     doc["selectedId"] = selectedGameId;
     doc["mode"] = cfg.mode;
+    doc["wledEvent"] = CelebrationEngine::label(wledActiveEvent);
+    doc["wledParticipants"] = wledEligibleCount(
+        wledActiveEvent == CelebrationEngine::Event::NONE
+        ? CelebrationEngine::Event::GOAL : wledActiveEvent);
+    JsonArray wledResults = doc.createNestedArray("wledResults");
+    for (uint8_t i = 0; i < MAX_WLED; ++i)
+      wledResults.add(wledDeviceResult[i]);
     doc["rearEnabled"] = cfg.rearLedEnabled;
     doc["rearEvent"] = rearEvent == RearEvent::GOAL ? "GOAL" :
                        rearEvent == RearEvent::POWER_PLAY ? "POWER_PLAY" : "IDLE";
@@ -2429,12 +2436,18 @@ void registerRoutes() {
   });
   server.on("/api/config", HTTP_GET, []() {
     if (!authorized()) return;
-    StaticJsonDocument<1536> doc;
+    DynamicJsonDocument doc(2560);
+    if (doc.capacity() < 2560) return errorResponse("Config memory unavailable", 503);
     doc["ssid"] = cfg.ssid;
     doc["mode"] = cfg.mode;
     doc["brightness"] = cfg.brightness;
     doc["seconds"] = cfg.seconds;
     doc["horn"] = cfg.horn;
+    doc["wledPP"] = cfg.wledPP;
+    doc["wledGameStart"] = cfg.wledGameStart;
+    doc["wledFinal"] = cfg.wledFinal;
+    doc["wledGoalStyle"] = cfg.wledGoalStyle;
+    doc["favoriteSide"] = cfg.favoriteSide;
     doc["rearEnabled"] = cfg.rearLedEnabled;
     doc["rearGoal"] = cfg.rearGoal;
     doc["rearPowerPlay"] = cfg.rearPowerPlay;
@@ -2450,13 +2463,15 @@ void registerRoutes() {
       JsonObject d = wled.createNestedObject();
       d["ip"] = cfg.wled[i];
       d["enabled"] = cfg.wledEnabled[i];
+      d["events"] = cfg.wledEvents[i];
     }
     sendJson(doc);
   });
   server.on("/api/config", HTTP_POST, []() {
     if (!authorized()) return;
     if (server.arg("plain").length() > 2500) return errorResponse("Configuration too large");
-    StaticJsonDocument<2560> doc;
+    DynamicJsonDocument doc(4096);
+    if (doc.capacity() < 4096) return errorResponse("Config memory unavailable", 503);
     if (deserializeJson(doc, server.arg("plain"))) return errorResponse("Invalid JSON");
     String ssid = doc["ssid"] | cfg.ssid;
     if (ssid.length() > 32) return errorResponse("SSID too long");
@@ -2474,6 +2489,11 @@ void registerRoutes() {
     cfg.brightness = constrain((int)(doc["brightness"] | cfg.brightness), 1, 255);
     cfg.seconds = constrain((int)(doc["seconds"] | cfg.seconds), 2, 30);
     cfg.horn = doc["horn"] | cfg.horn;
+    cfg.wledPP = doc["wledPP"] | cfg.wledPP;
+    cfg.wledGameStart = doc["wledGameStart"] | cfg.wledGameStart;
+    cfg.wledFinal = doc["wledFinal"] | cfg.wledFinal;
+    cfg.wledGoalStyle = constrain((int)(doc["wledGoalStyle"] | cfg.wledGoalStyle), 0, 3);
+    cfg.favoriteSide = constrain((int)(doc["favoriteSide"] | cfg.favoriteSide), 0, 1);
     cfg.rearLedEnabled = doc["rearEnabled"] | cfg.rearLedEnabled;
     cfg.rearGoal = doc["rearGoal"] | cfg.rearGoal;
     cfg.rearPowerPlay = doc["rearPowerPlay"] | cfg.rearPowerPlay;
@@ -2512,9 +2532,22 @@ void registerRoutes() {
       IPAddress parsed;
       if (!ip.isEmpty() && !parsed.fromString(ip))
         return errorResponse("WLED address must be an IPv4 address");
+      const bool enable = arr[i]["enabled"] | cfg.wledEnabled[i];
+      const uint8_t mask = constrain((int)(arr[i]["events"] | cfg.wledEvents[i]),
+                                      0, CelebrationEngine::ALL_EVENTS);
+      if (cfg.wled[i] != ip || cfg.wledEnabled[i] != enable ||
+          cfg.wledEvents[i] != mask) {
+        if (restoring[i]) {
+          restoreAt[i] = millis();
+          restoreRetries[i] = 0;
+        }
+      }
       cfg.wled[i] = ip;
-      cfg.wledEnabled[i] = arr[i]["enabled"] | false;
+      cfg.wledEnabled[i] = enable;
+      cfg.wledEvents[i] = mask;
     }
+    if (wledActiveEvent == CelebrationEngine::Event::POWER_PLAY && !cfg.wledPP)
+      scheduleWledRestoreAll();
     saveSettings();
     if (wifiChanged) {
       WiFi.disconnect();
@@ -2643,7 +2676,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.3.0 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.3.1 — CYD only");
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),
