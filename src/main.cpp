@@ -190,6 +190,137 @@ uint32_t teamRgb(const String &code) {
   return 0x31837A;
 }
 
+bool rearFollows(uint32_t gameId) {
+  if (!gameId) return false;
+  if (gameId == selectedGameId) return true; // Armed WLED game also drives rear RGB.
+  for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
+    if (cfg.followIds[i] == gameId) return true;
+  return false;
+}
+
+void setupRearLed() {
+  // Active-LOW common-anode LED: PWM duty 255 is OFF.
+  const uint8_t pins[3] = {PIN_RGB_R, PIN_RGB_G, PIN_RGB_B};
+  const uint8_t channels[3] = {RGB_CH_R, RGB_CH_G, RGB_CH_B};
+  for (uint8_t i = 0; i < 3; ++i) {
+    pinMode(pins[i], OUTPUT);
+    digitalWrite(pins[i], HIGH); // OFF before PWM is attached.
+    ledcSetup(channels[i], 4000, 8);
+    ledcAttachPin(pins[i], channels[i]);
+    ledcWrite(channels[i], 255);
+  }
+}
+
+void writeRearLed(uint32_t rgb, uint8_t intensity) {
+  const uint8_t colors[3] = {
+    (uint8_t)((rgb >> 16) & 255), (uint8_t)((rgb >> 8) & 255),
+    (uint8_t)(rgb & 255)
+  };
+  const uint8_t channels[3] = {RGB_CH_R, RGB_CH_G, RGB_CH_B};
+  for (uint8_t i = 0; i < 3; ++i) {
+    const uint8_t duty = RearLedPattern::invertedDuty(
+      colors[i], cfg.rearBrightness, intensity);
+    if (duty != rearLastDuty[i]) {
+      rearLastDuty[i] = duty;
+      ledcWrite(channels[i], duty);
+    }
+  }
+}
+
+void triggerRearGoal(uint32_t rgb) {
+  if (!cfg.rearLedEnabled || !cfg.rearGoal) return;
+  rearGoalColor = rgb;
+  rearGoalAt = millis();
+  rearGoalDuration = uint32_t(cfg.rearGoalSeconds) * 1000UL;
+  rearEvent = RearEvent::GOAL;
+}
+
+void stopRearLed() {
+  rearEvent = RearEvent::IDLE;
+  rearGoalDuration = 0;
+  writeRearLed(0, 0);
+}
+
+// The NHL 'situation' object marks which team has "PP" and/or more skaters.
+// Treat missing data as UNKNOWN: no invented power-play event.
+uint8_t detectPowerPlay(JsonVariantConst situation) {
+  if (situation.isNull()) return 0;
+  JsonVariantConst home = situation["homeTeam"];
+  JsonVariantConst away = situation["awayTeam"];
+  auto hasPP = [](JsonVariantConst team) -> bool {
+    for (JsonVariantConst label : team["situationDescriptions"].as<JsonArrayConst>()) {
+      if (label.as<String>().indexOf("PP") >= 0) return true;
+    }
+    return false;
+  };
+  const bool homePP = hasPP(home), awayPP = hasPP(away);
+  if (homePP && !awayPP) return 1;
+  if (awayPP && !homePP) return 2;
+  if (!home["strength"].isNull() && !away["strength"].isNull()) {
+    const int h = home["strength"] | 0, a = away["strength"] | 0;
+    if (h > a) return 1;
+    if (a > h) return 2;
+  }
+  return 0;
+}
+
+uint8_t activePowerPlaySide(uint32_t now, uint32_t &color) {
+  for (uint8_t i = 0; i < gameCount; ++i) {
+    const Game &g = games[i];
+    if (!rearFollows(g.id) || (g.state != "LIVE" && g.state != "CRIT") ||
+        g.intermission || !g.ppDataKnown || !g.ppSide ||
+        uint32_t(now - g.ppUpdatedAt) > 80000UL) continue;
+    color = teamRgb(g.ppSide == 1 ? g.home : g.away);
+    return g.ppSide;
+  }
+  return 0;
+}
+
+void tickRearLed() {
+  const uint32_t now = millis();
+  if (uint32_t(now - rearLastTick) < 25UL) return;
+  rearLastTick = now;
+  if (!cfg.rearLedEnabled) { stopRearLed(); return; }
+  const uint32_t goalElapsed = uint32_t(now - rearGoalAt);
+  if (rearGoalDuration && goalElapsed < rearGoalDuration && cfg.rearGoal) {
+    rearEvent = RearEvent::GOAL;
+    writeRearLed(rearGoalColor,
+                 RearLedPattern::flash(goalElapsed, rearGoalDuration));
+    return;
+  }
+  rearGoalDuration = 0;
+  uint32_t ppColor = 0;
+  if (cfg.rearPowerPlay && activePowerPlaySide(now, ppColor)) {
+    if (rearEvent != RearEvent::POWER_PLAY) rearPulseStart = now;
+    rearEvent = RearEvent::POWER_PLAY;
+    writeRearLed(ppColor, RearLedPattern::pulse(uint32_t(now - rearPulseStart)));
+    return;
+  }
+  rearEvent = RearEvent::IDLE;
+  writeRearLed(0, 0);
+}
+
+// Every game gets an independent baseline, preventing false flashes on reboot,
+// date rollover, first fetch, or when following a game already in progress.
+void detectRearGoalChanges() {
+  for (uint8_t i = 0; i < gameCount; ++i) {
+    const Game &g = games[i];
+    GoalWatch &watch = goalWatch[i];
+    if (watch.id != g.id) {
+      watch = GoalWatch();
+      watch.id = g.id;
+    }
+    const bool live = g.state == "LIVE" || g.state == "CRIT";
+    if (watch.baseline && live && rearFollows(g.id)) {
+      if (g.homeScore > watch.home) triggerRearGoal(teamRgb(g.home));
+      if (g.awayScore > watch.away) triggerRearGoal(teamRgb(g.away));
+    }
+    watch.home = g.homeScore;
+    watch.away = g.awayScore;
+    watch.baseline = true;
+  }
+}
+
 Game *selectedGame() {
   for (uint8_t i = 0; i < gameCount; ++i)
     if (games[i].id == selectedGameId) return &games[i];
