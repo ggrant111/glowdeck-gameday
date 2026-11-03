@@ -923,6 +923,11 @@ void pollNhl() {
     g.period = item["periodDescriptor"]["number"] | 0;
     g.clock = item["clock"]["timeRemaining"].as<String>();
     g.intermission = item["clock"]["inIntermission"] | false;
+    // Reset PP state every NHL poll before applying the fresh situation or
+    // a bounded fallback snapshot. Never reuse stale values from Game[] RAM.
+    g.ppSide = 0;
+    g.ppDataKnown = false;
+    g.ppUpdatedAt = 0;
     g.homeScore = item["homeTeam"]["score"] | 0;
     g.awayScore = item["awayTeam"]["score"] | 0;
     g.homeShots = item["homeTeam"]["sog"] | -1;
