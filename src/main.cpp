@@ -149,7 +149,16 @@ String formattedStart(const String &utc) {
   utcTime.tm_hour = hh;
   utcTime.tm_min = mm;
   utcTime.tm_sec = sec;
-  const time_t epoch = timegm(&utcTime);
+  // Arduino-ESP32's newlib does not expose timegm(). Convert UTC civil date
+  // directly to Unix days, without temporarily changing global TZ state.
+  const int y = yr - (mo <= 2 ? 1 : 0);
+  const int era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = (unsigned)(y - era * 400);
+  const int adjustedMonth = mo + (mo > 2 ? -3 : 9);
+  const unsigned doy = (153 * adjustedMonth + 2) / 5 + dy - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  const long days = era * 146097L + (long)doe - 719468L;
+  const time_t epoch = (time_t)(days * 86400L + hh * 3600L + mm * 60L + sec);
   struct tm localTime = {};
   localtime_r(&epoch, &localTime);
   char timeBuffer[24] = {};
