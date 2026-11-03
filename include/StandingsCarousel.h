@@ -92,6 +92,23 @@ inline uint8_t collectAndSort(const Record *teams, uint8_t count,
   return n;
 }
 
+// Restore exactly the displayed carousel page after a scoreboard refresh.
+// NHL may reorder games; match displayed game ID instead of resetting to
+ // the featured/armed game. Retain the standings page by group/offset.
+template <typename Game>
+inline uint8_t restoreSlide(int8_t previousStandingsPage,
+                            uint32_t previouslyShownGameId,
+                            const Game *games, uint8_t gameCount,
+                            bool showStandings, uint8_t fallbackGameIndex) {
+  if (showStandings && previousStandingsPage >= 0 &&
+      previousStandingsPage < kPageCount)
+    return static_cast<uint8_t>(gameCount + previousStandingsPage);
+  if (previouslyShownGameId)
+    for (uint8_t i = 0; i < gameCount; ++i)
+      if (games[i].id == previouslyShownGameId) return i;
+  return gameCount && fallbackGameIndex < gameCount ? fallbackGameIndex : 0;
+}
+
 inline uint8_t totalSlides(uint8_t gameCount, bool showStandings) {
   return (uint8_t)(gameCount + (showStandings ? kPageCount : 0));
 }
