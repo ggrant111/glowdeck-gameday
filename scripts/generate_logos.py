@@ -9,6 +9,7 @@ No logo is downloaded at runtime. Firmware stores 56px alpha-keyed rasterized ma
 Logos remain the trademarks of their respective NHL teams, not project artwork.
 """
 from __future__ import annotations
+import json
 from io import BytesIO
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -22,10 +23,36 @@ OUTPUT = Path(__file__).resolve().parent.parent / "include" / "TeamLogos.h"
 BG = (4, 12, 22)  # color used to preblend translucent antialiasing edges
 
 
-def load_logo(team: str) -> Image.Image:
+def scoreboard_logo_urls() -> dict[str, str]:
+    """Use the official per-team logo field returned by the current NHL score JSON."""
+    urls: dict[str, str] = {}
+    req = Request("https://api-web.nhle.com/v1/score/now",
+                  headers={"User-Agent": "GlowDeck-GameDay/0.2.3"})
+    try:
+        with urlopen(req, timeout=14) as response:
+            data = json.loads(response.read(1_500_000))
+        for game in data.get("games", []):
+            for side in ("awayTeam", "homeTeam"):
+                entry = game.get(side, {})
+                abbr, logo = entry.get("abbrev", ""), entry.get("logo", "")
+                if (abbr in TEAMS and isinstance(logo, str)
+                    and logo.startswith("https://assets.nhle.com/logos/nhl/svg/")
+                    and logo.endswith(".svg")):
+                    urls[abbr] = logo
+        print(f"[NHL scoreboard] {len(urls)} official game-logo URLs available")
+    except Exception as error:
+        print(f"[NHL scoreboard] Logo lookup unavailable; use official CDN fallback: {error}")
+    return urls
+
+
+def load_logo(team: str, returned_logo: str | None) -> Image.Image:
     last_error = None
-    for suffix in ("dark", "light"):  # prefer contrast-safe marks for the dark UI
-        url = f"https://assets.nhle.com/logos/nhl/svg/{team}_{suffix}.svg"
+    # Prioritize the exact image URL provided in the scoreboard's JSON.
+    candidates = ([returned_logo] if returned_logo else []) + [
+        f"https://assets.nhle.com/logos/nhl/svg/{team}_light.svg",
+        f"https://assets.nhle.com/logos/nhl/svg/{team}_dark.svg",
+    ]
+    for url in dict.fromkeys(candidates):
         try:
             req = Request(url, headers={
                 "User-Agent": "GlowDeck-GameDay/0.2 (hobby display; GitHub Actions)",
@@ -75,9 +102,10 @@ def main():
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     rows = []
     failed = []
+    scoreboard_urls = scoreboard_logo_urls()
     for team in TEAMS:
         try:
-            logo = load_logo(team)
+            logo = load_logo(team, scoreboard_urls.get(team))
             pal, packed = encode(logo)
             rows.append((team, pal, packed))
             print(f"[NHL logo] {team}: official SVG -> {len(packed)} bytes")
@@ -93,7 +121,7 @@ def main():
         "#include <Arduino.h>",
         "#include <TFT_eSPI.h>",
         "#include <pgmspace.h>",
-        "static constexpr uint8_t TEAM_LOGO_SIZE = 48;",
+        f"static constexpr uint8_t TEAM_LOGO_SIZE = {SIZE};",
         "struct TeamLogoAsset {",
         "  char abbrev[4];",
         "  uint16_t palette[16];",
@@ -110,6 +138,7 @@ def main():
         lines.append("    }},")
     lines.extend([
         "};",
+        "static_assert(TEAM_LOGO_SIZE * TEAM_LOGO_SIZE == sizeof(TEAM_LOGOS[0].pixels) * 2, \"Logo pixel stride mismatch\");",
         "inline void drawTeamLogo(TFT_eSPI &display, const String &abbr, int16_t x, int16_t y) {",
         "  for (uint8_t i = 0; i < sizeof(TEAM_LOGOS) / sizeof(TEAM_LOGOS[0]); ++i) {",
         "    const TeamLogoAsset &logo = TEAM_LOGOS[i];",
