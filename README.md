@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.1.0 initial hardware-validation build.** Software has not yet been tested on your physical CYD; verify the GitHub Actions build and the on-device test sequence before depending on it.
+**Status: v0.1.1 display-correction build.** The initial touchscreen now boots and displays NHL scores on an ESP32 CYD; color correction and redraw reduction have passed CI compilation but still need physical validation.
 
 ## Touchscreen
 
@@ -11,6 +11,8 @@
 - **SETUP:** IP address, Wi-Fi hotspot credentials, test lights and touch calibration.
 
 The first score after selecting a game is used as a baseline and never replays an earlier goal.
+
+**Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
 
 ## Self-hosted web dashboard
 
