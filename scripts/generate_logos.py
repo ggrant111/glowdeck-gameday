@@ -19,12 +19,12 @@ TEAMS = """ANA BOS BUF CGY CAR CHI COL CBJ DAL DET EDM FLA LAK MIN MTL NJD
 NSH NYI NYR OTT PHI PIT SEA SJS STL TBL TOR UTA VAN VGK WSH WPG""".split()
 SIZE = 48
 OUTPUT = Path(__file__).resolve().parent.parent / "include" / "TeamLogos.h"
-BG = (8, 8, 16)
+BG = (8, 8, 8)  # exact RGB565 background 0x0841 used by the CYD UI
 
 
 def load_logo(team: str) -> Image.Image:
     last_error = None
-    for suffix in ("light", "dark"):
+    for suffix in ("dark", "light"):  # prefer contrast-safe marks for the dark UI
         url = f"https://assets.nhle.com/logos/nhl/svg/{team}_{suffix}.svg"
         try:
             req = Request(url, headers={
