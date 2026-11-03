@@ -16,6 +16,7 @@
 #include "GameDayCadence.h"
 #include "ConferenceRecords.h"
 #include "GameDetailMode.h"
+#include "StandingsCarousel.h"
 #include "NhlFetchPolicy.h"
 #include "RearLedPattern.h"
 #include <time.h>
@@ -61,6 +62,7 @@ struct Settings {
   uint32_t followIds[MAX_FOLLOWED_GAMES] = {0, 0, 0, 0};
   bool invertScreen = true; // This CYD panel needs INVON to render dark colors correctly.
   bool cycleGames = true;
+  bool showStandings = true; // Add 4 conference + 4 division table slides.
   uint8_t cycleSeconds = 9;
   uint8_t timezone = 1; // 0=ET, 1=CT, 2=MT, 3=PT, 4=AZ
   int touchX0 = 300, touchX1 = 3800, touchY0 = 300, touchY1 = 3800;
@@ -93,6 +95,7 @@ uint8_t rearLastDuty[3] = {255, 255, 255};
 uint32_t lastPpFallback = 0;
 uint32_t rearTestPpUntil = 0, rearTestPpColor = 0;
 uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
+uint8_t carouselSlide = 0; // Independent of the armed game and game-detail index.
 uint32_t lastCarouselAdvance = 0;
 String scoreboardDate;
 String targetScoreboardDate;
@@ -148,7 +151,28 @@ uint32_t lastCarouselStatsCheck = 0;
 // repeatedly fetching the same 32-team feed on every carousel advance.
 struct SeasonStanding {
   String team, seasonRecord, points, conferenceRank;
+  StandingsCarousel::Group division = StandingsCarousel::Group::EAST;
+  uint8_t conferenceSequence = 0, divisionSequence = 0;
+  uint8_t gamesPlayed = 0, wins = 0, losses = 0, otLosses = 0;
 };
+// The carousel can show games followed by eight league-wide standings slides.
+// Browsing a standings slide must NEVER change the WLED armed game, score
+// baselines, live polls or the selected game detail.
+uint8_t carouselPageCount() {
+  return StandingsCarousel::totalSlides(gameCount, cfg.showStandings);
+}
+bool showingStandingsPage() {
+  return cfg.showStandings && carouselSlide >= gameCount &&
+         carouselSlide < carouselPageCount();
+}
+void advanceCarousel(int direction) {
+  const uint8_t total = carouselPageCount();
+  carouselSlide = StandingsCarousel::advance(carouselSlide, total, direction);
+  if (carouselSlide < gameCount) featuredIndex = carouselSlide;
+  lastCarouselAdvance = millis();
+  needsDraw = true;
+}
+
 SeasonStanding seasonStandings[32];
 bool standingsReady = false;
 uint32_t standingsLastAttempt = 0;
@@ -887,6 +911,7 @@ void loadSettings() {
     cfg.followIds[i] = prefs.getUInt(("follow" + String(i)).c_str(), 0);
   cfg.invertScreen = prefs.getBool("invert", true);
   cfg.cycleGames = prefs.getBool("carousel", true);
+  cfg.showStandings = prefs.getBool("standPages", true);
   cfg.cycleSeconds = constrain(prefs.getUChar("cycleSec", 9), 5, 30);
   cfg.timezone = constrain(prefs.getUChar("timezone", 1), 0, 4);
   cfg.touchX0 = prefs.getInt("tx0", 300);
@@ -917,6 +942,7 @@ void saveSettings() {
     prefs.putUInt(("follow" + String(i)).c_str(), cfg.followIds[i]);
   prefs.putBool("invert", cfg.invertScreen);
   prefs.putBool("carousel", cfg.cycleGames);
+  prefs.putBool("standPages", cfg.showStandings);
   prefs.putUChar("cycleSec", cfg.cycleSeconds);
   prefs.putUChar("timezone", cfg.timezone);
 }
