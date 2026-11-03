@@ -11,6 +11,8 @@
 #include <WiFiClientSecure.h>
 #include <XPT2046_Touchscreen.h>
 #include "WebUi.h"
+#include "TeamLogos.h"
+#include <time.h>
 
 // GlowDeck GameDay — ESP32-2432S028R (2.8" resistive CYD).
 // Display: HSPI / TFT_eSPI; touch: dedicated VSPI; speaker amp input: GPIO26.
@@ -27,8 +29,10 @@ constexpr uint16_t MUTED = 0x9CF3, TEAL = 0x340F, ORANGE = 0xFD20;
 
 struct Game {
   uint32_t id = 0;
-  String home, away, state;
-  int homeScore = 0, awayScore = 0;
+  String home, away, homeName, awayName, state, startUTC, clock, periodType;
+  int homeScore = 0, awayScore = 0, homeShots = -1, awayShots = -1;
+  uint8_t period = 0;
+  bool intermission = false;
 };
 struct Settings {
   String ssid, wifiPassword, adminPassword;
@@ -39,6 +43,9 @@ struct Settings {
   uint8_t seconds = 8;
   bool horn = false;
   bool invertScreen = true; // This CYD panel needs INVON to render dark colors correctly.
+  bool cycleGames = true;
+  uint8_t cycleSeconds = 9;
+  uint8_t timezone = 1; // 0=ET, 1=CT, 2=MT, 3=PT, 4=AZ
   int touchX0 = 300, touchX1 = 3800, touchY0 = 300, touchY1 = 3800;
 } cfg;
 
@@ -48,7 +55,9 @@ SPIClass touchSPI(VSPI);
 XPT2046_Touchscreen touch(PIN_TOUCH_CS, PIN_TOUCH_IRQ);
 WebServer server(80);
 Game games[MAX_GAMES];
-uint8_t gameCount = 0, gamePage = 0;
+uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
+uint32_t lastCarouselAdvance = 0;
+String scoreboardDate;
 uint32_t selectedGameId = 0;
 int previousHome = 0, previousAway = 0;
 bool haveBaseline = false, mdnsStarted = false, mdnsAttempted = false, needsDraw = true;
@@ -64,7 +73,16 @@ bool hornPlaying = false;
 uint32_t hornStart = 0;
 uint16_t hornFrequency = 0;
 
-enum class Screen : uint8_t { LIVE, GAMES, SETUP, CALIBRATE };
+enum class Screen : uint8_t { LIVE, GAMES, SETUP, CALIBRATE, STATS };
+struct DetailStats {
+  uint32_t gameId = 0, updatedAt = 0;
+  bool loaded = false;
+  String error;
+  String label[5], away[5], home[5];
+  uint8_t count = 0;
+} detail;
+bool needDetailLoad = false;
+uint32_t detailGameId = 0;
 Screen screen = Screen::LIVE;
 uint8_t calStep = 0;
 int calX, calY;
@@ -113,6 +131,9 @@ void loadSettings() {
   cfg.seconds = constrain(prefs.getUChar("seconds", 8), 2, 30);
   cfg.horn = prefs.getBool("horn", false);
   cfg.invertScreen = prefs.getBool("invert", true);
+  cfg.cycleGames = prefs.getBool("carousel", true);
+  cfg.cycleSeconds = constrain(prefs.getUChar("cycleSec", 9), 5, 30);
+  cfg.timezone = constrain(prefs.getUChar("timezone", 1), 0, 4);
   cfg.touchX0 = prefs.getInt("tx0", 300);
   cfg.touchX1 = prefs.getInt("tx1", 3800);
   cfg.touchY0 = prefs.getInt("ty0", 300);
@@ -133,6 +154,9 @@ void saveSettings() {
   prefs.putUChar("seconds", cfg.seconds);
   prefs.putBool("horn", cfg.horn);
   prefs.putBool("invert", cfg.invertScreen);
+  prefs.putBool("carousel", cfg.cycleGames);
+  prefs.putUChar("cycleSec", cfg.cycleSeconds);
+  prefs.putUChar("timezone", cfg.timezone);
 }
 
 bool authorized() {
@@ -503,7 +527,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1024> doc;
-    doc["version"] = "0.1.1";
+    doc["version"] = "0.2.0";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -668,7 +692,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.1.1 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.2.0 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
