@@ -62,6 +62,7 @@ uint32_t selectedGameId = 0;
 int previousHome = 0, previousAway = 0;
 bool haveBaseline = false, mdnsStarted = false, mdnsAttempted = false, needsDraw = true;
 bool touchWasDown = false, wifiWasConnected = false, partialLiveUpdate = false;
+int16_t gestureStartX = 0, gestureStartY = 0, gestureEndX = 0, gestureEndY = 0;
 String apSsid, apPassword, mdnsName, lastError;
 uint32_t lastPoll = 0, reconnectAt = 0, rebootAt = 0;
 uint32_t lastTouch = 0;
@@ -908,8 +909,47 @@ void selectGame(uint32_t id) {
 }
 
 void handleTouch() {
-  // Act on touch DOWN only; a held press must never advance two calibration steps.
-  bool pressed = touch.touched();
+  const bool pressed = touch.touched();
+  // On the full-screen broadcast view, gestures are recognized on finger lift:
+  // swipe left/right to change games, tap a matchup for stats, tap top-right
+  // menu glyph to open GAMES (which provides SETUP in its footer).
+  if (screen == Screen::LIVE) {
+    if (pressed) {
+      TS_Point p = touch.getPoint();
+      const int16_t x = constrain((int)map(p.x, cfg.touchX0, cfg.touchX1, 0, 319), 0, 319);
+      const int16_t y = constrain((int)map(p.y, cfg.touchY0, cfg.touchY1, 0, 239), 0, 239);
+      if (!touchWasDown) {
+        touchWasDown = true;
+        gestureStartX = x;
+        gestureStartY = y;
+      }
+      gestureEndX = x;
+      gestureEndY = y;
+    } else if (touchWasDown) {
+      touchWasDown = false;
+      const int dx = gestureEndX - gestureStartX;
+      const int dy = gestureEndY - gestureStartY;
+      if (gameCount > 1 && abs(dx) > 48 && abs(dy) < 90) {
+        if (dx < 0) featuredIndex = (featuredIndex + 1) % gameCount;
+        else featuredIndex = (featuredIndex + gameCount - 1) % gameCount;
+      } else if (gestureStartY <= 35 && gestureStartX >= 263) {
+        screen = Screen::GAMES; // Access setup and arming from existing menu.
+      } else if (gameCount > 1 && gestureStartY >= 213 && gestureStartX < 58) {
+        featuredIndex = (featuredIndex + gameCount - 1) % gameCount;
+      } else if (gameCount > 1 && gestureStartY >= 213 && gestureStartX > 263) {
+        featuredIndex = (featuredIndex + 1) % gameCount;
+      } else if (gameCount) {
+        showDetail(games[featuredIndex % gameCount].id);
+      } else {
+        screen = Screen::GAMES;
+      }
+      lastCarouselAdvance = millis();
+      needsDraw = true;
+    }
+    return;
+  }
+  // Other screens use one action per press, including the 2-point calibrator.
+
   if (!pressed) { touchWasDown = false; return; }
   if (touchWasDown || millis() - lastTouch < 120) return;
   touchWasDown = true;
@@ -948,15 +988,6 @@ void handleTouch() {
       screen = x < 107 ? Screen::LIVE : x < 214 ? Screen::GAMES : Screen::SETUP;
     }
     lastCarouselAdvance = millis();
-  } else if (screen == Screen::LIVE && gameCount) {
-    if (y >= 168 && y < 199) {
-      if (x < 76) featuredIndex = (featuredIndex + gameCount - 1) % gameCount;
-      else if (x >= 243) featuredIndex = (featuredIndex + 1) % gameCount;
-      else selectGame(games[featuredIndex % gameCount].id);
-      lastCarouselAdvance = millis();
-    } else if (y >= 36 && y < 168) {
-      showDetail(games[featuredIndex % gameCount].id);
-    }
   } else if (screen == Screen::GAMES) {
     if (y >= 39 && y < 64 && gameCount > 3) {
       if (x > 170 && (gamePage + 1) * 3 < gameCount) ++gamePage;
