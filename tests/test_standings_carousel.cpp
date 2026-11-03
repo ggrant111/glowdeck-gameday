@@ -43,5 +43,19 @@ int main() {
   assert(totalSlides(0, true) == 8);
   assert(advance(0,19,-1) == 18);
   assert(advance(18,19,1) == 0);
+  struct Game { uint32_t id; };
+  const Game before[] = {{101}, {202}, {303}};
+  const Game afterReordered[] = {{303}, {101}, {202}};
+  assert(restoreSlide(-1, 202, afterReordered, 3, true, 0) == 2);
+  assert(restoreSlide(-1, 303, afterReordered, 3, true, 0) == 0);
+  // Eight standings slides are appended after any day's games.
+  assert(restoreSlide(0, 0, afterReordered, 3, true, 0) == 3);
+  assert(restoreSlide(7, 0, afterReordered, 3, true, 0) == 10);
+  // If a game disappears, fall back to a valid featured game.
+  assert(restoreSlide(-1, 404, afterReordered, 3, true, 1) == 1);
+  assert(restoreSlide(-1, 202, before, 3, true, 0) == 1);
+  assert(restoreSlide(-1, 0, afterReordered, 0, true, 0) == 0);
+  assert(restoreSlide(7, 0, afterReordered, 0, true, 0) == 7);
+  assert(restoreSlide(7, 0, afterReordered, 3, false, 1) == 1);
   puts("PASS: ranked conference/division standings pages and carousel wrapping");
 }
