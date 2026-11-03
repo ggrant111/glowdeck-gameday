@@ -4,7 +4,7 @@
 using namespace StandingsCarousel;
 struct Team {
   Group division;
-  uint8_t conferenceRank, divisionRank;
+  uint8_t conferenceSequence, divisionSequence;
 };
 int main() {
   const Team t[] = {
