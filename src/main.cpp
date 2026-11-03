@@ -683,7 +683,10 @@ bool loadSeasonStandings() {
     seasonStandings[i] = i < loaded ? fresh[i] : SeasonStanding();
   standingsForDate = today;
   standingsReady = true;
-  Serial.printf("Pregame standings loaded: %u teams\n", loaded);
+  if (screen == Screen::LIVE && showingStandingsPage()) needsDraw = true;
+  Serial.printf("[NHL] League standings loaded: %u teams, stack=%u heap=%u\n",
+                loaded, (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+                (unsigned)ESP.getFreeHeap());
   return true;
 }
 
@@ -1564,7 +1567,7 @@ void drawStandingsSlide() {
   tft.setTextDatum(TR_DATUM);
   tft.setTextColor(ICE_TEXT, ARENA_PLATE);
   tft.drawString(String(carouselSlide + 1) + "/" +
-                 String(carouselPageCount()), 262, 7, 2);
+                 String(carouselPageCount()), 255, 8, 1);
   tft.drawString(WiFi.status() == WL_CONNECTED ? "WiFi" : "AP", 298, 7, 2);
   tft.drawFastHLine(306, 7, 11, WHITE);
   tft.drawFastHLine(306, 13, 11, WHITE);
@@ -1987,7 +1990,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1536> doc;
-    doc["version"] = "0.2.9";
+    doc["version"] = "0.3.0";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -2006,6 +2009,13 @@ void registerRoutes() {
     doc["clockSynced"] = deviceLocalDate().length() == 10;
     doc["scoreboardLoaded"] = scoreboardLoaded;
     doc["featuredIndex"] = featuredIndex;
+    doc["carouselSlide"] = carouselSlide;
+    doc["carouselTotal"] = carouselPageCount();
+    doc["slideStandings"] = showingStandingsPage();
+    doc["standingsPage"] = showingStandingsPage()
+        ? StandingsCarousel::page(carouselSlide - gameCount).title : "";
+    doc["standingsReady"] = standingsReady;
+    doc["showStandings"] = cfg.showStandings;
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
     doc["scorePollSeconds"] = NhlFetchPolicy::pollIntervalMs(
@@ -2117,6 +2127,7 @@ void registerRoutes() {
     doc["rearBrightness"] = cfg.rearBrightness;
     doc["rearGoalSeconds"] = cfg.rearGoalSeconds;
     doc["screenInverted"] = cfg.invertScreen;
+    doc["showStandings"] = cfg.showStandings;
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
     doc["timezone"] = cfg.timezone;
@@ -2156,6 +2167,14 @@ void registerRoutes() {
     cfg.rearGoalSeconds = constrain((int)(doc["rearGoalSeconds"] | cfg.rearGoalSeconds), 2, 12);
     if (!cfg.rearLedEnabled) stopRearLed();
     cfg.cycleGames = doc["cycleGames"] | cfg.cycleGames;
+    const bool newShowStandings = doc["showStandings"] | cfg.showStandings;
+    if (newShowStandings != cfg.showStandings) {
+      cfg.showStandings = newShowStandings;
+      if (!cfg.showStandings || carouselSlide >= carouselPageCount())
+        carouselSlide = gameCount ? featuredIndex : 0;
+      lastCarouselAdvance = millis();
+      needsDraw = true;
+    }
     cfg.cycleSeconds = constrain((int)(doc["cycleSeconds"] | cfg.cycleSeconds), 5, 30);
     uint8_t requestedTimezone = constrain((int)(doc["timezone"] | cfg.timezone), 0, 4);
     if (requestedTimezone != cfg.timezone) {
@@ -2310,7 +2329,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.2.9 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.3.0 — CYD only");
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),
@@ -2442,6 +2461,20 @@ void loop() {
   if (needDetailLoad && screen == Screen::STATS) {
     needDetailLoad = false;
     fetchDetailStats(detailGameId);
+  }
+  // Standings are requested only while their slide is displayed, with shared
+  // pregame cache and 3m live / 15m idle refresh. Keep goal-restoration
+  // latency higher priority and never allocate a second full NHL scoreboard.
+  static uint32_t lastSlideStandingsCheck = 0;
+  if (connected && screen == Screen::LIVE && showingStandingsPage() &&
+      uint32_t(millis() - lastSlideStandingsCheck) > 5000UL) {
+    bool restoringLights = false;
+    for (uint8_t i = 0; i < MAX_WLED; ++i)
+      if (restoring[i]) restoringLights = true;
+    if (!restoringLights && rearEvent != RearEvent::GOAL) {
+      lastSlideStandingsCheck = millis();
+      loadSeasonStandings();
+    }
   }
   // Prefetch stats for the displayed carousel game; the background request
   // happens only once per game/TTL, never once per frame. Defer requests
