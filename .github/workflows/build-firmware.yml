@@ -26,6 +26,12 @@ jobs:
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_poll_cadence.cpp -o /tmp/glowdeck-poll-test
           /tmp/glowdeck-poll-test
+      - name: Test conference records and pregame-to-live switching
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_conference_records.cpp -o /tmp/glowdeck-conference-test
+          /tmp/glowdeck-conference-test
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_detail_mode.cpp -o /tmp/glowdeck-detail-test
+          /tmp/glowdeck-detail-test
       - name: Install PlatformIO
         run: pip install platformio==6.1.18
       - name: Install logo build dependencies

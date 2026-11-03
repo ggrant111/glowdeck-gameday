@@ -14,6 +14,8 @@
 #include "TeamLogos.h"
 #include "GameDayDate.h"
 #include "GameDayCadence.h"
+#include "ConferenceRecords.h"
+#include "GameDetailMode.h"
 #include "RearLedPattern.h"
 #include <time.h>
 
@@ -116,6 +118,7 @@ enum class Screen : uint8_t { LIVE, GAMES, SETUP, CALIBRATE, STATS };
 struct DetailStats {
   uint32_t gameId = 0, updatedAt = 0;
   bool loaded = false;
+  bool fetchedPregame = false; // Used to switch from season records to live game stats.
   String error;
   String label[5], away[5], home[5];
   uint8_t count = 0;
@@ -133,6 +136,29 @@ struct CarouselStats {
 };
 CarouselStats carouselStats[MAX_GAMES];
 uint32_t lastCarouselStatsCheck = 0;
+
+// Cache league standings once across all upcoming matchups, rather than
+// repeatedly fetching the same 32-team feed on every carousel advance.
+struct SeasonStanding {
+  String team, seasonRecord, points, conferenceRank;
+};
+SeasonStanding seasonStandings[32];
+bool standingsReady = false;
+uint32_t standingsLastAttempt = 0;
+String standingsForDate;
+
+// The NHL standings feed has conference *rank*, not record vs conference.
+// Derive the W-L-OT vs-conference split from each team's season schedule,
+// in a low-priority/on-demand task only while its pregame detail is open.
+struct ConferenceSnapshot {
+  String team;
+  uint32_t season = 0, checkedAt = 0;
+  bool tried = false, valid = false;
+  String record;
+};
+ConferenceSnapshot conferenceSnapshots[32];
+uint32_t lastConferenceFetch = 0;
+uint32_t webPreviewGameId = 0, webPreviewUntil = 0;
 
 CarouselStats &statsFor(uint8_t index) {
   CarouselStats &entry = carouselStats[index];
@@ -161,7 +187,7 @@ void updateCarouselStatsFromDetail(uint8_t index, const DetailStats &source) {
       cached.pimAway = source.away[i]; cached.pimHome = source.home[i];
     } else if (source.label[i] == "FACEOFFS") {
       cached.faceAway = source.away[i]; cached.faceHome = source.home[i];
-    } else if (source.label[i] == "W-L-OT") {
+    } else if (source.label[i] == "SEASON" || source.label[i] == "W-L-OT") {
       cached.recordAway = source.away[i]; cached.recordHome = source.home[i];
     } else if (source.label[i] == "POINTS") {
       cached.pointsAway = source.away[i]; cached.pointsHome = source.home[i];
@@ -404,6 +430,13 @@ void prepareNewScoreboardDate(const String &today) {
     needDetailLoad = false;
     detail.loaded = false;
     for (auto &entry : carouselStats) entry = CarouselStats();
+    standingsReady = false;
+    standingsLastAttempt = 0;
+    standingsForDate = "";
+    for (auto &entry : seasonStandings) entry = SeasonStanding();
+    for (auto &entry : conferenceSnapshots) entry = ConferenceSnapshot();
+    lastConferenceFetch = 0;
+    webPreviewGameId = 0;
     for (auto &entry : goalWatch) entry = GoalWatch();
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) cfg.followIds[i] = 0;
@@ -486,16 +519,240 @@ void addDetailRow(const String &name, const String &away, const String &home) {
   detail.home[detail.count] = home;
   ++detail.count;
 }
+uint32_t seasonStartYear(uint32_t gameId) {
+  // NHL game IDs are YYYY + game type + game number (e.g., 2026020118).
+  return gameId / 1000000UL;
+}
+
+ConferenceSnapshot *conferenceSnapshot(const String &team, uint32_t season) {
+  for (auto &c : conferenceSnapshots)
+    if (c.team == team && c.season == season) return &c;
+  for (auto &c : conferenceSnapshots) if (c.team.isEmpty()) {
+    c = ConferenceSnapshot();
+    c.team = team;
+    c.season = season;
+    return &c;
+  }
+  // Never accumulate records from different NHL seasons in the same slot.
+  ConferenceSnapshot &oldest = conferenceSnapshots[0];
+  oldest = ConferenceSnapshot();
+  oldest.team = team;
+  oldest.season = season;
+  return &oldest;
+}
+
+String knownConferenceRecord(const String &team, uint32_t season) {
+  ConferenceSnapshot *c = conferenceSnapshot(team, season);
+  return c && c->valid ? c->record : String("--");
+}
+
+// A single standings request supplies both clubs and every other pregame
+// carousel matchup. Date-specific URLs avoid the league's /now day lag.
+bool loadSeasonStandings() {
+  const String today = scoreboardDate.length() ? scoreboardDate : deviceLocalDate();
+  const uint32_t now = millis();
+  if (standingsReady && standingsForDate == today &&
+      uint32_t(now - standingsLastAttempt) < 900000UL) return true;
+  if (!standingsReady && standingsLastAttempt &&
+      uint32_t(now - standingsLastAttempt) < 60000UL) return false;
+  if (WiFi.status() != WL_CONNECTED) return standingsReady;
+
+  standingsLastAttempt = now;
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.setTimeout(4500);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.useHTTP10(true);
+  const String url = "https://api-web.nhle.com/v1/standings/" +
+                     (today.length() == 10 ? today : String("now"));
+  if (!http.begin(client, url)) return standingsReady;
+  if (http.GET() != HTTP_CODE_OK) {
+    http.end();
+    return standingsReady;
+  }
+  StaticJsonDocument<512> filter;
+  JsonObject first = filter["standings"][0].to<JsonObject>();
+  first["teamAbbrev"]["default"] = true;
+  first["wins"] = true;
+  first["losses"] = true;
+  first["otLosses"] = true;
+  first["points"] = true;
+  first["conferenceSequence"] = true;
+  DynamicJsonDocument parsed(10800);
+  const DeserializationError err = deserializeJson(
+      parsed, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  if (err) {
+    Serial.printf("Pregame standings JSON: %s\n", err.c_str());
+    return standingsReady;
+  }
+  JsonArray teams = parsed["standings"].as<JsonArray>();
+  if (teams.isNull()) return standingsReady;
+  uint8_t loaded = 0;
+  SeasonStanding fresh[32];
+  for (JsonObject row : teams) {
+    if (loaded >= 32) break;
+    const String team = row["teamAbbrev"]["default"].as<String>();
+    if (team.length() != 3 || row["wins"].isNull() ||
+        row["losses"].isNull() || row["otLosses"].isNull()) continue;
+    SeasonStanding &record = fresh[loaded++];
+    record.team = team;
+    record.seasonRecord = String(row["wins"].as<int>()) + "-" +
+                          String(row["losses"].as<int>()) + "-" +
+                          String(row["otLosses"].as<int>());
+    if (!row["points"].isNull())
+      record.points = String(row["points"].as<int>());
+    const int rank = row["conferenceSequence"] | 0;
+    if (rank > 0) record.conferenceRank = "#" + String(rank);
+  }
+  if (!loaded) return standingsReady;
+  for (uint8_t i = 0; i < 32; ++i)
+    seasonStandings[i] = i < loaded ? fresh[i] : SeasonStanding();
+  standingsForDate = today;
+  standingsReady = true;
+  Serial.printf("Pregame standings loaded: %u teams\n", loaded);
+  return true;
+}
+
+const SeasonStanding *standingFor(const String &code) {
+  if (!standingsReady) return nullptr;
+  for (const auto &standing : seasonStandings)
+    if (standing.team == code) return &standing;
+  return nullptr;
+}
+
+void refreshVisibleConferenceRecord(const Game &g) {
+  if (detail.gameId != g.id || !detail.loaded || !detail.fetchedPregame) return;
+  const uint32_t season = seasonStartYear(g.id);
+  for (uint8_t i = 0; i < detail.count; ++i) {
+    if (detail.label[i] != "VS CONF") continue;
+    const String away = knownConferenceRecord(g.away, season);
+    const String home = knownConferenceRecord(g.home, season);
+    if (away != detail.away[i] || home != detail.home[i]) {
+      detail.away[i] = away;
+      detail.home[i] = home;
+      if (screen == Screen::STATS && detailGameId == g.id) needsDraw = true;
+    }
+    break;
+  }
+}
+
+// Fetch one team's regular-season results, filtered during HTTPS streaming so
+// the ESP32 never loads the ~200kB raw JSON payload into RAM.
+bool loadConferenceResults(ConferenceSnapshot &cache) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.setTimeout(4400);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.useHTTP10(true);
+  const String season = String(cache.season) + String(cache.season + 1);
+  const String url = "https://api-web.nhle.com/v1/club-schedule-season/" +
+                     cache.team + "/" + season;
+  if (!http.begin(client, url)) return false;
+  if (http.GET() != HTTP_CODE_OK) { http.end(); return false; }
+  StaticJsonDocument<768> filter;
+  JsonObject first = filter["games"][0].to<JsonObject>();
+  first["gameType"] = true;
+  first["gameState"] = true;
+  first["homeTeam"]["abbrev"] = true;
+  first["homeTeam"]["score"] = true;
+  first["awayTeam"]["abbrev"] = true;
+  first["awayTeam"]["score"] = true;
+  first["gameOutcome"]["lastPeriodType"] = true;
+  DynamicJsonDocument parsed(24576);
+  const DeserializationError err = deserializeJson(
+      parsed, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  if (err) {
+    Serial.printf("Conference results %s: %s\n",
+                  cache.team.c_str(), err.c_str());
+    return false;
+  }
+  JsonArray schedule = parsed["games"].as<JsonArray>();
+  if (schedule.isNull()) return false;
+  ConferenceRecords::Record result;
+  for (JsonObject match : schedule) {
+    const String state = match["gameState"].as<String>();
+    const bool final = state == "OFF" || state == "FINAL";
+    if (!final || (match["gameType"] | 0) != 2) continue;
+    const String home = match["homeTeam"]["abbrev"].as<String>();
+    const String away = match["awayTeam"]["abbrev"].as<String>();
+    const bool ourHome = home == cache.team;
+    if (!ourHome && away != cache.team) continue;
+    if (match["homeTeam"]["score"].isNull() ||
+        match["awayTeam"]["score"].isNull()) continue;
+    const int ownScore = ourHome ? match["homeTeam"]["score"].as<int>()
+                                 : match["awayTeam"]["score"].as<int>();
+    const int opponentScore = ourHome ? match["awayTeam"]["score"].as<int>()
+                                      : match["homeTeam"]["score"].as<int>();
+    const String lastPeriod = match["gameOutcome"]["lastPeriodType"].as<String>();
+    const String opponent = ourHome ? away : home;
+    ConferenceRecords::add(result, cache.team.c_str(), opponent.c_str(),
+                           true, true, ownScore, opponentScore,
+                           lastPeriod.c_str());
+  }
+  cache.record = String(result.wins) + "-" + String(result.losses) +
+                 "-" + String(result.otLosses);
+  cache.valid = true;
+  Serial.printf("Conference record %s vs same conference: %s\n",
+                cache.team.c_str(), cache.record.c_str());
+  return true;
+}
+
+// On-demand and low priority: never issue the extra two schedule downloads
+// during carousel rotation, goal effects, or WLED state restoration.
+void tickPregameConferenceRecords() {
+  if (!detail.loaded || !detail.fetchedPregame ||
+      WiFi.status() != WL_CONNECTED) return;
+  Game *g = nullptr;
+  if (screen == Screen::STATS) {
+    g = detailGame();
+  } else if (webPreviewGameId && int32_t(webPreviewUntil - millis()) > 0) {
+    for (uint8_t i = 0; i < gameCount; ++i)
+      if (games[i].id == webPreviewGameId) { g = &games[i]; break; }
+  }
+  if (!g || detail.gameId != g->id ||
+      (g->state != "FUT" && g->state != "PRE")) return;
+  if (rearEvent == RearEvent::GOAL) return;
+  for (uint8_t i = 0; i < MAX_WLED; ++i)
+    if (restoring[i]) return;
+  const uint32_t now = millis();
+  if (uint32_t(now - lastConferenceFetch) < 1200UL) return;
+  const uint32_t season = seasonStartYear(g->id);
+  const String teams[] = {g->away, g->home};
+  for (const String &team : teams) {
+    if (ConferenceRecords::forTeam(team.c_str()) ==
+        ConferenceRecords::Conference::UNKNOWN) continue;
+    ConferenceSnapshot *c = conferenceSnapshot(team, season);
+    if (!c) continue;
+    if (c->tried && uint32_t(now - c->checkedAt) <
+          (c->valid ? 900000UL : 120000UL)) continue;
+    c->tried = true;
+    c->checkedAt = now;
+    lastConferenceFetch = now;
+    loadConferenceResults(*c);
+    refreshVisibleConferenceRecord(*g);
+    break; // Only one optional HTTP request per loop turn.
+  }
+}
+
 void fetchDetailStats(uint32_t id) {
   Game *g = nullptr;
   for (uint8_t i = 0; i < gameCount; ++i)
     if (games[i].id == id) { g = &games[i]; break; }
   if (!g) return;
-  if (detail.gameId == id && detail.loaded) {
-    const uint32_t ttl = (g->state == "LIVE" || g->state == "CRIT") ? 30000 : 180000;
-    if (millis() - detail.updatedAt < ttl) return;
+  const bool pregame = GameDetailMode::isPregame(g->state.c_str());
+  if (detail.gameId == id && detail.loaded &&
+      detail.fetchedPregame == pregame) {
+    const uint32_t ttl = pregame ? 180000UL :
+          (g->state == "LIVE" || g->state == "CRIT") ? 30000UL : 180000UL;
+    if (uint32_t(millis() - detail.updatedAt) < ttl) return;
   }
   detail.gameId = id;
+  detail.fetchedPregame = pregame;
   detail.loaded = false;
   detail.count = 0;
   detail.error = "";
@@ -512,37 +769,28 @@ void fetchDetailStats(uint32_t id) {
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.useHTTP10(true);
 
-  if (g->state == "FUT" || g->state == "PRE") {
-    if (http.begin(client, "https://api-web.nhle.com/v1/standings/now")
-        && http.GET() == HTTP_CODE_OK) {
-      StaticJsonDocument<448> filter;
-      JsonObject row = filter["standings"][0].to<JsonObject>();
-      row["teamAbbrev"]["default"] = true;
-      row["wins"] = true;
-      row["losses"] = true;
-      row["otLosses"] = true;
-      row["points"] = true;
-      DynamicJsonDocument parsed(8192);
-      DeserializationError err = deserializeJson(
-        parsed, http.getStream(), DeserializationOption::Filter(filter));
-      if (!err) {
-        String records[2], points[2];
-        JsonArray standings = parsed["standings"].as<JsonArray>();
-        for (JsonObject team : standings) {
-          String code = team["teamAbbrev"]["default"].as<String>();
-          int side = code == g->away ? 0 : code == g->home ? 1 : -1;
-          if (side == -1) continue;
-          records[side] = String((int)(team["wins"] | 0)) + "-" +
-                          String((int)(team["losses"] | 0)) + "-" +
-                          String((int)(team["otLosses"] | 0));
-          points[side] = String((int)(team["points"] | 0));
-        }
-        if (records[0].length() && records[1].length()) {
-          addDetailRow("W-L-OT", records[0], records[1]);
-          addDetailRow("POINTS", points[0], points[1]);
-        }
-      }
-    }
+  if (pregame) {
+    // Matchup preview: league standings for season W-L-OT, conference rank
+    // and points; conference *record* is computed separately from completed
+    // same-conference games, never confused with conference rank.
+    const bool standingsAvailable = loadSeasonStandings();
+    const SeasonStanding *away = standingFor(g->away);
+    const SeasonStanding *home = standingFor(g->home);
+    const uint32_t season = seasonStartYear(g->id);
+    addDetailRow("SEASON",
+                 away ? away->seasonRecord : String("--"),
+                 home ? home->seasonRecord : String("--"));
+    addDetailRow("VS CONF",
+                 knownConferenceRecord(g->away, season),
+                 knownConferenceRecord(g->home, season));
+    addDetailRow("CONF RANK",
+                 away && away->conferenceRank.length() ? away->conferenceRank : String("--"),
+                 home && home->conferenceRank.length() ? home->conferenceRank : String("--"));
+    addDetailRow("POINTS",
+                 away && away->points.length() ? away->points : String("--"),
+                 home && home->points.length() ? home->points : String("--"));
+    if (!standingsAvailable)
+      detail.error = "Standings unavailable; retrying";
   } else {
     if (g->awayShots >= 0 && g->homeShots >= 0)
       addDetailRow("SHOTS", String(g->awayShots), String(g->homeShots));
@@ -976,6 +1224,12 @@ void pollNhl() {
     needDetailLoad = false;
     detail.loaded = false;
     for (auto &entry : carouselStats) entry = CarouselStats();
+    standingsReady = false;
+    standingsLastAttempt = 0;
+    standingsForDate = "";
+    for (auto &entry : seasonStandings) entry = SeasonStanding();
+    for (auto &entry : conferenceSnapshots) entry = ConferenceSnapshot();
+    lastConferenceFetch = 0;
     if (screen == Screen::STATS) screen = Screen::LIVE;
   } else if (gameCount) {
     bool found = false;
@@ -1033,12 +1287,26 @@ void pollNhl() {
       partialLiveUpdate = true;
     else needsDraw = true;
   }
-  // Force a newer comparison when the user is viewing live stats.
+  // If puck drop occurs while the pregame detail page is open, replace
+  // season/conference rows with the live shots, faceoffs, PP and hits view
+  // promptly, without waiting for the previous pregame cache TTL.
   if (screen == Screen::STATS && detailGameId) {
     Game *viewed = detailGame();
-    if (viewed && (viewed->state == "LIVE" || viewed->state == "CRIT")
-        && millis() - detail.updatedAt >= 30000)
-      needDetailLoad = true;
+    if (viewed) {
+      const bool pregame = GameDetailMode::isPregame(viewed->state.c_str());
+      if (detail.gameId == viewed->id &&
+          GameDetailMode::needsModeSwitch(detail.loaded, detail.fetchedPregame,
+                                           viewed->state.c_str())) {
+        detail.loaded = false;
+        detail.count = 0;
+        needDetailLoad = true;
+        needsDraw = true;
+      } else if (!pregame &&
+                 (viewed->state == "LIVE" || viewed->state == "CRIT") &&
+                 uint32_t(millis() - detail.updatedAt) >= 30000UL) {
+        needDetailLoad = true;
+      }
+    }
   }
 }
 
@@ -1196,11 +1464,11 @@ void drawLiveReadout(const Game &g) {
   String footerLeft = "PP --", footerMid = "PIM --", footerRight = "FO --";
   const CarouselStats &cached = statsFor(featuredIndex % gameCount);
   if (gameIsFuture(g)) {
-    footerLeft = cached.recordAway.length() && cached.recordHome.length()
-        ? "REC " + cached.recordAway + "|" + cached.recordHome : "REC --";
-    footerMid = cached.pointsAway.length() && cached.pointsHome.length()
-        ? "PTS " + cached.pointsAway + "-" + cached.pointsHome : "PTS --";
-    footerRight = "PREGAME";
+    // Fit both clubs' season records into separate cells. The old combined
+    // "REC 11-2-2|9-5-0" overflowed a single cell on the 320px TFT.
+    footerLeft = cached.recordAway.length() ? cached.recordAway : "--";
+    footerMid = "W-L-OT";
+    footerRight = cached.recordHome.length() ? cached.recordHome : "--";
   } else {
     if (cached.ppAway.length() && cached.ppHome.length())
       footerLeft = "PP " + cached.ppAway + "|" + cached.ppHome;
@@ -1485,7 +1753,7 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     StaticJsonDocument<1024> doc;
-    doc["version"] = "0.2.6";
+    doc["version"] = "0.2.7";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -1540,14 +1808,30 @@ void registerRoutes() {
   server.on("/api/stats", HTTP_GET, []() {
     if (!authorized()) return;
     const uint32_t id = strtoul(server.arg("id").c_str(), nullptr, 10);
-    bool known = false;
+    Game *requested = nullptr;
     for (uint8_t i = 0; i < gameCount; ++i)
-      if (games[i].id == id) known = true;
-    if (!known || id == 0) return errorResponse("Game is not in the daily scoreboard", 404);
+      if (games[i].id == id) { requested = &games[i]; break; }
+    if (!requested || id == 0)
+      return errorResponse("Game is not in the daily scoreboard", 404);
+    if (GameDetailMode::isPregame(requested->state.c_str())) {
+      webPreviewGameId = id;
+      webPreviewUntil = millis() + 25000UL;
+    } else {
+      webPreviewGameId = 0;
+    }
     fetchDetailStats(id);
     StaticJsonDocument<2048> doc;
     doc["gameId"] = id;
+    doc["pregame"] = GameDetailMode::isPregame(requested->state.c_str());
     doc["error"] = detail.error;
+    bool conferenceLoading = false;
+    if (doc["pregame"].as<bool>()) {
+      for (uint8_t i = 0; i < detail.count; ++i)
+        if (detail.label[i] == "VS CONF" &&
+            (detail.away[i] == "--" || detail.home[i] == "--"))
+          conferenceLoading = true;
+    }
+    doc["conferenceLoading"] = conferenceLoading;
     JsonArray rows = doc.createNestedArray("stats");
     for (uint8_t i = 0; i < detail.count; ++i) {
       JsonObject row = rows.createNestedObject();
@@ -1784,7 +2068,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.2.6 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.2.7 — CYD only");
 
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
@@ -1927,6 +2211,9 @@ void loop() {
     partialLiveUpdate = false;
     drawLiveReadout(games[featuredIndex % gameCount]);
   }
+  // Update one optional pregame conference record after the current frame
+  // is painted. This keeps the first season/standings view responsive.
+  tickPregameConferenceRecords();
   if (rebootAt && int32_t(now - rebootAt) >= 0) ESP.restart();
   delay(5);
 }
