@@ -75,15 +75,15 @@ inline uint8_t collectAndSort(const Record *teams, uint8_t count,
   uint8_t n = 0;
   for (uint8_t i = 0; i < count && n < maxRows; ++i)
     if (matches(view.group, teams[i].division) &&
-        rank(view.group, teams[i].conferenceRank, teams[i].divisionRank) > 0)
+        rank(view.group, teams[i].conferenceSequence, teams[i].divisionSequence) > 0)
       output[n++] = i;
   for (uint8_t i = 1; i < n; ++i) {
     const uint8_t value = output[i];
     const uint8_t valueRank = rank(view.group,
-              teams[value].conferenceRank, teams[value].divisionRank);
+              teams[value].conferenceSequence, teams[value].divisionSequence);
     uint8_t j = i;
-    while (j && rank(view.group, teams[output[j-1]].conferenceRank,
-                       teams[output[j-1]].divisionRank) > valueRank) {
+    while (j && rank(view.group, teams[output[j-1]].conferenceSequence,
+                       teams[output[j-1]].divisionSequence) > valueRank) {
       output[j] = output[j-1];
       --j;
     }
