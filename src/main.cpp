@@ -12,6 +12,7 @@
 #include <XPT2046_Touchscreen.h>
 #include "WebUi.h"
 #include "TeamLogos.h"
+#include "GameDayDate.h"
 #include <time.h>
 
 // GlowDeck GameDay — ESP32-2432S028R (2.8" resistive CYD).
@@ -193,13 +194,8 @@ void applyTimezone() {
 // Local date is authoritative for the calendar displayed by the CYD.
 // The NHL's /score/now redirect can remain on yesterday well into the morning.
 String deviceLocalDate() {
-  const time_t utcNow = time(nullptr);
-  if (utcNow < 1735689600) return ""; // UTC clock not synchronized (before 2025).
-  struct tm date = {};
-  localtime_r(&utcNow, &date);
-  char result[11] = {};
-  if (!strftime(result, sizeof(result), "%Y-%m-%d", &date)) return "";
-  return String(result);
+  char date[11] = {};
+  return formatLocalGameDate(time(nullptr), date) ? String(date) : String("");
 }
 
 void prepareNewScoreboardDate(const String &today) {
