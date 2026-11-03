@@ -1,4 +1,30 @@
-# v0.2.2 — Full-screen broadcast scoreboard
+# v0.2.3 — Official NHL logo JSON + automatic carousel stats
+
+The screenshot in v0.2.2 showed that logos were *still* horizontal stripes. The root cause is confirmed in the build generator: it rendered and packed each mark as **56×56**, but hard-coded `TEAM_LOGO_SIZE = 48` in the generated header. The scanline renderer read each row with the wrong stride, corrupting the visual without any compiler error.
+
+**Fix:** Generate the C++ dimension directly from the Python `SIZE` constant, and add a C++ compile-time assertion that the encoded pixel count matches that dimension. The renderer continues to use transparent RGB565 scanline runs as in v0.2.2.
+
+## Using the NHL JSON's online logos
+
+The source NHL score API returns each team's `homeTeam.logo` / `awayTeam.logo` URLs as official SVGs. The generator now reads `/v1/score/now` at build time, prefers those exact returned `assets.nhle.com` URLs, and uses the corresponding official NHL CDN logo endpoint for teams not on today's schedule. These are converted into the firmware's tiny color assets for dependable offline rendering. **The ESP32 does not download or decode SVG images at runtime**, so the image is available as soon as the carousel advances. This still uses the NHL's official online assets as its source.
+
+## Bottom strip loads statistics automatically
+
+When a game first appears in the carousel, the CYD fetches the game-specific right-rail comparison (or standings for upcoming games), saves the available data in a per-game cache, and updates the bottom strip. It no longer waits for a manual visit to STATS.
+
+- Live / completed: **PP**, **PIM**, **FO** (percentages are rounded on the compact strip).
+- Pregame: available **team records** and **standings points**.
+- Unpublished values show **--**; there is no "GAME 2/4", "VIEW ONLY" or "TAP STATS" placeholder text in the stats strip.
+- Stats refresh every 60 seconds for live games, 15 minutes for pregame, and hourly for final results, only when the game is on screen. Fetches defer while a WLED light-state restoration is pending.
+- The separate STATS view still displays additional comparisons, and browsing still never changes the armed WLED game.
+
+## Hardware validation
+
+After OTA, compare both logos for Colorado and Chicago and a second pair. They should be full 56×56 team logos, not horizontal bands. Let the carousel rotate: bottom stats should change from `--` to actual figures automatically, without opening STATS. An NHL game without available comparison stats may correctly continue showing `--`. Confirm that WLED, OTA and the top-right menu still work.
+
+---
+
+# Previous updates — Full-screen broadcast scoreboard
 
 The daily carousel has been restyled to match the supplied NHL scoreboard reference, adapted for 320x240 pixels. The full-screen layout presents a compact NHL header, a LIVE/NEXT/FINAL indicator, a large period/clock banner, large scores, authentic 56px transparent team logos, team-color underlines, a shots-on-goal strip, and contextual match information below. It uses a dark, vector-drawn arena/rink background without needing large bitmap framebuffers.
 
