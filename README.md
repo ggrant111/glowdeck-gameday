@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.3.1 multi-device WLED celebration engine.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.3.2 team-color NHL game slide backgrounds.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
@@ -21,6 +21,12 @@ The first score after selecting a game is used as a baseline and never replays a
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+
+## Dynamic team-color game slides (v0.3.2)
+
+Every full-screen **pregame/live/final NHL matchup** now uses a bold **away team → home team** primary-color backdrop instead of the former blue arena field. Team colors fade together through a soft dark center, with subtle mesh texture and neutral charcoal overlays for clear white score/time/stat text. The 320×240 CYD renders the gradient directly as 80 fixed-point RGB565 strips; there is no framebuffer, bitmap download, heavy graphics dependency, or extra heap allocation. The backdrop is only redrawn on game-slide changes, never during quick partial NHL score refreshes. Conference/division standings and settings screens remain neutral.
+
+See [Team Gradient](docs/TEAM_GRADIENT.md) for design decisions and hardware visual verification.
 
 ## Multi-device WLED Celebration Engine (v0.3.1)
 

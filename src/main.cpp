@@ -19,6 +19,7 @@
 #include "StandingsCarousel.h"
 #include "NhlFetchPolicy.h"
 #include "CelebrationEngine.h"
+#include "TeamGradient.h"
 #include "RearLedPattern.h"
 #include <time.h>
 
@@ -1812,8 +1813,8 @@ void button(int x, int y, int w, int h, const String &label, bool active = false
 // Broadcast board: deliberately lightweight raster/vector drawing for the CYD.
 // Static arena is drawn on slide changes; NHL polls repaint only the readouts.
 constexpr uint16_t ARENA_BLACK = 0x0000;
-constexpr uint16_t ARENA_PLATE = 0x10A4; // dark slate-blue RGB565, not saturated blue
-constexpr uint16_t ARENA_LINE = 0x422C;
+constexpr uint16_t ARENA_PLATE = 0x18C3; // neutral charcoal, readable over team gradients
+constexpr uint16_t ARENA_LINE = 0x4228; // muted gray border, not blue
 constexpr uint16_t ICE_BLUE = 0x36BE;
 constexpr uint16_t ICE_TEXT = 0xC6FA;
 
@@ -1831,26 +1832,38 @@ String broadcastTime(const Game &g) {
   return period + "  |  " + (g.clock.length() ? g.clock : String("LIVE"));
 }
 
-void drawArenaBackground() {
-  tft.fillScreen(ARENA_BLACK);
-  // Keep the arena dark on real ILI9341 CYDs. Previous blue components
-  // climbed to 20/31, producing the vivid electric-blue photographed screen.
-  for (int y = 25; y < 159; y += 5) {
-    const uint16_t blue = y < 65 ? 1 : y < 112 ? 2 : 3;
-    const uint16_t green = y < 112 ? 0 : 1;
-    tft.fillRect(0, y, 320, 5, (green << 5) | blue);
+// Live, upcoming and final game slides share the same team-color treatment.
+// Paint 80 four-pixel-wide RGB565 columns on the 320x240 CYD; there is no
+// framebuffer, heap allocation, image fetch, float math or animation timer.
+// Logos/score plates overlay this once per slide change. Partial NHL score
+// updates still repaint ONLY the opaque text plates below.
+void drawTeamGradientBackground(const Game &g) {
+  const uint32_t away = teamRgb(g.away);
+  const uint32_t home = teamRgb(g.home);
+  for (uint16_t x = 0; x < TeamGradient::kWidth; x += TeamGradient::kStep) {
+    const uint16_t midpoint = x + TeamGradient::kStep / 2;
+    const uint16_t color = TeamGradient::rgb565(
+        TeamGradient::colorAt(away, home, midpoint));
+    tft.fillRect(x, 0, TeamGradient::kStep, TeamGradient::kHeight, color);
   }
-  // Dim perspective ice and centerline only; UI remains high-contrast.
-  tft.fillRect(0, 150, 320, 47, 0x0863);
-  tft.drawLine(0, 163, 160, 145, 0x1987);
-  tft.drawLine(160, 145, 319, 163, 0x1987);
-  tft.drawLine(160, 145, 160, 195, 0x3988);
-  tft.drawEllipse(160, 175, 50, 15, 0x1987);
-  for (int i = 0; i < 15; ++i) {
-    const int x = 6 + i * 22;
-    const int y = 26 + (i < 7 ? 7 - i : i - 7);
-    tft.fillCircle(x, y, 1, 0x6C14);
+  // Lightweight, low-contrast jersey-mesh dots to suggest the reference
+  // image's texture. Draw only the open background around the matchup.
+  // Avoid the centre score plate, since changing pixels behind it would be
+  // wasted effort and weaken white text contrast.
+  for (uint16_t y = 43; y < 162; y += 12) {
+    for (uint16_t x = 8 + (y % 24 ? 6 : 0); x < 315; x += 16) {
+      if (x >= 68 && x <= 251 && y >= 76 && y <= 145) continue;
+      const uint32_t local = TeamGradient::colorAt(away, home, x);
+      const uint32_t accent = ((local & 0xFEFEFEUL) >> 1) +
+                              ((local & 0xFCFCFCUL) >> 2);
+      tft.drawPixel(x, y, TeamGradient::rgb565(accent));
+    }
   }
+  // Muted broadcast highlights; remain clear of team logos and time plate.
+  tft.drawFastHLine(0, 32, 65, TeamGradient::rgb565(
+      TeamGradient::colorAt(away, home, 15)));
+  tft.drawFastHLine(255, 32, 65, TeamGradient::rgb565(
+      TeamGradient::colorAt(away, home, 304)));
 }
 
 void drawScoreboardHeader(const Game &g) {
@@ -1964,7 +1977,7 @@ void drawStandingsSlide() {
 }
 
 void drawScoreboardStatic(const Game &g) {
-  drawArenaBackground();
+  drawTeamGradientBackground(g);
   drawScoreboardHeader(g);
   // Scoreboard clock / status banner.
   tft.fillRoundRect(71, 34, 178, 37, 6, ARENA_PLATE);
@@ -2323,7 +2336,7 @@ void registerRoutes() {
     // New slide/standings metadata should not enlarge the loopTask stack.
     DynamicJsonDocument doc(3072);
     if (doc.capacity() < 3072) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.1";
+    doc["version"] = "0.3.2";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -2736,7 +2749,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.3.1 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.3.2 — CYD only");
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),
