@@ -14,6 +14,7 @@
 #include "TeamLogos.h"
 #include "GameDayDate.h"
 #include "GameDayCadence.h"
+#include "ConferenceRecords.h"
 #include "RearLedPattern.h"
 #include <time.h>
 
@@ -116,6 +117,7 @@ enum class Screen : uint8_t { LIVE, GAMES, SETUP, CALIBRATE, STATS };
 struct DetailStats {
   uint32_t gameId = 0, updatedAt = 0;
   bool loaded = false;
+  bool fetchedPregame = false; // Used to switch from season records to live game stats.
   String error;
   String label[5], away[5], home[5];
   uint8_t count = 0;
@@ -133,6 +135,28 @@ struct CarouselStats {
 };
 CarouselStats carouselStats[MAX_GAMES];
 uint32_t lastCarouselStatsCheck = 0;
+
+// Cache league standings once across all upcoming matchups, rather than
+// repeatedly fetching the same 32-team feed on every carousel advance.
+struct SeasonStanding {
+  String team, seasonRecord, points, conferenceRank;
+};
+SeasonStanding seasonStandings[32];
+bool standingsReady = false;
+uint32_t standingsLastAttempt = 0;
+String standingsForDate;
+
+// The NHL standings feed has conference *rank*, not record vs conference.
+// Derive the W-L-OT vs-conference split from each team's season schedule,
+// in a low-priority/on-demand task only while its pregame detail is open.
+struct ConferenceSnapshot {
+  String team;
+  uint32_t season = 0, checkedAt = 0;
+  bool tried = false, valid = false;
+  String record;
+};
+ConferenceSnapshot conferenceSnapshots[32];
+uint32_t lastConferenceFetch = 0;
 
 CarouselStats &statsFor(uint8_t index) {
   CarouselStats &entry = carouselStats[index];
@@ -161,7 +185,7 @@ void updateCarouselStatsFromDetail(uint8_t index, const DetailStats &source) {
       cached.pimAway = source.away[i]; cached.pimHome = source.home[i];
     } else if (source.label[i] == "FACEOFFS") {
       cached.faceAway = source.away[i]; cached.faceHome = source.home[i];
-    } else if (source.label[i] == "W-L-OT") {
+    } else if (source.label[i] == "SEASON" || source.label[i] == "W-L-OT") {
       cached.recordAway = source.away[i]; cached.recordHome = source.home[i];
     } else if (source.label[i] == "POINTS") {
       cached.pointsAway = source.away[i]; cached.pointsHome = source.home[i];
