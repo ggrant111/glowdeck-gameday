@@ -1530,13 +1530,94 @@ void drawScoreboardHeader(const Game &g) {
                  gameIsFuture(g) ? "NEXT" : "FINAL", 81, 16, 2);
   if (gameIsLive(g)) tft.fillCircle(56, 16, 2, WHITE);
   tft.setTextColor(ICE_TEXT, ARENA_BLACK);
-  tft.drawString(String(featuredIndex + 1) + "/" + String(gameCount), 228, 16, 2);
+  tft.drawString(String(carouselSlide + 1) + "/" + String(carouselPageCount()), 228, 16, 2);
   tft.setTextColor(WiFi.status() == WL_CONNECTED ? ICE_BLUE : ORANGE, ARENA_BLACK);
   tft.drawString(WiFi.status() == WL_CONNECTED ? "WiFi" : "AP", 281, 16, 2);
   // Small menu glyph replaces the former three large navigation buttons.
   tft.drawFastHLine(305, 9, 10, WHITE);
   tft.drawFastHLine(305, 15, 10, WHITE);
   tft.drawFastHLine(305, 21, 10, WHITE);
+  tft.setTextDatum(TL_DATUM);
+}
+
+// 320x240: 8 rank rows, full NHL team list across eight carousel slides.
+// All drawing is simple TFT primitives; no image buffers or extra tasks.
+void drawStandingsSlide() {
+  const uint8_t slideNumber = carouselSlide - gameCount;
+  const StandingsCarousel::Page page = StandingsCarousel::page(slideNumber);
+  tft.fillScreen(ARENA_BLACK);
+  tft.fillRect(0, 0, 320, 28, ARENA_PLATE);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(WHITE, ARENA_PLATE);
+  tft.drawString("NHL STANDINGS", 8, 6, 2);
+  tft.setTextDatum(TR_DATUM);
+  tft.setTextColor(ICE_TEXT, ARENA_PLATE);
+  tft.drawString(String(carouselSlide + 1) + "/" +
+                 String(carouselPageCount()), 262, 7, 2);
+  tft.drawString(WiFi.status() == WL_CONNECTED ? "WiFi" : "AP", 298, 7, 2);
+  tft.drawFastHLine(306, 7, 11, WHITE);
+  tft.drawFastHLine(306, 13, 11, WHITE);
+  tft.drawFastHLine(306, 19, 11, WHITE);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE, ARENA_BLACK);
+  tft.drawString(page.title, 160, 41, 4);
+  tft.setTextColor(ICE_BLUE, ARENA_BLACK);
+  tft.drawString(page.range, 160, 61, 2);
+
+  tft.fillRect(5, 71, 310, 17, ARENA_LINE);
+  tft.setTextColor(WHITE, ARENA_LINE);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("#", 18, 79, 2);
+  tft.drawString("TEAM", 74, 79, 2);
+  tft.drawString("GP", 145, 79, 2);
+  tft.drawString("W-L-OT", 215, 79, 2);
+  tft.drawString("PTS", 293, 79, 2);
+
+  const String localDay = deviceLocalDate();
+  if (!standingsReady || (localDay.length() && standingsForDate != localDay)) {
+    tft.setTextColor(WHITE, ARENA_BLACK);
+    tft.drawString("Loading NHL standings...", 160, 145, 2);
+    tft.setTextColor(ICE_TEXT, ARENA_BLACK);
+    tft.drawString("Updates automatically", 160, 175, 2);
+  } else {
+    uint8_t sorted[32] = {};
+    const uint8_t n = StandingsCarousel::collectAndSort(
+       seasonStandings, 32, page, sorted, 32);
+    const Game *armed = selectedGame();
+    for (uint8_t row = 0; row < StandingsCarousel::kRowsPerPage; ++row) {
+      const uint8_t position = page.offset + row;
+      if (position >= n) break;
+      const SeasonStanding &entry = seasonStandings[sorted[position]];
+      const uint16_t bg = row % 2 ? 0x1084 : 0x0822;
+      const int16_t y = 90 + row * 17;
+      tft.fillRect(5, y, 310, 17, bg);
+      if (armed && (entry.team == armed->home ||
+                    entry.team == armed->away))
+        tft.fillRect(6, y, 3, 17, ICE_BLUE);
+      tft.fillRect(41, y + 3, 4, 11, to565(teamRgb(entry.team)));
+      tft.setTextColor(WHITE, bg);
+      tft.drawString(String(StandingsCarousel::rank(
+          page.group, entry.conferenceSequence, entry.divisionSequence)),
+          20, y + 8, 2);
+      tft.drawString(entry.team, 72, y + 8, 2);
+      tft.setTextColor(ICE_TEXT, bg);
+      tft.drawString(String(entry.gamesPlayed), 145, y + 8, 2);
+      tft.drawString(entry.seasonRecord, 215, y + 8, 2);
+      tft.setTextColor(WHITE, bg);
+      tft.drawString(entry.points.length() ? entry.points : "--",
+                     293, y + 8, 2);
+    }
+    if (n == 0) {
+      tft.setTextColor(WHITE, ARENA_BLACK);
+      tft.drawString("Standings unavailable", 160, 145, 2);
+    }
+  }
+
+  tft.fillRect(0, 229, 320, 11, ARENA_PLATE);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(ICE_TEXT, ARENA_PLATE);
+  tft.drawString("Swipe for games / more rankings", 160, 234, 1);
   tft.setTextDatum(TL_DATUM);
 }
 
@@ -1646,7 +1727,9 @@ void draw() {
   needsDraw = false;
   if (screen == Screen::CALIBRATE) { drawCalibration(); return; }
   if (screen == Screen::LIVE) {
-    if (!gameCount) {
+    if (showingStandingsPage()) {
+      drawStandingsSlide();
+    } else if (!gameCount) {
       tft.fillScreen(ARENA_BLACK);
       tft.setTextDatum(MC_DATUM);
       tft.setTextColor(WHITE, ARENA_BLACK);
