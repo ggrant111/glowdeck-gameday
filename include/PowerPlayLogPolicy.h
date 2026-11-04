@@ -10,6 +10,7 @@ struct Watch {
   uint32_t gameId = 0;
   uint8_t side = 0; // 0 none, 1 home, 2 away
   uint8_t noPowerPlaySamples = 0;
+  uint32_t firstNoPowerPlayAtMs = 0;
   bool initialized = false;
 };
 struct Change {
@@ -18,7 +19,7 @@ struct Change {
   bool firstObservation = false;
 };
 inline Change observe(Watch &watch, uint32_t gameId, bool dataKnown,
-                      uint8_t observedSide) {
+                      uint8_t observedSide, uint32_t nowMs) {
   Change c;
   if (!dataKnown || !gameId || observedSide > 2) return c;
   if (watch.gameId != gameId) watch = Watch();
@@ -32,13 +33,24 @@ inline Change observe(Watch &watch, uint32_t gameId, bool dataKnown,
   }
   if (observedSide == watch.side) {
     watch.noPowerPlaySamples = 0;
+    watch.firstNoPowerPlayAtMs = 0;
     return c;
   }
   if (observedSide == 0) {
-    if (watch.side != 0 && ++watch.noPowerPlaySamples >= 2) {
-      c.ended = watch.side;
-      watch.side = 0;
-      watch.noPowerPlaySamples = 0;
+    if (watch.side != 0) {
+      if (!watch.noPowerPlaySamples)
+        watch.firstNoPowerPlayAtMs = nowMs;
+      if (watch.noPowerPlaySamples < 255)
+        ++watch.noPowerPlaySamples;
+      // Two distinct samples over >=10s: don't treat duplicated reads of
+      // the same fallback snapshot as independent end confirmations.
+      if (watch.noPowerPlaySamples >= 2 &&
+          uint32_t(nowMs - watch.firstNoPowerPlayAtMs) >= 10000UL) {
+        c.ended = watch.side;
+        watch.side = 0;
+        watch.noPowerPlaySamples = 0;
+        watch.firstNoPowerPlayAtMs = 0;
+      }
     }
     return c;
   }
@@ -46,6 +58,7 @@ inline Change observe(Watch &watch, uint32_t gameId, bool dataKnown,
   if (watch.side) c.ended = watch.side;
   watch.side = observedSide;
   watch.noPowerPlaySamples = 0;
+  watch.firstNoPowerPlayAtMs = 0;
   c.started = observedSide;
   return c;
 }
