@@ -130,7 +130,41 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <option value="2">Mountain (MT)</option><option value="3">Pacific (PT)</option>
 <option value="4">Arizona (AZ)</option>
 </select>
-<div class="actions"><button id="saveDisplay" class="primary">Save display settings</button></div>
+<div class="actions"><button id="saveDisplay" class="primary">Save display settings</button></div><div class="card" style="margin-top:18px">
+<h2>Live event overlays</h2>
+<p>Temporarily show the scoring team's official logo, color, score and event description on the CYD during NHL celebrations. Animated borders coordinate with the internal RGB LED and opted-in WLED controllers. No WLED is required.</p>
+<div class="stats">
+<div class="stat"><span>On-screen event</span><b id="overlayStatus">Idle</b></div>
+<div class="stat"><span>Queued events</span><b id="overlayQueued">0</b></div>
+</div>
+<div class="toggle"><input type="checkbox" id="overlayEnabled"><label for="overlayEnabled">Enable event screen takeovers</label></div>
+<div class="row" style="margin-top:12px">
+<div class="toggle"><input id="overlayGoals" type="checkbox"><label for="overlayGoals">Goals</label></div>
+<div class="toggle"><input id="overlayPowerPlays" type="checkbox"><label for="overlayPowerPlays">Power-play start/end</label></div>
+<div class="toggle"><input id="overlayStart" type="checkbox"><label for="overlayStart">Game start</label></div>
+<div class="toggle"><input id="overlayFinal" type="checkbox"><label for="overlayFinal">Final win/loss</label></div>
+</div>
+<div class="row" style="margin-top:12px">
+<div class="toggle"><input id="overlayFlash" type="checkbox"><label for="overlayFlash">Brief goal border flashing</label></div>
+<div class="toggle"><input id="overlayLogos" type="checkbox"><label for="overlayLogos">Display team logos</label></div>
+</div>
+<div class="row">
+<div><label for="overlayGoalSeconds">Goal screen duration (3–12 seconds)</label>
+<input id="overlayGoalSeconds" type="number" min="3" max="12" step="1" value="8"></div>
+<div><label for="overlayFinalSeconds">Final screen duration (3–12 seconds)</label>
+<input id="overlayFinalSeconds" type="number" min="3" max="12" step="1" value="7"></div>
+</div>
+<p class="small muted">A goal has priority over other overlays. The previous carousel, stats or standings page returns automatically. NHL polling and light effects continue independently. Flashing is limited to the colored screen border; the whole screen does not strobe.</p>
+<div class="actions"><button id="overlayTestGoal">Preview goal</button>
+<button id="overlayTestPP">Preview power play</button>
+<button id="overlayTestPPEnd">Preview PP end</button>
+<button id="overlayTestStart">Preview puck drop</button>
+<button id="overlayTestWin">Preview final win</button>
+<button id="overlayTestLoss">Preview final loss</button>
+<button id="overlayStop">Dismiss overlay</button></div>
+<p class="small muted">These previews affect the CYD screen only. Test them with your WLED devices disconnected if desired.</p>
+</div>
+
 <div class="hint">Browsing rotating games does not change which matchup triggers goal celebrations. Use ARM GOALS on the CYD or ARM in the Games tab.</div>
 </div></section>
 <section id="devices" class="panel">
@@ -372,6 +406,10 @@ function renderStatus(){
     ?s.standingsPage||"League standings"
     :showing?showing.away+" @ "+showing.home:"No games";
   $("displaySlide").textContent=((s.carouselSlide??0)+1)+" / "+(s.carouselTotal||1);
+  $("overlayStatus").textContent=s.overlayActive?
+    (s.overlayEvent||"Event")+" "+(s.overlayTeam||"")+
+    " · "+Math.ceil((s.overlayRemainingMs||0)/1000)+"s":"Idle";
+  $("overlayQueued").textContent=String(s.overlayQueue??0);
   $("displayStandingsState").textContent=s.standingsReady?"Current cache loaded":"Loading or unavailable";
   $("displayDate").textContent=s.scoreDate||"Not loaded";
   $("displayToday").textContent=s.today||"Synchronizing";
@@ -597,6 +635,15 @@ function formConfig(){
     rearPowerPlay:$("rearPowerPlay").checked,
     rearBrightness:Number($("rearBrightness").value),
     rearGoalSeconds:Number($("rearGoalSeconds").value),
+    overlayEnabled:$("overlayEnabled").checked,
+    overlayGoals:$("overlayGoals").checked,
+    overlayPowerPlays:$("overlayPowerPlays").checked,
+    overlayStart:$("overlayStart").checked,
+    overlayFinal:$("overlayFinal").checked,
+    overlayFlash:$("overlayFlash").checked,
+    overlayLogos:$("overlayLogos").checked,
+    overlayGoalSeconds:Number($("overlayGoalSeconds").value),
+    overlayFinalSeconds:Number($("overlayFinalSeconds").value),
     cycleGames:$("cycleGames").checked,showStandings:$("showStandings").checked,
     cycleSeconds:Number($("cycleSeconds").value),
     timezone:Number($("displayTimezone").value),wled:deviceSettings()};
@@ -628,6 +675,15 @@ async function loadConfig(){
   $("rearBrightValue").textContent=$("rearBrightness").value+" / 255";
   $("rearGoalSeconds").value=currentConfig.rearGoalSeconds||6;
   $("screenInverted").checked=!!currentConfig.screenInverted;
+  $("overlayEnabled").checked=currentConfig.overlayEnabled!==false;
+  $("overlayGoals").checked=currentConfig.overlayGoals!==false;
+  $("overlayPowerPlays").checked=currentConfig.overlayPowerPlays!==false;
+  $("overlayStart").checked=currentConfig.overlayStart!==false;
+  $("overlayFinal").checked=currentConfig.overlayFinal!==false;
+  $("overlayFlash").checked=currentConfig.overlayFlash!==false;
+  $("overlayLogos").checked=currentConfig.overlayLogos!==false;
+  $("overlayGoalSeconds").value=currentConfig.overlayGoalSeconds||8;
+  $("overlayFinalSeconds").value=currentConfig.overlayFinalSeconds||7;
   $("cycleGames").checked=!!currentConfig.cycleGames;
   $("showStandings").checked=currentConfig.showStandings!==false;
   $("cycleSeconds").value=currentConfig.cycleSeconds||9;
@@ -641,6 +697,21 @@ document.querySelectorAll("[data-mode]").forEach(b=>b.addEventListener("click",(
 })));
 $("saveSettings").onclick=()=>perform(saveConfig);
 $("saveDisplay").onclick=()=>perform(saveConfig);
+function previewOverlay(kind,side="home"){
+  perform(async()=>{
+    await post("/api/overlay/preview",{kind,side});
+    await refresh();
+    message(kind==="stop"?"On-screen overlay dismissed":
+      "CYD "+kind+" overlay preview started");
+  });
+}
+$("overlayTestGoal").onclick=()=>previewOverlay("goal");
+$("overlayTestPP").onclick=()=>previewOverlay("pp");
+$("overlayTestPPEnd").onclick=()=>previewOverlay("ppend");
+$("overlayTestStart").onclick=()=>previewOverlay("start");
+$("overlayTestWin").onclick=()=>previewOverlay("win");
+$("overlayTestLoss").onclick=()=>previewOverlay("loss");
+$("overlayStop").onclick=()=>previewOverlay("stop");
 $("eventCategory").onchange=()=>{eventOffset=0;perform(loadEventLog)};
 $("refreshEventLog").onclick=()=>perform(loadEventLog);
 $("eventOlder").onclick=()=>{eventOffset+=12;perform(loadEventLog)};
