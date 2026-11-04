@@ -66,14 +66,17 @@ struct Book {
     if(!minor&&!otherMajor) return false; // No misconduct or fighting-only PP.
     uint16_t at=0;
     if(!absolute(period,time,at))return false;
-    penalties[penaltyCount++]={at,(uint16_t)(minutes*60),penalizedSide,minor};
+    Penalty &p=penalties[penaltyCount++];
+    p.at=at; p.duration=(uint16_t)(minutes*60);
+    p.penalized=penalizedSide; p.goalReleasable=minor;
     return true;
   }
   bool addPpGoal(uint8_t period,const char*time,uint8_t scoringSide) {
     if(!scoringSide || goalCount>=kMaxGoals)return false;
     uint16_t at=0;
     if(!absolute(period,time,at))return false;
-    goals[goalCount++]={at,scoringSide};
+    Goal &goal=goals[goalCount++];
+    goal.at=at; goal.scoringSide=scoringSide;
     return true;
   }
   // Calculate active minor/major penalty differential. A PP goal cancels
