@@ -2061,10 +2061,13 @@ void pollNhl() {
   scoreboardDate = newScoreboardDate;
   scoreboardLoaded = true;
   if (requestedDate.length()) targetScoreboardDate = requestedDate;
+  bool liveSituationChanged = false;
   gameCount = 0;
   for (JsonObject item : arr) {
     if (gameCount >= MAX_GAMES) break;
     Game &g = games[gameCount++];
+    const uint32_t priorId=g.id;
+    const uint8_t priorPP=g.ppSide, priorEmpty=g.emptyNetSide;
     g.id = item["id"] | 0U;
     g.home = item["homeTeam"]["abbrev"].as<String>();
     g.away = item["awayTeam"]["abbrev"].as<String>();
@@ -2102,6 +2105,8 @@ void pollNhl() {
       g.emptyNetUpdatedAt = millis();
     }
     validatePowerPlay(g);
+    if (priorId != g.id || priorPP != g.ppSide ||
+        priorEmpty != g.emptyNetSide) liveSituationChanged = true;
   }
   if (newDay) {
     featuredIndex = 0;
@@ -2224,8 +2229,8 @@ void pollNhl() {
     haveBaseline = false;
     lastArmedGameState = "";
   }
-  if (gamesFingerprint() != previousFingerprint || newDay ||
-      previouslyLiveMode != carouselPlan.liveMode ||
+  if (gamesFingerprint() != previousFingerprint || liveSituationChanged ||
+      newDay || previouslyLiveMode != carouselPlan.liveMode ||
       oldSlideKind != visibleSlide.kind) {
     // Summary pages may have several score/status updates in a single poll.
     // Only partial-update a full-screen matchup that remains the same game.
@@ -2581,8 +2586,8 @@ void drawLiveReadout(const Game &g) {
       tft.fillRoundRect(x, 143, 62, 18, 4, chip);
       if (pp || en) {
         tft.setTextColor(WHITE, chip);
-        tft.drawString(pp && en ? "PP+EN" : pp ? "PP" : "EMPTY NET",
-                       x+31, 152, (pp||!en)?2:1);
+        tft.drawString(pp && en ? "PP+EN" : pp ? "PP" : "EN",
+                       x+31, 152, 2);
       }
     }
   } else {
