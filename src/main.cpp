@@ -21,6 +21,7 @@
 #include "CelebrationEngine.h"
 #include "TeamGradient.h"
 #include "GameEventLog.h"
+#include "PowerPlayLogPolicy.h"
 #include "RearLedPattern.h"
 #include <time.h>
 
@@ -92,12 +93,8 @@ GoalWatch goalWatch[MAX_GAMES];
 GameEventLog::Buffer gameEventHistory;
 uint32_t wledEventOwner[MAX_WLED] = {0, 0, 0, 0};
 uint32_t armedPpLogSeq = 0, queuedWledLogSeq = 0;
-struct PpEventWatch {
-  uint32_t id = 0;
-  uint8_t side = 0;
-  bool baseline = false;
-};
-PpEventWatch ppEventWatch[MAX_GAMES];
+// NHL game ID is the stable key: game positions can reorder every poll.
+PowerPlayLogPolicy::Watch ppEventWatch[MAX_GAMES];
 struct PowerPlaySnapshot {
   uint32_t id = 0, updatedAt = 0;
   uint8_t side = 0;
@@ -524,46 +521,46 @@ void detectRearGoalChanges() {
 
 // Track PP changes only when fresh situation data is known. Missing NHL
 // situation data is not interpreted as PP ending.
+// Power-play logging is keyed by NHL game ID, not by array index, because the
+// NHL's daily score feed can reorder matches between 10-second polls.
+PowerPlayLogPolicy::Watch *getPowerPlayLogWatch(uint32_t id) {
+  if (!id) return nullptr;
+  for (auto &watch : ppEventWatch)
+    if (watch.gameId == id) return &watch;
+  for (auto &watch : ppEventWatch)
+    if (!watch.gameId) {
+      watch = PowerPlayLogPolicy::Watch();
+      watch.gameId = id;
+      return &watch;
+    }
+  return nullptr; // Full (normally one slot per game on the date).
+}
+
 void observePowerPlayEvents() {
   for (uint8_t i = 0; i < gameCount; ++i) {
     const Game &g = games[i];
-    PpEventWatch &w = ppEventWatch[i];
-    if (w.id != g.id) {
-      w = PpEventWatch();
-      w.id = g.id;
-    }
-    if (!rearFollows(g.id) || !g.ppDataKnown ||
+    if (!rearFollows(g.id) ||
         (g.state != "LIVE" && g.state != "CRIT")) continue;
-    if (!w.baseline) {
-      w.side = g.ppSide;
-      w.baseline = true;
-      // A game followed mid-power-play is already active. Record detection,
-      // not an invented start timestamp.
-      if (g.ppSide) {
-        const String &team = g.ppSide == 1 ? g.home : g.away;
-        GameEventLog::Entry &e = addGameEvent(
-            g, GameEventLog::Type::POWER_PLAY_START, team, 0);
-        e.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
-            ? GameEventLog::Rear::NOT_ENABLED : GameEventLog::Rear::SCHEDULED;
-        if (g.id == selectedGameId) armedPpLogSeq = e.sequence;
-      }
-      continue;
+    PowerPlayLogPolicy::Watch *watch = getPowerPlayLogWatch(g.id);
+    if (!watch) continue;
+    const bool reliable = g.ppDataKnown &&
+       uint32_t(millis() - g.ppUpdatedAt) < 80000UL;
+    const PowerPlayLogPolicy::Change change = PowerPlayLogPolicy::observe(
+        *watch, g.id, reliable, g.ppSide, millis());
+    if (change.ended) {
+      const String &team = change.ended == 1 ? g.home : g.away;
+      addGameEvent(g, GameEventLog::Type::POWER_PLAY_END, team, 0);
+      if (g.id == selectedGameId) armedPpLogSeq = 0;
     }
-    if (g.ppSide == w.side) continue;
-    if (!g.ppSide && g.id == selectedGameId) armedPpLogSeq = 0;
-    if (w.side) {
-      const String &team = w.side == 1 ? g.home : g.away;
-      addGameEvent(g, GameEventLog::Type::POWER_PLAY_END, team);
+    if (change.started) {
+      const String &team = change.started == 1 ? g.home : g.away;
+      GameEventLog::Entry &entry = addGameEvent(
+          g, GameEventLog::Type::POWER_PLAY_START, team, 0);
+      entry.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
+          ? GameEventLog::Rear::NOT_ENABLED
+          : GameEventLog::Rear::SCHEDULED;
+      if (g.id == selectedGameId) armedPpLogSeq = entry.sequence;
     }
-    if (g.ppSide) {
-      const String &team = g.ppSide == 1 ? g.home : g.away;
-      GameEventLog::Entry &e = addGameEvent(
-          g, GameEventLog::Type::POWER_PLAY_START, team);
-      e.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
-          ? GameEventLog::Rear::NOT_ENABLED : GameEventLog::Rear::SCHEDULED;
-      if (g.id == selectedGameId) armedPpLogSeq = e.sequence;
-    }
-    w.side = g.ppSide;
   }
 }
 
@@ -635,7 +632,7 @@ void prepareNewScoreboardDate(const String &today) {
     scheduleWledRestoreAll();
     lastArmedGameState = "";
     for (auto &entry : goalWatch) entry = GoalWatch();
-    for (auto &entry : ppEventWatch) entry = PpEventWatch();
+    for (auto &entry : ppEventWatch) entry = PowerPlayLogPolicy::Watch();
     armedPpLogSeq = 0;
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) cfg.followIds[i] = 0;
