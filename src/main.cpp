@@ -390,6 +390,7 @@ uint8_t activePowerPlaySide(uint32_t now, uint32_t &color) {
   return 0;
 }
 
+void markPpRearEvent(uint32_t id, const String &team);
 void tickRearLed() {
   const uint32_t now = millis();
   if (uint32_t(now - rearLastTick) < 25UL) return;
@@ -411,6 +412,16 @@ void tickRearLed() {
     if (rearEvent != RearEvent::POWER_PLAY) rearPulseStart = now;
     rearEvent = RearEvent::POWER_PLAY;
     writeRearLed(ppColor, RearLedPattern::pulse(uint32_t(now - rearPulseStart)));
+    if (!testPulse) {
+      for (uint8_t i = 0; i < gameCount; ++i) {
+        const Game &g = games[i];
+        if (!rearFollows(g.id) || !g.ppSide || !g.ppDataKnown ||
+            (g.state != "LIVE" && g.state != "CRIT") ||
+            g.intermission || uint32_t(now - g.ppUpdatedAt) > 80000UL) continue;
+        markPpRearEvent(g.id, g.ppSide == 1 ? g.home : g.away);
+        break; // Only one PP color is rendered by the rear RGB at a time.
+      }
+    }
     return;
   }
   rearEvent = RearEvent::IDLE;
@@ -617,6 +628,8 @@ void prepareNewScoreboardDate(const String &today) {
     scheduleWledRestoreAll();
     lastArmedGameState = "";
     for (auto &entry : goalWatch) entry = GoalWatch();
+    for (auto &entry : ppEventWatch) entry = PpEventWatch();
+    armedPpLogSeq = 0;
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) cfg.followIds[i] = 0;
     saveSettings();
@@ -1892,16 +1905,12 @@ void pollNhl() {
     }
   }
   if (followedChanged) saveSettings();
+  // Goal detection owns both hardware dispatch and the event log, ensuring
+  // each observed score increment is recorded exactly once.
+  detectRearGoalChanges();
+  observePowerPlayEvents();
   Game *g = selectedGame();
   if (g) {
-    if (haveBaseline && (g->state == "LIVE" || g->state == "CRIT")) {
-      const bool homeGoal = g->homeScore > previousHome;
-      const bool awayGoal = g->awayScore > previousAway;
-      if (homeGoal && (cfg.mode == 1 || cfg.mode == 3))
-        celebrate(teamRgb(g->home));
-      if (awayGoal && (cfg.mode == 2 || cfg.mode == 3))
-        celebrate(teamRgb(g->away));
-    }
     // Trigger game-start and final outcomes only when a previously observed
     // state transitions; booting into a LIVE/FINAL game never replays events.
     const bool homeWon = g->homeScore > g->awayScore;
@@ -1928,10 +1937,6 @@ void pollNhl() {
     haveBaseline = false;
     lastArmedGameState = "";
   }
-  // A multi-device HTTP celebration may spend time capturing WLED snapshots.
-  // Start the CYD rear LED's timed flash AFTER those network calls, otherwise
-  // its short flash can expire before the main loop resumes.
-  detectRearGoalChanges();
   if (gamesFingerprint() != previousFingerprint || newDay) {
     if (!newDay && !showingStandingsPage() && screen == Screen::LIVE &&
         gameCount > 0 && previouslyFeatured == games[featuredIndex].id)
@@ -2377,6 +2382,7 @@ void selectGame(uint32_t id) {
   // A new game should not inherit an in-progress goal/PP effect.
   scheduleWledRestoreAll();
   selectedGameId = id;
+  armedPpLogSeq = 0;
   lastArmedGameState = "";
   haveBaseline = false;
   prefs.putUInt("game", id);
@@ -3048,6 +3054,7 @@ void loop() {
     if (needSituation && !restoringLights && rearEvent != RearEvent::GOAL) {
       lastPpFallback = millis();
       fetchFollowedPowerPlays();
+      observePowerPlayEvents();
     }
   }
   if (screen == Screen::LIVE && cfg.cycleGames && carouselPageCount() > 1 &&
