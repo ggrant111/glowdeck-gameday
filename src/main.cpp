@@ -1415,12 +1415,16 @@ void tickRestores() {
                                    cfg.wled[i], body);
     if (restored) {
       wledDeviceResult[i] = "Restored";
+      markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORED);
+      wledEventOwner[i] = 0;
       restoring[i] = false;
       savedState[i] = "";
       savedWledIp[i] = "";
       restoreRetries[i] = 0;
     } else if (++restoreRetries[i] >= 3) {
       wledDeviceResult[i] = "Restore failed";
+      markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORE_FAILED);
+      wledEventOwner[i] = 0;
       Serial.printf("[WLED] controller %u restore failed after 3 tries\n", i + 1);
       restoring[i] = false;
       savedState[i] = "";
@@ -1428,16 +1432,36 @@ void tickRestores() {
     } else {
       restoreAt[i] = millis() + 1500UL;
       wledDeviceResult[i] = "Retrying restore";
+      markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORE_RETRYING);
     }
   }
 }
 
-bool startWledEvent(CelebrationEngine::Event event, uint32_t color) {
+bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
+                    uint32_t eventSequence) {
   if (event == CelebrationEngine::Event::NONE) {
     scheduleWledRestoreAll();
     return false;
   }
+  // When the NHL first reports an already-active PP, the engine may start
+  // without a transition log. Mark it as detected, not a fabricated start.
+  if (!eventSequence && event == CelebrationEngine::Event::POWER_PLAY) {
+    Game *g = selectedGame();
+    if (g && g->ppSide) {
+      const String &team = g->ppSide == 1 ? g->home : g->away;
+      GameEventLog::Entry &e = addGameEvent(
+          *g, GameEventLog::Type::POWER_PLAY_START, team, 0);
+      e.rear = cfg.rearLedEnabled && cfg.rearPowerPlay
+                   ? GameEventLog::Rear::SCHEDULED
+                   : GameEventLog::Rear::DISABLED;
+      eventSequence = e.sequence;
+      armedPpLogSeq = e.sequence;
+    }
+  }
   bool prepared[MAX_WLED] = {};
+  for (uint8_t i = 0; i < MAX_WLED; ++i)
+    if (wledParticipates(i, event))
+      markWledEvent(eventSequence, i, GameEventLog::Wled::PENDING);
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     if (!wledParticipates(i, event)) {
       if (restoring[i]) {
@@ -1459,6 +1483,7 @@ bool startWledEvent(CelebrationEngine::Event event, uint32_t color) {
       if (savedState[i].isEmpty()) {
         savedWledIp[i] = "";
         wledDeviceResult[i] = "Snapshot failed";
+        markWledEvent(eventSequence, i, GameEventLog::Wled::SNAPSHOT_FAILED);
         Serial.printf("[WLED] controller %u skipped: cannot save state\n", i + 1);
         continue;
       }
@@ -1470,6 +1495,10 @@ bool startWledEvent(CelebrationEngine::Event event, uint32_t color) {
   uint8_t successful = 0;
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     if (!prepared[i]) continue;
+    // The prior event might have been preempted before its own restore.
+    if (wledEventOwner[i] && wledEventOwner[i] != eventSequence)
+      markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::SUPERSEDED);
+    wledEventOwner[i] = eventSequence;
     const String body = wledEffectBody(savedState[i], event, color, 0);
     if (!body.isEmpty() && postWled(cfg.wled[i], body)) {
       restoring[i] = true;
@@ -1477,9 +1506,11 @@ bool startWledEvent(CelebrationEngine::Event event, uint32_t color) {
       // All devices share a single clock; PP has no duration until it ends.
       restoreAt[i] = UINT32_MAX;
       wledDeviceResult[i] = "Playing";
+      markWledEvent(eventSequence, i, GameEventLog::Wled::ACCEPTED, true);
       ++successful;
     } else {
       wledDeviceResult[i] = "Command failed";
+      markWledEvent(eventSequence, i, GameEventLog::Wled::COMMAND_FAILED);
       // If the POST may have applied despite a timeout, retain the snapshot
       // and attempt to restore rather than leaving the lights stranded.
       restoring[i] = true;
@@ -1539,8 +1570,11 @@ void tickWledCelebrations() {
                                               wledEventColor, wledPhase);
           if (!body.isEmpty() && postWled(cfg.wled[i], body))
             wledDeviceResult[i] = "Playing";
-          else
+          else {
             wledDeviceResult[i] = "Phase update failed";
+            markWledEvent(wledEventOwner[i], i,
+                          GameEventLog::Wled::COMMAND_FAILED);
+          }
         }
       }
       return;
@@ -1551,12 +1585,19 @@ void tickWledCelebrations() {
       const CelebrationEngine::Event pending = queuedWledEvent;
       const uint32_t pendingColor = queuedWledColor;
       queuedWledEvent = CelebrationEngine::Event::NONE;
-      if (startWledEvent(pending, pendingColor)) return;
+      if (startWledEvent(pending, pendingColor, queuedWledLogSeq)) {
+        queuedWledLogSeq = 0;
+        return;
+      }
+      queuedWledLogSeq = 0;
     }
     // After goal or game-start, return to power-play breathing if NHL still
     // reports an advantage, otherwise restore the original WLED state.
     if (hasPP && startWledEvent(CelebrationEngine::Event::POWER_PLAY,
-                                powerPlayColor)) return;
+                                powerPlayColor, armedPpLogSeq)) {
+      armedPpLogSeq = 0;
+      return;
+    }
     scheduleWledRestoreAll();
     return;
   }
@@ -1572,14 +1613,16 @@ void tickWledCelebrations() {
     static uint32_t lastPpAttempt = 0;
     if (uint32_t(now - lastPpAttempt) > 8000UL) {
       lastPpAttempt = now;
-      startWledEvent(CelebrationEngine::Event::POWER_PLAY, powerPlayColor);
+      startWledEvent(CelebrationEngine::Event::POWER_PLAY,
+                     powerPlayColor, armedPpLogSeq);
+      armedPpLogSeq = 0;
     }
   }
 }
 
-// Compatibility with existing goal detection and "Test all enabled lights".
-void celebrate(uint32_t color) {
-  startWledEvent(CelebrationEngine::Event::GOAL, color);
+// The onboard horn is still handled independently from WLED response codes.
+void celebrate(uint32_t color, uint32_t eventSequence) {
+  startWledEvent(CelebrationEngine::Event::GOAL, color, eventSequence);
   startHorn();
 }
 
