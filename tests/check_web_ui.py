@@ -19,4 +19,14 @@ for control in controls:
     assert f'id="{control}"' in source, f"Missing WLED control: {control}"
 for method in ("/api/wled/preview", "wledPreview(", "function deviceSettings()"):
     assert method in script, f"Missing WLED UI function: {method}"
+for control in (
+    "recentGameEvents", "events", "eventCategory", "refreshEventLog",
+    "clearEventLog", "eventCount", "eventList", "eventNewer", "eventOlder",
+):
+    assert f'id="{control}"' in source, f"Missing event log control: {control}"
+for method in (
+    "/api/events?category=", "/api/events/clear", "function createEventElement(",
+    "function refreshEventSummary(", "function loadEventLog(",
+):
+    assert method in script, f"Missing event log UI method: {method}"
 print("PASS: WLED celebration dashboard JavaScript and control bindings")
