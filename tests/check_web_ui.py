@@ -29,4 +29,14 @@ for method in (
     "function refreshEventSummary(", "function loadEventLog(",
 ):
     assert method in script, f"Missing event log UI method: {method}"
+overlay_controls = (
+  "overlayStatus", "overlayQueued", "overlayEnabled", "overlayGoals",
+  "overlayPowerPlays", "overlayStart", "overlayFinal", "overlayFlash",
+  "overlayLogos", "overlayGoalSeconds", "overlayFinalSeconds",
+  "overlayTestGoal", "overlayTestPP", "overlayTestPPEnd",
+  "overlayTestStart", "overlayTestWin", "overlayTestLoss", "overlayStop",
+)
+for control in overlay_controls:
+    assert f'id="{control}"' in source, f"Missing overlay control: {control}"
+assert "/api/overlay/preview" in script and "function previewOverlay(" in script
 print("PASS: WLED celebration dashboard JavaScript and control bindings")
