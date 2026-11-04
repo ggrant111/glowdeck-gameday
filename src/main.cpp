@@ -1812,6 +1812,7 @@ void fetchFollowedPowerPlays() {
   if (WiFi.status() != WL_CONNECTED) return;
   Game *target=nullptr;
   NhlPenaltyLedger::Book *book=nullptr;
+  uint8_t best=0;
   const LiveCarousel::Page visible=currentCarouselPage();
   for(uint8_t i=0;i<gameCount;++i) {
     Game &g=games[i];
@@ -1824,7 +1825,12 @@ void fetchFollowedPowerPlays() {
     if(!candidate)continue;
     if(candidate->loaded &&
        uint32_t(millis()-candidate->checkedAt)<30000UL)continue;
-    target=&g;book=candidate;break;
+    // The game visible on the CYD is highest priority for timely PP badges,
+    // followed by the armed game and any additional followed games.
+    const uint8_t priority=shown?3:(g.id==selectedGameId?2:1);
+    if(priority>best) {
+      best=priority;target=&g;book=candidate;
+    }
   }
   if(!target||!book)return;
   WiFiClientSecure client;
