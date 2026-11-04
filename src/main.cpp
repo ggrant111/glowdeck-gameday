@@ -468,7 +468,7 @@ void markPpRearEvent(uint32_t id, const String &team) {
     return;
   }
 }
-void celebrate(uint32_t color, uint32_t eventSequence);
+void celebrate(uint32_t color, uint32_t eventSequence = 0);
 bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
                     uint32_t eventSequence = 0);
 
@@ -544,6 +544,7 @@ void observePowerPlayEvents() {
       continue;
     }
     if (g.ppSide == w.side) continue;
+    if (!g.ppSide && g.id == selectedGameId) armedPpLogSeq = 0;
     if (w.side) {
       const String &team = w.side == 1 ? g.home : g.away;
       addGameEvent(g, GameEventLog::Type::POWER_PLAY_END, team);
@@ -1400,6 +1401,7 @@ void scheduleWledRestoreAll() {
   wledEventDuration = 0;
   wledPpTestUntil = 0;
   queuedWledEvent = CelebrationEngine::Event::NONE;
+  queuedWledLogSeq = 0;
 }
 
 void tickRestores() {
@@ -1960,16 +1962,29 @@ void pollNhl() {
     const bool favoredWon = cfg.favoriteSide == 0 ? homeWon : !homeWon;
     const CelebrationEngine::Event transition = CelebrationEngine::transition(
         haveBaseline, lastArmedGameState.c_str(), g->state.c_str(), favoredWon);
-    if ((transition == CelebrationEngine::Event::GAME_START && cfg.wledGameStart) ||
-        ((transition == CelebrationEngine::Event::FINAL_WIN ||
-          transition == CelebrationEngine::Event::FINAL_LOSS) && cfg.wledFinal)) {
-      const uint32_t teamColor =
-          teamRgb(cfg.favoriteSide == 0 ? g->home : g->away);
-      if (wledActiveEvent == CelebrationEngine::Event::GOAL) {
-        queuedWledEvent = transition;
-        queuedWledColor = teamColor;
-      } else {
-        startWledEvent(transition, teamColor);
+    if (transition != CelebrationEngine::Event::NONE) {
+      const String &fav = cfg.favoriteSide == 0 ? g->home : g->away;
+      const GameEventLog::Type eventType =
+          transition == CelebrationEngine::Event::GAME_START
+              ? GameEventLog::Type::GAME_START :
+          transition == CelebrationEngine::Event::FINAL_WIN
+              ? GameEventLog::Type::FINAL_WIN
+              : GameEventLog::Type::FINAL_LOSS;
+      GameEventLog::Entry &logged = addGameEvent(*g, eventType, fav);
+      const bool enabled = transition == CelebrationEngine::Event::GAME_START
+                           ? cfg.wledGameStart : cfg.wledFinal;
+      if (enabled) {
+        const uint32_t teamColor = teamRgb(fav);
+        if (wledActiveEvent == CelebrationEngine::Event::GOAL) {
+          queuedWledEvent = transition;
+          queuedWledColor = teamColor;
+          queuedWledLogSeq = logged.sequence;
+          for (uint8_t i = 0; i < MAX_WLED; ++i)
+            if (wledParticipates(i, transition))
+              markWledEvent(logged.sequence, i, GameEventLog::Wled::PENDING);
+        } else {
+          startWledEvent(transition, teamColor, logged.sequence);
+        }
       }
     }
     previousHome = g->homeScore;
@@ -2556,7 +2571,7 @@ void registerRoutes() {
     // New slide/standings metadata should not enlarge the loopTask stack.
     DynamicJsonDocument doc(3072);
     if (doc.capacity() < 3072) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.2";
+    doc["version"] = "0.3.3";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -2972,7 +2987,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.3.2 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.3.3 — CYD only");
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),
