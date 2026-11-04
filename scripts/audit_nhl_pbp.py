@@ -45,6 +45,10 @@ def main():
         print("TEAMS:", json.dumps({
             key:doc.get(key) for key in ("id","gameState","gameDate","awayTeam","homeTeam")
         })[:1800])
+        print("SUMMARY keys:",list(doc.get("summary",{}).keys()))
+        penalties=doc.get("summary",{}).get("penalties",[])
+        print("SUMMARY penalties sample:",json.dumps(penalties)[:4200])
+        print("SUMMARY scoring sample:",json.dumps(doc.get("summary",{}).get("scoring",[]))[:2500])
         plays = doc.get("plays", [])
         print("TOTAL PLAYS",len(plays),"TYPES",dict(Counter(
             p.get("typeDescKey","?") for p in plays)))
