@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.3.3 web-only NHL event and LED/WLED celebration log.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.3.4 stable power-play event logging with optional WLED.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
@@ -21,6 +21,14 @@ The first score after selecting a game is used as a baseline and never replays a
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+
+## Power-play logging stability (v0.3.4)
+
+The event dashboard no longer logs repetitive power-play starts when no WLED controllers are configured. Previously, a WLED retry timer could generate a *new NHL PP entry* every 8 seconds, even if zero devices were available. The WLED engine now skips events with no eligible controllers and **only the NHL observer** creates real game-event start/end records.
+
+Power-play history is tracked by stable NHL game ID instead of the mutable scoreboard array position. A short missing/empty PP situation is ignored; a power-play end requires at least two explicit zero-PP reports separated by at least 10 seconds. Real PP starts are still logged only on genuine state changes. The web history hides WLED 1–4 rows if none of those devices are configured and enabled, displaying **No controllers enabled for celebrations** instead.
+
+The CYD internal RGB LED continues independently from WLED. Existing recorded duplicates from v0.3.3 remain in its RAM session log until reboot or **Clear session log**; updating the firmware reboots and starts a fresh history. Tests cover missing PP data, rapid repeats, real transitions and NHL game identity.
 
 ## Web-only NHL event & celebration log (v0.3.3)
 
