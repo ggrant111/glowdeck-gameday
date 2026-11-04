@@ -771,6 +771,8 @@ void prepareNewScoreboardDate(const String &today) {
     for (auto &entry : ppEventWatch) entry = PowerPlayLogPolicy::Watch();
     armedPpLogSeq = 0;
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
+    for (auto &entry : penaltyLedgers) entry.reset();
+    lastPenaltyLedgerAttempt = 0;
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) cfg.followIds[i] = 0;
     saveSettings();
     stopRearLed();
@@ -1985,6 +1987,8 @@ void pollNhl() {
   gameFilter["clock"]["inIntermission"] = true;
   gameFilter["situation"]["homeTeam"]["strength"] = true;
   gameFilter["situation"]["awayTeam"]["strength"] = true;
+  gameFilter["situation"]["homeTeam"]["goaliePulled"] = true;
+  gameFilter["situation"]["awayTeam"]["goaliePulled"] = true;
   gameFilter["situation"]["homeTeam"]["situationDescriptions"][0] = true;
   gameFilter["situation"]["awayTeam"]["situationDescriptions"][0] = true;
   gameFilter["homeTeam"]["name"]["default"] = true;
@@ -2075,29 +2079,29 @@ void pollNhl() {
     // Reset PP state every NHL poll before applying the fresh situation or
     // a bounded fallback snapshot. Never reuse stale values from Game[] RAM.
     g.ppSide = 0;
+    g.ppCandidate = 0;
+    g.ppSituationKnown = false;
     g.ppDataKnown = false;
     g.ppUpdatedAt = 0;
+    g.emptyNetSide = 0;
+    g.emptyNetKnown = false;
+    g.emptyNetUpdatedAt = 0;
     g.homeScore = item["homeTeam"]["score"] | 0;
     g.awayScore = item["awayTeam"]["score"] | 0;
     g.homeShots = item["homeTeam"]["sog"] | -1;
     g.awayShots = item["awayTeam"]["sog"] | -1;
     JsonVariantConst situation = item["situation"];
-    if (!situation.isNull()) {
-      g.ppSide = detectPowerPlay(situation);
-      g.ppDataKnown = true;
-      g.ppUpdatedAt = millis();
-      ppCache[gameCount - 1].id = g.id;
-      ppCache[gameCount - 1].side = g.ppSide;
-      ppCache[gameCount - 1].known = true;
-      ppCache[gameCount - 1].updatedAt = g.ppUpdatedAt;
-    } else {
-      // No official live situation in the date-scoped score payload.
-      // Leave PP UNKNOWN until the dedicated live scoreboard reports one.
-      // Replaying a cached PP for up to 80s caused false repeat events as
-      // the goalie was pulled and the NHL feed changed between endpoints.
-      g.ppDataKnown = false;
-      g.ppSide = 0;
+    if (!situation.isNull() && (g.state == "LIVE" || g.state == "CRIT") &&
+        !g.intermission) {
+      g.ppCandidate = detectPowerPlay(situation);
+      g.ppSituationKnown = true;
+      // Six skaters (or NHL's explicit goaliePulled flag) means a goalie
+      // has been pulled. This is a separate badge, NOT a power play.
+      g.emptyNetSide = detectEmptyNet(situation);
+      g.emptyNetKnown = true;
+      g.emptyNetUpdatedAt = millis();
     }
+    validatePowerPlay(g);
   }
   if (newDay) {
     featuredIndex = 0;
@@ -3745,21 +3749,16 @@ void loop() {
     reconnectAt = now;
     needsDraw = true;
   }
-  // PP is event-driven by real NHL manpower data, not by cumulative PP stats.
-  // Poll only while relevant and never while WLED state restoration is pending.
-  if (connected && ((cfg.rearLedEnabled && cfg.rearPowerPlay) ||
-                    (cfg.wledPP && selectedGameId)) &&
-      uint32_t(now - lastPpFallback) >= 20000UL) {
-    bool restoringLights = false, needSituation = false;
+  // Validate on-ice PP from official penalty and PP-goal gamecenter data,
+  // never from scoreboard strength alone. At most one filtered request every
+  // 20 seconds, including games visible on the CYD even if not armed.
+  if (connected && uint32_t(now - lastPenaltyLedgerAttempt) >= 20000UL &&
+      rearEvent != RearEvent::GOAL) {
+    bool restoringLights = false;
     for (uint8_t i = 0; i < MAX_WLED; ++i)
       if (restoring[i]) restoringLights = true;
-    for (uint8_t i = 0; i < gameCount; ++i)
-      if (rearFollows(games[i].id) && (games[i].state == "LIVE" ||
-           games[i].state == "CRIT") && !games[i].intermission &&
-           (!games[i].ppDataKnown ||
-            uint32_t(now - games[i].ppUpdatedAt) >= 20000UL)) needSituation = true;
-    if (needSituation && !restoringLights && rearEvent != RearEvent::GOAL) {
-      lastPpFallback = millis();
+    if (!restoringLights) {
+      lastPenaltyLedgerAttempt = millis();
       fetchFollowedPowerPlays();
       observePowerPlayEvents();
     }
