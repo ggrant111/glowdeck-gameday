@@ -110,10 +110,11 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 </section>
 <section id="display" class="panel">
 <div class="card"><h2>Today's game carousel</h2>
-<p>Cycle through today's NHL schedule on the CYD, with official team logos, scheduled starts, live period/clock, scores, shots and final results. The CYD now uses a full-screen broadcast layout without persistent TODAY, GAMES or SETUP buttons. Swipe across the screen for next/previous, tap the main scoreboard to view stats, or tap the tiny top-right menu icon to reach the game list and setup.</p>
+<p>During live NHL games, the CYD automatically focuses on full-screen live scoreboards and groups other upcoming or finished matches into readable four-game summary slides. When no games are live, it returns to the complete game-and-standings carousel. Swipe to browse or tap a summary row for its matchup details.</p>
 <div class="stats">
 <div class="stat"><span>Current screen</span><b id="displayGame">—</b></div>
 <div class="stat"><span>Carousel slide</span><b id="displaySlide">—</b></div>
+<div class="stat"><span>Rotation mode</span><b id="displayRotationMode">—</b></div>
 <div class="stat"><span>League standings</span><b id="displayStandingsState">—</b></div>
 <div class="stat"><span>Scoreboard date</span><b id="displayDate">—</b></div>
 <div class="stat"><span>Local game date</span><b id="displayToday">—</b></div>
@@ -121,7 +122,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 </div>
 <div class="toggle" style="margin-top:18px"><input type="checkbox" id="cycleGames"><label for="cycleGames">Automatically cycle through carousel slides</label></div>
 <div class="toggle" style="margin-top:13px"><input type="checkbox" id="showStandings"><label for="showStandings">Include league-wide conference & division rankings</label></div>
-<p class="small muted">Eight standings slides: East (ranks 1–8 and 9–16), West (ranks 1–8 and 9–16), and all four divisions. Each shows team rank, games played, W-L-OT and points. Swipe left/right to browse. Armed goal alerts continue normally.</p>
+<p class="small muted">When NHL games are LIVE, standings are temporarily removed from rotation to keep the focus on live scores. When no games are live, the eight conference and division slides return, if enabled. Armed goal alerts continue normally.</p>
 <label for="cycleSeconds">Show each slide for (seconds)</label>
 <input id="cycleSeconds" type="number" min="5" max="30" step="1" value="9">
 <label for="displayTimezone">Game start time zone</label>
@@ -404,8 +405,14 @@ function renderStatus(){
     ?s.nhlLastSuccessAgeSeconds+" sec ago":"Not yet received";
   $("displayGame").textContent=s.slideStandings
     ?s.standingsPage||"League standings"
-    :showing?showing.away+" @ "+showing.home:"No games";
+    :s.slideSummary
+      ?"Other games · page "+s.summaryPageNumber+"/"+s.summaryPageCount
+      :showing?showing.away+" @ "+showing.home:"No games";
   $("displaySlide").textContent=((s.carouselSlide??0)+1)+" / "+(s.carouselTotal||1);
+  $("displayRotationMode").textContent=s.liveMode
+    ?s.liveGameCount+" live + "+s.summaryPageCount+
+      " summary page"+(s.summaryPageCount===1?"":"s")
+    :"Full games & standings";
   $("overlayStatus").textContent=s.overlayActive?
     (s.overlayEvent||"Event")+" "+(s.overlayTeam||"")+
     " · "+Math.ceil((s.overlayRemainingMs||0)/1000)+"s":"Idle";
