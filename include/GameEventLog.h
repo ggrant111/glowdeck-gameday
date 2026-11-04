@@ -86,6 +86,7 @@ struct Entry {
   bool preview = false;
   Rear rear = Rear::NA;
   Wled wled[kDevices] = {Wled::NA, Wled::NA, Wled::NA, Wled::NA};
+  uint8_t wledAcknowledgedMask = 0; // Retained even after restore/failure
 };
 class Buffer {
  public:
