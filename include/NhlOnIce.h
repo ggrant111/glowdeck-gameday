@@ -12,6 +12,12 @@ inline uint8_t emptyNetSide(int awaySkaters, int homeSkaters,
   const bool home = homePulled || homeSkaters == 6;
   return (home ? 1U : 0U) | (away ? 2U : 0U);
 }
+inline bool emptyNetLabel(const char *label) {
+  if(!label)return false;
+  return !strcmp(label,"EN") || !strcmp(label,"EA") ||
+         !strcmp(label,"EMPTY NET") || !strcmp(label,"Empty Net") ||
+         !strcmp(label,"GOALIE PULLED") || !strcmp(label,"Extra Attacker");
+}
 inline uint8_t fromSituationCode(const char *code) {
   if (!code || strlen(code) != 4) return 0;
   if ((code[0] != '0' && code[0] != '1') ||
