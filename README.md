@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.3.2 team-color NHL game slide backgrounds.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.3.3 web-only NHL event and LED/WLED celebration log.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
@@ -21,6 +21,12 @@ The first score after selecting a game is used as a baseline and never replays a
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+
+## Web-only NHL event & celebration log (v0.3.3)
+
+The CYD-hosted dashboard now includes a **Recent game events** panel and an **Event Log** tab. It records observed goals (including score changes), known power-play changes, armed game starts/finals, and manual previews. Each row shows the matchup and score, whether the CYD rear LED was triggered, and separate **command acceptance / snapshot / restore / error** statuses for WLED controllers 1–4 and the LED strips they control. Successful WLED HTTP responses are logged as *command accepted*, not physically verified light output.
+
+The most recent **64 entries are stored in a fixed-size RAM ring buffer** until reboot (no flash wear or extra physical touchscreen pages). The browser offers filters, paging, refreshing and clearing the current-session log. The first received NHL score establishes a baseline; the log cannot recreate earlier events or guarantee that it observed every NHL play. See [Web Event History](docs/WEB_EVENT_HISTORY.md).
 
 ## Dynamic team-color game slides (v0.3.2)
 

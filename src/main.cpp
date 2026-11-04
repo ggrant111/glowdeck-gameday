@@ -20,6 +20,7 @@
 #include "NhlFetchPolicy.h"
 #include "CelebrationEngine.h"
 #include "TeamGradient.h"
+#include "GameEventLog.h"
 #include "RearLedPattern.h"
 #include <time.h>
 
@@ -87,6 +88,16 @@ struct GoalWatch {
   bool baseline = false;
 };
 GoalWatch goalWatch[MAX_GAMES];
+// Session-only ring buffer, 64 entries; no flash wear or framebuffer use.
+GameEventLog::Buffer gameEventHistory;
+uint32_t wledEventOwner[MAX_WLED] = {0, 0, 0, 0};
+uint32_t armedPpLogSeq = 0, queuedWledLogSeq = 0;
+struct PpEventWatch {
+  uint32_t id = 0;
+  uint8_t side = 0;
+  bool baseline = false;
+};
+PpEventWatch ppEventWatch[MAX_GAMES];
 struct PowerPlaySnapshot {
   uint32_t id = 0, updatedAt = 0;
   uint8_t side = 0;
@@ -379,6 +390,7 @@ uint8_t activePowerPlaySide(uint32_t now, uint32_t &color) {
   return 0;
 }
 
+void markPpRearEvent(uint32_t id, const String &team);
 void tickRearLed() {
   const uint32_t now = millis();
   if (uint32_t(now - rearLastTick) < 25UL) return;
@@ -400,6 +412,16 @@ void tickRearLed() {
     if (rearEvent != RearEvent::POWER_PLAY) rearPulseStart = now;
     rearEvent = RearEvent::POWER_PLAY;
     writeRearLed(ppColor, RearLedPattern::pulse(uint32_t(now - rearPulseStart)));
+    if (!testPulse) {
+      for (uint8_t i = 0; i < gameCount; ++i) {
+        const Game &g = games[i];
+        if (!rearFollows(g.id) || !g.ppSide || !g.ppDataKnown ||
+            (g.state != "LIVE" && g.state != "CRIT") ||
+            g.intermission || uint32_t(now - g.ppUpdatedAt) > 80000UL) continue;
+        markPpRearEvent(g.id, g.ppSide == 1 ? g.home : g.away);
+        break; // Only one PP color is rendered by the rear RGB at a time.
+      }
+    }
     return;
   }
   rearEvent = RearEvent::IDLE;
@@ -408,6 +430,54 @@ void tickRearLed() {
 
 // Every game gets an independent baseline, preventing false flashes on reboot,
 // date rollover, first fetch, or when following a game already in progress.
+// Only record what this firmware OBSERVED from the NHL API. The endpoint
+// does not backfill previous goals and cannot confirm physical LED output.
+uint32_t gameEventEpoch() {
+  const time_t epoch = time(nullptr);
+  return epoch > 1700000000 ? (uint32_t)epoch : 0;
+}
+GameEventLog::Entry &addGameEvent(const Game &g, GameEventLog::Type type,
+                                   const String &team, uint8_t delta = 1,
+                                   bool preview = false) {
+  GameEventLog::Entry &entry = gameEventHistory.add(
+      type, gameEventEpoch(), millis()/1000UL, g.id,
+      g.away.c_str(), g.home.c_str(), team.c_str(),
+      (uint16_t)max(0, g.awayScore), (uint16_t)max(0, g.homeScore),
+      g.period, preview, delta);
+  Serial.printf("[EVENT] #%lu %s %s %s@%s %d-%d\n",
+      (unsigned long)entry.sequence, GameEventLog::typeLabel(type),
+      team.c_str(), g.away.c_str(), g.home.c_str(),
+      g.awayScore, g.homeScore);
+  return entry;
+}
+GameEventLog::Entry &addPreviewEvent(const Game *g, GameEventLog::Type type,
+                                     const String &team) {
+  if (g) return addGameEvent(*g, type, team, 0, true);
+  return gameEventHistory.add(type, gameEventEpoch(), millis()/1000UL,
+                              0, "", "", team.c_str(), 0, 0, 0, true, 0);
+}
+void markWledEvent(uint32_t sequence, uint8_t i, GameEventLog::Wled status,
+                   bool accepted = false) {
+  if (i >= MAX_WLED) return;
+  GameEventLog::Entry *entry = gameEventHistory.find(sequence);
+  if (!entry) return; // Circular log may already have overwritten the row.
+  entry->wled[i] = status;
+  if (accepted) entry->wledAcknowledgedMask |= 1U << i;
+}
+void markPpRearEvent(uint32_t id, const String &team) {
+  for (uint8_t i = 0; i < gameEventHistory.size(); ++i) {
+    GameEventLog::Entry *entry = gameEventHistory.newest(i);
+    if (!entry || entry->gameId != id ||
+        entry->type != GameEventLog::Type::POWER_PLAY_START ||
+        team != entry->team) continue;
+    entry->rear = GameEventLog::Rear::ACTIVE;
+    return;
+  }
+}
+void celebrate(uint32_t color, uint32_t eventSequence = 0);
+bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
+                    uint32_t eventSequence = 0);
+
 void detectRearGoalChanges() {
   for (uint8_t i = 0; i < gameCount; ++i) {
     const Game &g = games[i];
@@ -417,13 +487,83 @@ void detectRearGoalChanges() {
       watch.id = g.id;
     }
     const bool live = g.state == "LIVE" || g.state == "CRIT";
-    if (watch.baseline && live && rearFollows(g.id)) {
-      if (g.homeScore > watch.home) triggerRearGoal(teamRgb(g.home));
-      if (g.awayScore > watch.away) triggerRearGoal(teamRgb(g.away));
+    // Record observed NHL score increments, even when that game's lighting
+    // isn't selected. No synthetic goals are added from current scores at boot.
+    if (watch.baseline && live) {
+      const int deltaHome = g.homeScore - watch.home;
+      const int deltaAway = g.awayScore - watch.away;
+      for (uint8_t side = 0; side < 2; ++side) {
+        const int delta = side == 0 ? deltaHome : deltaAway;
+        if (delta <= 0) continue;
+        const String &scorer = side == 0 ? g.home : g.away;
+        GameEventLog::Entry &entry = addGameEvent(
+            g, GameEventLog::Type::GOAL, scorer,
+            (uint8_t)min(delta, 255));
+        const bool followed = rearFollows(g.id);
+        if (!followed) entry.rear = GameEventLog::Rear::NOT_SELECTED;
+        else if (!cfg.rearLedEnabled || !cfg.rearGoal)
+          entry.rear = GameEventLog::Rear::NOT_ENABLED;
+        // WLED is driven only by the armed game and only by allowed teams.
+        const bool armedForGoal = g.id == selectedGameId && haveBaseline &&
+            (side == 0 ? (cfg.mode == 1 || cfg.mode == 3)
+                       : (cfg.mode == 2 || cfg.mode == 3));
+        if (armedForGoal) celebrate(teamRgb(scorer), entry.sequence);
+        // Start the internal LED flash AFTER all WLED network requests so
+        // multi-device snapshots don't consume its 2–12s animation window.
+        if (followed && cfg.rearLedEnabled && cfg.rearGoal) {
+          triggerRearGoal(teamRgb(scorer));
+          entry.rear = GameEventLog::Rear::ACTIVE;
+        }
+      }
     }
     watch.home = g.homeScore;
     watch.away = g.awayScore;
     watch.baseline = true;
+  }
+}
+
+// Track PP changes only when fresh situation data is known. Missing NHL
+// situation data is not interpreted as PP ending.
+void observePowerPlayEvents() {
+  for (uint8_t i = 0; i < gameCount; ++i) {
+    const Game &g = games[i];
+    PpEventWatch &w = ppEventWatch[i];
+    if (w.id != g.id) {
+      w = PpEventWatch();
+      w.id = g.id;
+    }
+    if (!rearFollows(g.id) || !g.ppDataKnown ||
+        (g.state != "LIVE" && g.state != "CRIT")) continue;
+    if (!w.baseline) {
+      w.side = g.ppSide;
+      w.baseline = true;
+      // A game followed mid-power-play is already active. Record detection,
+      // not an invented start timestamp.
+      if (g.ppSide) {
+        const String &team = g.ppSide == 1 ? g.home : g.away;
+        GameEventLog::Entry &e = addGameEvent(
+            g, GameEventLog::Type::POWER_PLAY_START, team, 0);
+        e.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
+            ? GameEventLog::Rear::NOT_ENABLED : GameEventLog::Rear::SCHEDULED;
+        if (g.id == selectedGameId) armedPpLogSeq = e.sequence;
+      }
+      continue;
+    }
+    if (g.ppSide == w.side) continue;
+    if (!g.ppSide && g.id == selectedGameId) armedPpLogSeq = 0;
+    if (w.side) {
+      const String &team = w.side == 1 ? g.home : g.away;
+      addGameEvent(g, GameEventLog::Type::POWER_PLAY_END, team);
+    }
+    if (g.ppSide) {
+      const String &team = g.ppSide == 1 ? g.home : g.away;
+      GameEventLog::Entry &e = addGameEvent(
+          g, GameEventLog::Type::POWER_PLAY_START, team);
+      e.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
+          ? GameEventLog::Rear::NOT_ENABLED : GameEventLog::Rear::SCHEDULED;
+      if (g.id == selectedGameId) armedPpLogSeq = e.sequence;
+    }
+    w.side = g.ppSide;
   }
 }
 
@@ -495,6 +635,8 @@ void prepareNewScoreboardDate(const String &today) {
     scheduleWledRestoreAll();
     lastArmedGameState = "";
     for (auto &entry : goalWatch) entry = GoalWatch();
+    for (auto &entry : ppEventWatch) entry = PpEventWatch();
+    armedPpLogSeq = 0;
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) cfg.followIds[i] = 0;
     saveSettings();
@@ -1265,6 +1407,7 @@ void scheduleWledRestoreAll() {
   wledEventDuration = 0;
   wledPpTestUntil = 0;
   queuedWledEvent = CelebrationEngine::Event::NONE;
+  queuedWledLogSeq = 0;
 }
 
 void tickRestores() {
@@ -1280,12 +1423,16 @@ void tickRestores() {
                                    cfg.wled[i], body);
     if (restored) {
       wledDeviceResult[i] = "Restored";
+      markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORED);
+      wledEventOwner[i] = 0;
       restoring[i] = false;
       savedState[i] = "";
       savedWledIp[i] = "";
       restoreRetries[i] = 0;
     } else if (++restoreRetries[i] >= 3) {
       wledDeviceResult[i] = "Restore failed";
+      markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORE_FAILED);
+      wledEventOwner[i] = 0;
       Serial.printf("[WLED] controller %u restore failed after 3 tries\n", i + 1);
       restoring[i] = false;
       savedState[i] = "";
@@ -1293,16 +1440,36 @@ void tickRestores() {
     } else {
       restoreAt[i] = millis() + 1500UL;
       wledDeviceResult[i] = "Retrying restore";
+      markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORE_RETRYING);
     }
   }
 }
 
-bool startWledEvent(CelebrationEngine::Event event, uint32_t color) {
+bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
+                    uint32_t eventSequence) {
   if (event == CelebrationEngine::Event::NONE) {
     scheduleWledRestoreAll();
     return false;
   }
+  // When the NHL first reports an already-active PP, the engine may start
+  // without a transition log. Mark it as detected, not a fabricated start.
+  if (!eventSequence && event == CelebrationEngine::Event::POWER_PLAY) {
+    Game *g = selectedGame();
+    if (g && g->ppSide) {
+      const String &team = g->ppSide == 1 ? g->home : g->away;
+      GameEventLog::Entry &e = addGameEvent(
+          *g, GameEventLog::Type::POWER_PLAY_START, team, 0);
+      e.rear = cfg.rearLedEnabled && cfg.rearPowerPlay
+                   ? GameEventLog::Rear::SCHEDULED
+                   : GameEventLog::Rear::NOT_ENABLED;
+      eventSequence = e.sequence;
+      armedPpLogSeq = e.sequence;
+    }
+  }
   bool prepared[MAX_WLED] = {};
+  for (uint8_t i = 0; i < MAX_WLED; ++i)
+    if (wledParticipates(i, event))
+      markWledEvent(eventSequence, i, GameEventLog::Wled::PENDING);
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     if (!wledParticipates(i, event)) {
       if (restoring[i]) {
@@ -1324,6 +1491,7 @@ bool startWledEvent(CelebrationEngine::Event event, uint32_t color) {
       if (savedState[i].isEmpty()) {
         savedWledIp[i] = "";
         wledDeviceResult[i] = "Snapshot failed";
+        markWledEvent(eventSequence, i, GameEventLog::Wled::SNAPSHOT_FAILED);
         Serial.printf("[WLED] controller %u skipped: cannot save state\n", i + 1);
         continue;
       }
@@ -1335,6 +1503,10 @@ bool startWledEvent(CelebrationEngine::Event event, uint32_t color) {
   uint8_t successful = 0;
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     if (!prepared[i]) continue;
+    // The prior event might have been preempted before its own restore.
+    if (wledEventOwner[i] && wledEventOwner[i] != eventSequence)
+      markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::SUPERSEDED);
+    wledEventOwner[i] = eventSequence;
     const String body = wledEffectBody(savedState[i], event, color, 0);
     if (!body.isEmpty() && postWled(cfg.wled[i], body)) {
       restoring[i] = true;
@@ -1342,9 +1514,11 @@ bool startWledEvent(CelebrationEngine::Event event, uint32_t color) {
       // All devices share a single clock; PP has no duration until it ends.
       restoreAt[i] = UINT32_MAX;
       wledDeviceResult[i] = "Playing";
+      markWledEvent(eventSequence, i, GameEventLog::Wled::ACCEPTED, true);
       ++successful;
     } else {
       wledDeviceResult[i] = "Command failed";
+      markWledEvent(eventSequence, i, GameEventLog::Wled::COMMAND_FAILED);
       // If the POST may have applied despite a timeout, retain the snapshot
       // and attempt to restore rather than leaving the lights stranded.
       restoring[i] = true;
@@ -1404,8 +1578,11 @@ void tickWledCelebrations() {
                                               wledEventColor, wledPhase);
           if (!body.isEmpty() && postWled(cfg.wled[i], body))
             wledDeviceResult[i] = "Playing";
-          else
+          else {
             wledDeviceResult[i] = "Phase update failed";
+            markWledEvent(wledEventOwner[i], i,
+                          GameEventLog::Wled::COMMAND_FAILED);
+          }
         }
       }
       return;
@@ -1416,12 +1593,19 @@ void tickWledCelebrations() {
       const CelebrationEngine::Event pending = queuedWledEvent;
       const uint32_t pendingColor = queuedWledColor;
       queuedWledEvent = CelebrationEngine::Event::NONE;
-      if (startWledEvent(pending, pendingColor)) return;
+      if (startWledEvent(pending, pendingColor, queuedWledLogSeq)) {
+        queuedWledLogSeq = 0;
+        return;
+      }
+      queuedWledLogSeq = 0;
     }
     // After goal or game-start, return to power-play breathing if NHL still
     // reports an advantage, otherwise restore the original WLED state.
     if (hasPP && startWledEvent(CelebrationEngine::Event::POWER_PLAY,
-                                powerPlayColor)) return;
+                                powerPlayColor, armedPpLogSeq)) {
+      armedPpLogSeq = 0;
+      return;
+    }
     scheduleWledRestoreAll();
     return;
   }
@@ -1437,14 +1621,16 @@ void tickWledCelebrations() {
     static uint32_t lastPpAttempt = 0;
     if (uint32_t(now - lastPpAttempt) > 8000UL) {
       lastPpAttempt = now;
-      startWledEvent(CelebrationEngine::Event::POWER_PLAY, powerPlayColor);
+      startWledEvent(CelebrationEngine::Event::POWER_PLAY,
+                     powerPlayColor, armedPpLogSeq);
+      armedPpLogSeq = 0;
     }
   }
 }
 
-// Compatibility with existing goal detection and "Test all enabled lights".
-void celebrate(uint32_t color) {
-  startWledEvent(CelebrationEngine::Event::GOAL, color);
+// The onboard horn is still handled independently from WLED response codes.
+void celebrate(uint32_t color, uint32_t eventSequence) {
+  startWledEvent(CelebrationEngine::Event::GOAL, color, eventSequence);
   startHorn();
 }
 
@@ -1770,32 +1956,41 @@ void pollNhl() {
     }
   }
   if (followedChanged) saveSettings();
+  // Goal detection owns both hardware dispatch and the event log, ensuring
+  // each observed score increment is recorded exactly once.
+  detectRearGoalChanges();
+  observePowerPlayEvents();
   Game *g = selectedGame();
   if (g) {
-    if (haveBaseline && (g->state == "LIVE" || g->state == "CRIT")) {
-      const bool homeGoal = g->homeScore > previousHome;
-      const bool awayGoal = g->awayScore > previousAway;
-      if (homeGoal && (cfg.mode == 1 || cfg.mode == 3))
-        celebrate(teamRgb(g->home));
-      if (awayGoal && (cfg.mode == 2 || cfg.mode == 3))
-        celebrate(teamRgb(g->away));
-    }
     // Trigger game-start and final outcomes only when a previously observed
     // state transitions; booting into a LIVE/FINAL game never replays events.
     const bool homeWon = g->homeScore > g->awayScore;
     const bool favoredWon = cfg.favoriteSide == 0 ? homeWon : !homeWon;
     const CelebrationEngine::Event transition = CelebrationEngine::transition(
         haveBaseline, lastArmedGameState.c_str(), g->state.c_str(), favoredWon);
-    if ((transition == CelebrationEngine::Event::GAME_START && cfg.wledGameStart) ||
-        ((transition == CelebrationEngine::Event::FINAL_WIN ||
-          transition == CelebrationEngine::Event::FINAL_LOSS) && cfg.wledFinal)) {
-      const uint32_t teamColor =
-          teamRgb(cfg.favoriteSide == 0 ? g->home : g->away);
-      if (wledActiveEvent == CelebrationEngine::Event::GOAL) {
-        queuedWledEvent = transition;
-        queuedWledColor = teamColor;
-      } else {
-        startWledEvent(transition, teamColor);
+    if (transition != CelebrationEngine::Event::NONE) {
+      const String &fav = cfg.favoriteSide == 0 ? g->home : g->away;
+      const GameEventLog::Type eventType =
+          transition == CelebrationEngine::Event::GAME_START
+              ? GameEventLog::Type::GAME_START :
+          transition == CelebrationEngine::Event::FINAL_WIN
+              ? GameEventLog::Type::FINAL_WIN
+              : GameEventLog::Type::FINAL_LOSS;
+      GameEventLog::Entry &logged = addGameEvent(*g, eventType, fav);
+      const bool enabled = transition == CelebrationEngine::Event::GAME_START
+                           ? cfg.wledGameStart : cfg.wledFinal;
+      if (enabled) {
+        const uint32_t teamColor = teamRgb(fav);
+        if (wledActiveEvent == CelebrationEngine::Event::GOAL) {
+          queuedWledEvent = transition;
+          queuedWledColor = teamColor;
+          queuedWledLogSeq = logged.sequence;
+          for (uint8_t i = 0; i < MAX_WLED; ++i)
+            if (wledParticipates(i, transition))
+              markWledEvent(logged.sequence, i, GameEventLog::Wled::PENDING);
+        } else {
+          startWledEvent(transition, teamColor, logged.sequence);
+        }
       }
     }
     previousHome = g->homeScore;
@@ -1806,10 +2001,6 @@ void pollNhl() {
     haveBaseline = false;
     lastArmedGameState = "";
   }
-  // A multi-device HTTP celebration may spend time capturing WLED snapshots.
-  // Start the CYD rear LED's timed flash AFTER those network calls, otherwise
-  // its short flash can expire before the main loop resumes.
-  detectRearGoalChanges();
   if (gamesFingerprint() != previousFingerprint || newDay) {
     if (!newDay && !showingStandingsPage() && screen == Screen::LIVE &&
         gameCount > 0 && previouslyFeatured == games[featuredIndex].id)
@@ -2255,6 +2446,7 @@ void selectGame(uint32_t id) {
   // A new game should not inherit an in-progress goal/PP effect.
   scheduleWledRestoreAll();
   selectedGameId = id;
+  armedPpLogSeq = 0;
   lastArmedGameState = "";
   haveBaseline = false;
   prefs.putUInt("game", id);
@@ -2380,12 +2572,74 @@ void registerRoutes() {
     if (!authorized()) return;
     server.send_P(200, "text/html; charset=utf-8", WEB_UI);
   });
+  // Read-only, authenticated, page-sized session event log. Never writes
+  // NVS/flash or changes the physical CYD display.
+  server.on("/api/events", HTTP_GET, []() {
+    if (!authorized()) return;
+    const int offset = constrain(server.arg("offset").toInt(), 0, 63);
+    const int limit = constrain(server.arg("limit").toInt(), 1, 16);
+    const String category = server.hasArg("category")
+        ? server.arg("category") : String("all");
+    DynamicJsonDocument doc(11000);
+    if (doc.capacity() < 11000)
+      return errorResponse("Event history memory unavailable", 503);
+    doc["capacity"] = GameEventLog::kCapacity;
+    doc["sessionOnly"] = true;
+    doc["timeSynced"] = time(nullptr) > 1700000000;
+    doc["offset"] = offset;
+    doc["limit"] = limit;
+    doc["lastSequence"] = gameEventHistory.lastSequence();
+    JsonArray rows = doc.createNestedArray("events");
+    int eligible = 0, appended = 0;
+    for (uint8_t i = 0; i < gameEventHistory.size(); ++i) {
+      const GameEventLog::Entry *e = gameEventHistory.newest(i);
+      if (!e || !GameEventLog::matchesCategory(
+                     e->type, category.c_str())) continue;
+      if (eligible++ < offset || appended >= limit) continue;
+      ++appended;
+      JsonObject row = rows.createNestedObject();
+      row["id"] = e->sequence;
+      row["timestamp"] = e->timestamp;
+      row["uptime"] = e->uptimeSeconds;
+      row["gameId"] = e->gameId;
+      row["type"] = GameEventLog::typeLabel(e->type);
+      row["home"] = e->home;
+      row["away"] = e->away;
+      row["team"] = e->team;
+      row["homeScore"] = e->homeScore;
+      row["awayScore"] = e->awayScore;
+      row["period"] = e->period;
+      row["goalsDelta"] = e->goalsDelta;
+      row["preview"] = e->preview;
+      row["rear"] = GameEventLog::rearLabel(e->rear);
+      JsonArray devices = row.createNestedArray("devices");
+      for (uint8_t d = 0; d < MAX_WLED; ++d) {
+        JsonObject device = devices.createNestedObject();
+        device["slot"] = d + 1;
+        device["result"] = GameEventLog::wledLabel(e->wled[d]);
+        device["accepted"] = (e->wledAcknowledgedMask & (1U << d)) != 0;
+      }
+    }
+    doc["total"] = eligible;
+    if (doc.overflowed()) return errorResponse("Event response too large", 503);
+    sendJson(doc);
+  });
+  server.on("/api/events/clear", HTTP_POST, []() {
+    if (!authorized()) return;
+    gameEventHistory.clear();
+    for (uint8_t i = 0; i < MAX_WLED; ++i) wledEventOwner[i] = 0;
+    armedPpLogSeq = 0;
+    queuedWledLogSeq = 0;
+    StaticJsonDocument<96> response;
+    response["ok"] = true;
+    sendJson(response);
+  });
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     // New slide/standings metadata should not enlarge the loopTask stack.
     DynamicJsonDocument doc(3072);
     if (doc.capacity() < 3072) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.2";
+    doc["version"] = "0.3.3";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -2698,6 +2952,9 @@ void registerRoutes() {
     if (!g && gameCount) g = &games[featuredIndex % gameCount];
     const uint32_t color = teamRgb(g ? (side == "home" ? g->home : g->away)
                                       : String("UTA"));
+    const String selectedTeam = g ? (side == "home" ? g->home : g->away) : String("UTA");
+    GameEventLog::Entry &testRow = addPreviewEvent(
+        g, GameEventLog::Type::REAR_TEST, selectedTeam);
     if (mode == "off") stopRearLed();
     else if (mode == "goal") {
       rearTestPpUntil = 0;
@@ -2711,6 +2968,8 @@ void registerRoutes() {
       rearTestPpUntil = millis() + 9000UL;
       rearEvent = RearEvent::IDLE;
     }
+    testRow.rear = mode == "off" ? GameEventLog::Rear::NA
+                               : GameEventLog::Rear::ACTIVE;
     StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
   });
   server.on("/api/wled/preview", HTTP_POST, []() {
@@ -2729,17 +2988,28 @@ void registerRoutes() {
     else if (type == "win") event = CelebrationEngine::Event::FINAL_WIN;
     else if (type == "loss") event = CelebrationEngine::Event::FINAL_LOSS;
     else if (type != "stop") return errorResponse("Invalid celebration type");
+    Game *previewGame = selectedGame();
+    if (!previewGame && gameCount) previewGame = &games[featuredIndex % gameCount];
+    const String previewTeam = previewGame
+        ? (side == "home" ? previewGame->home : previewGame->away)
+        : String("UTA");
+    const GameEventLog::Type previewType =
+        type == "goal" ? GameEventLog::Type::PREVIEW_GOAL :
+        type == "pp" ? GameEventLog::Type::PREVIEW_POWER_PLAY :
+        type == "start" ? GameEventLog::Type::PREVIEW_START :
+        type == "win" ? GameEventLog::Type::PREVIEW_WIN :
+        type == "loss" ? GameEventLog::Type::PREVIEW_LOSS :
+                         GameEventLog::Type::PREVIEW_STOP;
+    GameEventLog::Entry &previewRow =
+        addPreviewEvent(previewGame, previewType, previewTeam);
     if (event == CelebrationEngine::Event::NONE) {
       wledSuppressPpUntil = millis() + 30000UL;
       scheduleWledRestoreAll();
       tickRestores();
     } else {
-      Game *game = selectedGame();
-      if (!game && gameCount) game = &games[featuredIndex % gameCount];
-      const uint32_t color = teamRgb(
-          game ? (side == "home" ? game->home : game->away) : String("UTA"));
+      const uint32_t color = teamRgb(previewTeam);
       wledSuppressPpUntil = 0;
-      if (startWledEvent(event, color)) {
+      if (startWledEvent(event, color, previewRow.sequence)) {
         if (event == CelebrationEngine::Event::POWER_PLAY)
           wledPpTestUntil = millis() + 9000UL;
         else
@@ -2761,7 +3031,10 @@ void registerRoutes() {
     String side = doc["side"] | String("home");
     if (side != "home" && side != "away") return errorResponse("Invalid side");
     Game *g = selectedGame();
-    celebrate(teamRgb(g ? (side == "home" ? g->home : g->away) : String("UTA")));
+    const String team = g ? (side == "home" ? g->home : g->away) : String("UTA");
+    const uint32_t seq = addPreviewEvent(
+        g, GameEventLog::Type::PREVIEW_GOAL, team).sequence;
+    celebrate(teamRgb(team), seq);
     StaticJsonDocument<96> ok; ok["ok"] = true; sendJson(ok);
   });
   server.on("/api/update", HTTP_POST, []() {
@@ -2801,7 +3074,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.3.2 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.3.3 — CYD only");
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),
@@ -2926,6 +3199,7 @@ void loop() {
     if (needSituation && !restoringLights && rearEvent != RearEvent::GOAL) {
       lastPpFallback = millis();
       fetchFollowedPowerPlays();
+      observePowerPlayEvents();
     }
   }
   if (screen == Screen::LIVE && cfg.cycleGames && carouselPageCount() > 1 &&

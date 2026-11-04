@@ -50,6 +50,10 @@ jobs:
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_team_gradient.cpp -o /tmp/glowdeck-gradient-test
           /tmp/glowdeck-gradient-test
+      - name: Test bounded NHL event log and WLED delivery outcomes
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_game_event_log.cpp -o /tmp/glowdeck-game-event-test
+          /tmp/glowdeck-game-event-test
       - name: Install PlatformIO
         run: pip install platformio==6.1.18
       - name: Install logo build dependencies
