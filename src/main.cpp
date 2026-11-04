@@ -2388,8 +2388,128 @@ void drawCalibration() {
   textAt("Use a stylus for accuracy", 12, 215, MUTED);
 }
 
+// Full-screen CYD event takeover. Draw once when the event changes; only
+// 5px border accents animate, so NHL/WLED polling stays responsive and no
+// 320x240 sprite/framebuffer is required.
+void drawOverlayStatic() {
+  if (!overlayController.active()) return;
+  const EventOverlay::Item &e = overlayController.current();
+  const uint32_t color = e.color ? e.color : 0x39777AUL;
+  // A team-color backdrop fades through a dark center while keeping all
+  // white typography on a neutral opaque plate.
+  for (uint16_t x=0; x<320; x+=4) {
+    const uint16_t c = TeamGradient::rgb565(
+        TeamGradient::colorAt(color, color, x+2));
+    tft.fillRect(x, 0, 4, 240, c);
+  }
+  tft.fillRoundRect(24, 102, 272, 127, 8, 0x1082);
+  tft.drawRoundRect(24, 102, 272, 127, 8, 0x5AEB);
+  tft.fillRoundRect(92, 32, 136, 72, 9, 0x0841);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE, 0x1082);
+  tft.drawString("NHL GAME EVENT", 160, 18, 2);
+
+  if (cfg.overlayLogos && e.team[0]) {
+    // Reuse the official 56px NHL sprite already embedded at build time.
+    // No network image request and no extra RAM allocation.
+    drawTeamLogo(tft, String(e.team), 132, 38);
+  } else {
+    tft.setTextColor(WHITE, 0x0841);
+    tft.drawString(e.team[0] ? String(e.team) : String("NHL"),
+                   160, 69, 4);
+  }
+  const String title = EventOverlay::label(e.kind);
+  tft.setTextColor(WHITE, 0x1082);
+  tft.drawString(title, 160, 124,
+                 title.length() > 10 ? 2 : 4);
+
+  String description;
+  switch(e.kind) {
+    case EventOverlay::Kind::GOAL:
+      description = String(e.team) + " SCORES!"; break;
+    case EventOverlay::Kind::POWER_PLAY_START:
+      description = String(e.team) + " MAN ADVANTAGE"; break;
+    case EventOverlay::Kind::POWER_PLAY_END:
+      description = "BACK AT FULL STRENGTH"; break;
+    case EventOverlay::Kind::GAME_START:
+      description = String(e.away) + " VS " + String(e.home); break;
+    case EventOverlay::Kind::FINAL_WIN:
+      description = String(e.team) + " WINS"; break;
+    case EventOverlay::Kind::FINAL_LOSS:
+      description = String(e.team) + " FALLS"; break;
+    default: description = "";
+  }
+  tft.setTextColor(0xCE79, 0x1082);
+  tft.drawString(description, 160, 154, 2);
+
+  if (e.away[0] && e.home[0]) {
+    tft.setTextColor(WHITE, 0x1082);
+    const String score = String(e.away) + " " + String(e.awayScore) +
+                          "  -  " + String(e.homeScore) + " " + String(e.home);
+    tft.drawString(score, 160, 186, 2);
+  }
+  String clock;
+  if (e.period) clock = "P" + String(e.period);
+  if (e.clock[0]) {
+    if (clock.length()) clock += "  ";
+    clock += e.clock;
+  }
+  tft.setTextColor(0xBDF7, 0x1082);
+  if (clock.length()) tft.drawString(clock, 160, 213, 2);
+  tft.setTextColor(0xC618);
+  tft.drawString("X", 303, 20, 2); // Tap upper-right to dismiss.
+  tft.setTextDatum(TL_DATUM);
+}
+
+// Called at most once per ~140ms for goals and 240ms for calmer events.
+// Colors animate only the perimeter; no full-screen flashing.
+void drawOverlayAnimation(uint32_t now) {
+  if (!overlayController.active()) return;
+  const EventOverlay::Item &e = overlayController.current();
+  const uint32_t elapsed = now - overlayController.startedAt();
+  uint8_t brightness = 72;
+  if (EventOverlay::isFlash(e.kind)) {
+    if (cfg.overlayFlash && elapsed < 1100UL)
+      brightness = ((elapsed / 180UL) % 2UL) ? 38 : 100;
+    else brightness = 82;
+  } else if (EventOverlay::isPulse(e.kind)) {
+    // Triangle wave in 1.6s using only integer operations.
+    const uint32_t phase = elapsed % 1600UL;
+    const uint32_t up = phase < 800UL ? phase : (1600UL-phase);
+    brightness = (uint8_t)(35UL + up * 60UL / 800UL);
+  } else {
+    const uint32_t phase = elapsed % 2000UL;
+    const uint32_t up = phase < 1000UL ? phase : (2000UL-phase);
+    brightness = (uint8_t)(52UL + up * 42UL / 1000UL);
+  }
+  const uint32_t r = TeamGradient::scale(
+      (uint8_t)((e.color>>16)&255), brightness);
+  const uint32_t g = TeamGradient::scale(
+      (uint8_t)((e.color>>8)&255), brightness);
+  const uint32_t b = TeamGradient::scale(
+      (uint8_t)(e.color&255), brightness);
+  const uint16_t c = TeamGradient::rgb565((r<<16)|(g<<8)|b);
+  tft.fillRect(0, 0, 320, 5, c);
+  tft.fillRect(0, 235, 320, 5, c);
+  tft.fillRect(0, 0, 5, 240, c);
+  tft.fillRect(315, 0, 5, 240, c);
+  // Progress stripe keeps the expected return time visually obvious.
+  const uint32_t remain = overlayController.remaining(now);
+  const uint16_t progress = e.duration
+      ? (uint16_t)(310UL * remain / e.duration) : 0;
+  tft.fillRect(5, 230, 310, 3, 0x1082);
+  if (progress) tft.fillRect(5, 230, progress, 3, c);
+  overlayLastFrame = now;
+}
+
 void draw() {
   needsDraw = false;
+  if (overlayController.active()) {
+    drawOverlayStatic();
+    drawOverlayAnimation(millis());
+    return;
+  }
   if (screen == Screen::CALIBRATE) { drawCalibration(); return; }
   if (screen == Screen::LIVE) {
     if (showingStandingsPage()) {
