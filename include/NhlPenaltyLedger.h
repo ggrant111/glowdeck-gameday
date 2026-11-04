@@ -101,7 +101,7 @@ struct Book {
       if(chosen!=255) {
         const Penalty &p=penalties[chosen];
         if(p.duration>120 && endAt[chosen]>goal.at+120)
-          endAt[chosen]-=120; // one half of a double minor
+          endAt[chosen]=goal.at+120; // next double-minor starts at PP goal
         else endAt[chosen]=goal.at; // normal minor ends on PP goal
       }
     }
