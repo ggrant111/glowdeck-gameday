@@ -46,6 +46,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <nav class="tabs" aria-label="Sections">
 <button class="tab selected" data-tab="dashboard">Dashboard</button>
 <button class="tab" data-tab="games">Games</button>
+<button class="tab" data-tab="events">Event Log</button>
 <button class="tab" data-tab="display">Display</button>
 <button class="tab" data-tab="devices">Lights</button>
 <button class="tab" data-tab="rear">CYD LED</button>
@@ -68,6 +69,10 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 </div>
 <div class="actions"><button class="primary" data-tab="games">Choose game</button><button data-tab="devices">Manage lights</button></div>
 <div class="small muted" id="lastError"></div></div>
+<div class="card"><h2>Recent game events</h2>
+<p class="small muted">What the NHL feed reported and which lights GameDay commanded.</p>
+<div id="recentGameEvents"><p class="muted">No events recorded yet.</p></div>
+<button data-tab="events">View complete event log</button></div>
 <div class="card"><h2>Celebration controls</h2>
 <p>Choose which team can trigger lights when the NHL score changes. The device saves this automatically.</p>
 <div class="actions" id="modeButtons">
@@ -75,6 +80,26 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 </div>
 <div class="actions"><button id="testHome">Test home color</button><button id="testAway">Test away color</button></div>
 <p class="small">A test saves the current WLED state, shows the celebration color, then restores the previous state.</p></div>
+</section>
+<section id="events" class="panel">
+<div class="card"><h2>Game events & light activity</h2>
+<p>See NHL goals, power plays, puck drop and finals, plus whether the <b>CYD's built-in LED</b> and each selected <b>WLED LED strip/controller</b> received a celebration command.</p>
+<p class="small muted">WLED “Command accepted” means the controller acknowledged the HTTP request. It does not independently confirm visible light output. The latest 64 events are retained in memory <b>until the device reboots</b>. No historical events are backfilled.</p>
+<div class="row">
+<div><label for="eventCategory">Filter by event</label><select id="eventCategory">
+<option value="all">All events</option><option value="goals">Goals</option>
+<option value="powerplays">Power plays</option><option value="other">Game start & final</option>
+<option value="previews">Manual tests</option>
+</select></div>
+</div>
+<div class="actions">
+<button class="primary" id="refreshEventLog">Refresh log</button>
+<button id="clearEventLog">Clear session log</button>
+</div>
+<div class="small muted" id="eventCount">No events yet</div>
+<div id="eventList"><p class="muted">No events recorded yet.</p></div>
+<div class="actions"><button id="eventNewer">Newer</button><button id="eventOlder">Older</button></div>
+</div>
 </section>
 <section id="games" class="panel">
 <div class="card"><h2>Today's NHL games</h2><p>Tap a matchup to arm it on your CYD. The first poll records current scores without replaying earlier goals.</p>
@@ -245,6 +270,71 @@ function tab(id){
   scrollTo({top:0,behavior:"smooth"});
 }
 document.querySelectorAll("[data-tab]").forEach(x=>x.addEventListener("click",()=>tab(x.dataset.tab)));
+let eventOffset=0, eventPageTotal=0;
+function eventTimestamp(row){
+  if(row.timestamp)
+    return new Date(row.timestamp*1000).toLocaleString([],{
+      month:"short",day:"numeric",hour:"numeric",minute:"2-digit",second:"2-digit"
+    });
+  return "Device uptime "+Math.floor((row.uptime||0)/60)+" min";
+}
+function createEventElement(row){
+  const card=document.createElement("div");card.className="item";
+  const heading=document.createElement("div");heading.className="game";
+  const h=document.createElement("strong");
+  h.textContent=(row.preview?"TEST · ":"")+(row.type||"Event")+
+    (row.team?" — "+row.team:"");
+  const when=document.createElement("small");
+  when.className="muted";when.textContent=eventTimestamp(row);
+  heading.append(h,when);card.append(heading);
+  const score=document.createElement("div");score.className="small";
+  const matchup=(row.away&&row.home)
+    ?row.away+" "+row.awayScore+" – "+row.homeScore+" "+row.home
+    :"Manual preview";
+  score.textContent=matchup+(row.period?" · Period "+row.period:"")+
+    ((row.goalsDelta||0)>1?" · "+row.goalsDelta+" score increase":"");
+  score.style.margin="8px 0";
+  card.append(score);
+  const builtIn=document.createElement("div");builtIn.className="small";
+  builtIn.textContent="CYD internal LED: "+(row.rear||"Not applicable");
+  card.append(builtIn);
+  const devices=document.createElement("div");devices.className="small muted";
+  devices.style.marginTop="5px";
+  devices.textContent=(row.devices||[]).map(d=>
+    "WLED "+d.slot+" (strip): "+(d.result||"Not triggered")+
+    (d.accepted&&d.result!=="Command accepted"?" · command accepted":"")
+  ).join("  |  ");
+  card.append(devices);
+  return card;
+}
+function renderEventRows(targetId, rows){
+  const target=$(targetId);target.replaceChildren();
+  if(!rows.length){
+    const note=document.createElement("p");note.className="muted";
+    note.textContent="No matching events recorded in this session.";
+    target.append(note);
+    return;
+  }
+  rows.forEach(row=>target.append(createEventElement(row)));
+}
+async function refreshEventSummary(){
+  const data=await api("/api/events?category=all&offset=0&limit=5");
+  renderEventRows("recentGameEvents",data.events||[]);
+  if($("events").classList.contains("active") && eventOffset===0)
+    await loadEventLog();
+}
+async function loadEventLog(){
+  const filter=$("eventCategory").value;
+  const data=await api("/api/events?category="+encodeURIComponent(filter)+
+    "&offset="+eventOffset+"&limit=12");
+  eventPageTotal=data.total||0;
+  renderEventRows("eventList",data.events||[]);
+  $("eventCount").textContent=eventPageTotal+" matching event(s) · "+
+    (data.sessionOnly?"Current device session · ":"")+
+    "last "+data.capacity+" retained maximum";
+  $("eventNewer").disabled=eventOffset===0;
+  $("eventOlder").disabled=eventOffset+12>=eventPageTotal;
+}
 function renderStatus(){
   if(!currentStatus)return;
   const s=currentStatus, game=currentGames.find(g=>g.id===s.selectedId);
@@ -395,6 +485,7 @@ async function refresh(){
   const [s,g]=await Promise.all([api("/api/status"),api("/api/games")]);
   currentStatus=s;currentGames=g.games||[];
   renderStatus();renderGames();renderRearFollowed();
+  await refreshEventSummary().catch(()=>{});
 }
 function renderDevices(){
   const list=$("deviceList");list.replaceChildren();
@@ -544,6 +635,18 @@ document.querySelectorAll("[data-mode]").forEach(b=>b.addEventListener("click",(
 })));
 $("saveSettings").onclick=()=>perform(saveConfig);
 $("saveDisplay").onclick=()=>perform(saveConfig);
+$("eventCategory").onchange=()=>{eventOffset=0;perform(loadEventLog)};
+$("refreshEventLog").onclick=()=>perform(loadEventLog);
+$("eventOlder").onclick=()=>{eventOffset+=12;perform(loadEventLog)};
+$("eventNewer").onclick=()=>{eventOffset=Math.max(0,eventOffset-12);perform(loadEventLog)};
+$("clearEventLog").onclick=()=>perform(async()=>{
+  if(!confirm("Clear the current device session's event history?"))return;
+  await post("/api/events/clear",{});
+  eventOffset=0;
+  await loadEventLog();
+  await refreshEventSummary();
+  message("Session event log cleared");
+});
 $("saveDevices").onclick=()=>perform(saveConfig);
 function wledPreview(event,side="home"){
   perform(async()=>{
