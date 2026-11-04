@@ -502,7 +502,7 @@ void detectRearGoalChanges() {
         const bool followed = rearFollows(g.id);
         if (!followed) entry.rear = GameEventLog::Rear::NOT_SELECTED;
         else if (!cfg.rearLedEnabled || !cfg.rearGoal)
-          entry.rear = GameEventLog::Rear::DISABLED;
+          entry.rear = GameEventLog::Rear::NOT_ENABLED;
         // WLED is driven only by the armed game and only by allowed teams.
         const bool armedForGoal = g.id == selectedGameId && haveBaseline &&
             (side == 0 ? (cfg.mode == 1 || cfg.mode == 3)
@@ -544,7 +544,7 @@ void observePowerPlayEvents() {
         GameEventLog::Entry &e = addGameEvent(
             g, GameEventLog::Type::POWER_PLAY_START, team, 0);
         e.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
-            ? GameEventLog::Rear::DISABLED : GameEventLog::Rear::SCHEDULED;
+            ? GameEventLog::Rear::NOT_ENABLED : GameEventLog::Rear::SCHEDULED;
         if (g.id == selectedGameId) armedPpLogSeq = e.sequence;
       }
       continue;
@@ -560,7 +560,7 @@ void observePowerPlayEvents() {
       GameEventLog::Entry &e = addGameEvent(
           g, GameEventLog::Type::POWER_PLAY_START, team);
       e.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
-          ? GameEventLog::Rear::DISABLED : GameEventLog::Rear::SCHEDULED;
+          ? GameEventLog::Rear::NOT_ENABLED : GameEventLog::Rear::SCHEDULED;
       if (g.id == selectedGameId) armedPpLogSeq = e.sequence;
     }
     w.side = g.ppSide;
@@ -1461,7 +1461,7 @@ bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
           *g, GameEventLog::Type::POWER_PLAY_START, team, 0);
       e.rear = cfg.rearLedEnabled && cfg.rearPowerPlay
                    ? GameEventLog::Rear::SCHEDULED
-                   : GameEventLog::Rear::DISABLED;
+                   : GameEventLog::Rear::NOT_ENABLED;
       eventSequence = e.sequence;
       armedPpLogSeq = e.sequence;
     }
