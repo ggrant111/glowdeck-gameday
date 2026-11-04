@@ -689,6 +689,8 @@ void prepareNewScoreboardDate(const String &today) {
     lastConferenceFetch = 0;
     webPreviewGameId = 0;
     scheduleWledRestoreAll();
+    overlayController.clear();
+    overlayLastFrame = 0;
     lastArmedGameState = "";
     for (auto &entry : goalWatch) entry = GoalWatch();
     for (auto &entry : ppEventWatch) entry = PowerPlayLogPolicy::Watch();
@@ -2651,6 +2653,27 @@ void selectGame(uint32_t id) {
 
 void handleTouch() {
   const bool pressed = touch.touched();
+  if (overlayController.active()) {
+    // Suppress ordinary carousel swipes/stat taps during an event. The
+    // upper-right corner dismisses the current overlay without changing
+    // the previously selected screen or armed NHL game.
+    if (!pressed) {
+      touchWasDown = false;
+    } else if (!touchWasDown && millis() - lastTouch > 160UL) {
+      touchWasDown = true;
+      lastTouch = millis();
+      const TS_Point p = touch.getPoint();
+      const int16_t x = constrain((int)map(p.x, cfg.touchX0, cfg.touchX1, 0, 319), 0, 319);
+      const int16_t y = constrain((int)map(p.y, cfg.touchY0, cfg.touchY1, 0, 239), 0, 239);
+      if (x >= 266 && y <= 39) {
+        overlayController.dismiss(millis());
+        overlayLastFrame = 0;
+        lastCarouselAdvance = millis();
+        needsDraw = true;
+      }
+    }
+    return;
+  }
   // On the full-screen broadcast view, gestures are recognized on finger lift:
   // swipe left/right to change games, tap a matchup for stats, tap top-right
   // menu glyph to open GAMES (which provides SETUP in its footer).
@@ -3392,7 +3415,16 @@ void loop() {
       observePowerPlayEvents();
     }
   }
-  if (screen == Screen::LIVE && cfg.cycleGames && carouselPageCount() > 1 &&
+  if (overlayController.tick(millis())) {
+    // An overlay ended or a queued higher-priority event took over.
+    // Redraw the exact underlying page without advancing the carousel.
+    lastCarouselAdvance = millis();
+    overlayLastFrame = 0;
+    partialLiveUpdate = false;
+    needsDraw = true;
+  }
+  if (!overlayController.active() && screen == Screen::LIVE &&
+      cfg.cycleGames && carouselPageCount() > 1 &&
       uint32_t(now - lastCarouselAdvance) >= uint32_t(cfg.cycleSeconds) * 1000UL) {
     advanceCarousel(1);
   }
@@ -3404,7 +3436,8 @@ void loop() {
   // pregame cache and 3m live / 15m idle refresh. Keep goal-restoration
   // latency higher priority and never allocate a second full NHL scoreboard.
   static uint32_t lastSlideStandingsCheck = 0;
-  if (connected && screen == Screen::LIVE && showingStandingsPage() &&
+  if (!overlayController.active() && connected &&
+      screen == Screen::LIVE && showingStandingsPage() &&
       uint32_t(millis() - lastSlideStandingsCheck) > 5000UL) {
     bool restoringLights = false;
     for (uint8_t i = 0; i < MAX_WLED; ++i)
@@ -3417,7 +3450,8 @@ void loop() {
   // Prefetch stats for the displayed carousel game; the background request
   // happens only once per game/TTL, never once per frame. Defer requests
   // while a WLED restoration is pending to avoid delaying light recovery.
-  if (screen == Screen::LIVE && !showingStandingsPage() && gameCount && connected &&
+  if (!overlayController.active() && screen == Screen::LIVE &&
+      !showingStandingsPage() && gameCount && connected &&
       uint32_t(now - lastCarouselStatsCheck) >= 2500UL) {
     bool lightRestorePending = false;
     for (uint8_t i = 0; i < MAX_WLED; ++i)
@@ -3432,6 +3466,12 @@ void loop() {
   if (needsDraw) {
     partialLiveUpdate = false;
     draw();
+  } else if (overlayController.active()) {
+    const uint32_t frameNow = millis();
+    const uint32_t period = EventOverlay::isFlash(overlayController.current().kind)
+                            ? 140UL : 240UL;
+    if (uint32_t(frameNow - overlayLastFrame) >= period)
+      drawOverlayAnimation(frameNow);
   } else if (partialLiveUpdate && screen == Screen::LIVE &&
              !showingStandingsPage() && gameCount > 0) {
     partialLiveUpdate = false;
@@ -3439,7 +3479,7 @@ void loop() {
   }
   // Update one optional pregame conference record after the current frame
   // is painted. This keeps the first season/standings view responsive.
-  tickPregameConferenceRecords();
+  if (!overlayController.active()) tickPregameConferenceRecords();
   if (rebootAt && int32_t(now - rebootAt) >= 0) ESP.restart();
   delay(5);
 }
