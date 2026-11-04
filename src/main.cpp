@@ -2850,9 +2850,9 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     // New slide/standings metadata should not enlarge the loopTask stack.
-    DynamicJsonDocument doc(3072);
-    if (doc.capacity() < 3072) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.4";
+    DynamicJsonDocument doc(3584);
+    if (doc.capacity() < 3584) return errorResponse("Status memory unavailable", 503);
+    doc["version"] = "0.3.5";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -2867,6 +2867,12 @@ void registerRoutes() {
     JsonArray wledResults = doc.createNestedArray("wledResults");
     for (uint8_t i = 0; i < MAX_WLED; ++i)
       wledResults.add(wledDeviceResult[i]);
+    doc["overlayActive"] = overlayController.active();
+    doc["overlayEvent"] = EventOverlay::label(overlayController.current().kind);
+    doc["overlayTeam"] = overlayController.current().team;
+    doc["overlayQueue"] = overlayController.pending();
+    doc["overlayRemainingMs"] = overlayController.remaining(millis());
+    doc["overlayCount"] = overlayCount;
     doc["rearEnabled"] = cfg.rearLedEnabled;
     doc["rearEvent"] = rearEvent == RearEvent::GOAL ? "GOAL" :
                        rearEvent == RearEvent::POWER_PLAY ? "POWER_PLAY" : "IDLE";
@@ -2888,6 +2894,15 @@ void registerRoutes() {
     doc["standingsHttpCode"] = standingsLastHttpCode;
     doc["standingsTeams"] = standingsLastTeamCount;
     doc["showStandings"] = cfg.showStandings;
+    doc["overlayEnabled"] = cfg.overlayEnabled;
+    doc["overlayGoals"] = cfg.overlayGoals;
+    doc["overlayPowerPlays"] = cfg.overlayPowerPlays;
+    doc["overlayStart"] = cfg.overlayStart;
+    doc["overlayFinal"] = cfg.overlayFinal;
+    doc["overlayFlash"] = cfg.overlayFlash;
+    doc["overlayLogos"] = cfg.overlayLogos;
+    doc["overlayGoalSeconds"] = cfg.overlayGoalSeconds;
+    doc["overlayFinalSeconds"] = cfg.overlayFinalSeconds;
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
     doc["scorePollSeconds"] = NhlFetchPolicy::pollIntervalMs(
@@ -2987,8 +3002,8 @@ void registerRoutes() {
   });
   server.on("/api/config", HTTP_GET, []() {
     if (!authorized()) return;
-    DynamicJsonDocument doc(2560);
-    if (doc.capacity() < 2560) return errorResponse("Config memory unavailable", 503);
+    DynamicJsonDocument doc(3072);
+    if (doc.capacity() < 3072) return errorResponse("Config memory unavailable", 503);
     doc["ssid"] = cfg.ssid;
     doc["mode"] = cfg.mode;
     doc["brightness"] = cfg.brightness;
@@ -3051,6 +3066,23 @@ void registerRoutes() {
     cfg.rearBrightness = constrain((int)(doc["rearBrightness"] | cfg.rearBrightness), 1, 255);
     cfg.rearGoalSeconds = constrain((int)(doc["rearGoalSeconds"] | cfg.rearGoalSeconds), 2, 12);
     if (!cfg.rearLedEnabled) stopRearLed();
+    cfg.overlayEnabled = doc["overlayEnabled"] | cfg.overlayEnabled;
+    cfg.overlayGoals = doc["overlayGoals"] | cfg.overlayGoals;
+    cfg.overlayPowerPlays = doc["overlayPowerPlays"] | cfg.overlayPowerPlays;
+    cfg.overlayStart = doc["overlayStart"] | cfg.overlayStart;
+    cfg.overlayFinal = doc["overlayFinal"] | cfg.overlayFinal;
+    cfg.overlayFlash = doc["overlayFlash"] | cfg.overlayFlash;
+    cfg.overlayLogos = doc["overlayLogos"] | cfg.overlayLogos;
+    cfg.overlayGoalSeconds = constrain(
+        (int)(doc["overlayGoalSeconds"] | cfg.overlayGoalSeconds), 3, 12);
+    cfg.overlayFinalSeconds = constrain(
+        (int)(doc["overlayFinalSeconds"] | cfg.overlayFinalSeconds), 3, 12);
+    if (!cfg.overlayEnabled) {
+      overlayController.clear();
+      overlayLastFrame = 0;
+      needsDraw = true;
+      lastCarouselAdvance = millis();
+    }
     cfg.cycleGames = doc["cycleGames"] | cfg.cycleGames;
     const bool newShowStandings = doc["showStandings"] | cfg.showStandings;
     if (newShowStandings != cfg.showStandings) {
@@ -3287,7 +3319,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.3.4 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.3.5 — CYD only");
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),
