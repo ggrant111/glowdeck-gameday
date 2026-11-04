@@ -1802,57 +1802,114 @@ uint32_t gamesFingerprint() {
 // The NHL's cross-day scoreboard currently exposes PP 'situation' even when
 // the date-scoped /score endpoint omits it. Use a small filtered parse, and
 // only fetch for live games the user actually follows.
+// One official gamecenter/landing summary request for an armed, followed or
+// currently visible LIVE game. This compact record provides actual penalty
+// types, timeInPeriod and scored power-play goals. It is NOT triggered by
+// repeated uncorroborated 6-on-5 NHL situation frames.
 void fetchFollowedPowerPlays() {
-  bool relevant = false;
-  for (uint8_t i = 0; i < gameCount; ++i)
-    if (rearFollows(games[i].id) &&
-        (games[i].state == "LIVE" || games[i].state == "CRIT")) relevant = true;
-  if (!relevant || WiFi.status() != WL_CONNECTED) return;
-
+  if (WiFi.status() != WL_CONNECTED) return;
+  Game *target=nullptr;
+  NhlPenaltyLedger::Book *book=nullptr;
+  const LiveCarousel::Page visible=currentCarouselPage();
+  for(uint8_t i=0;i<gameCount;++i) {
+    Game &g=games[i];
+    if (g.state!="LIVE" && g.state!="CRIT")continue;
+    if(g.intermission)continue;
+    const bool shown=screen==Screen::LIVE &&
+        visible.kind==LiveCarousel::Kind::GAME && visible.index==i;
+    if(!rearFollows(g.id) && !shown)continue;
+    NhlPenaltyLedger::Book *candidate=penaltyLedger(g.id);
+    if(!candidate)continue;
+    if(candidate->loaded &&
+       uint32_t(millis()-candidate->checkedAt)<30000UL)continue;
+    target=&g;book=candidate;break;
+  }
+  if(!target||!book)return;
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  http.setTimeout(3500);
+  http.setConnectTimeout(2800);
+  http.setTimeout(4200);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.useHTTP10(true);
-  if (!http.begin(client, "https://api-web.nhle.com/v1/scoreboard/now"))
-    return;
-  if (http.GET() != HTTP_CODE_OK) { http.end(); return; }
-
-  StaticJsonDocument<512> filter;
-  JsonObject fg = filter["gamesByDate"][0]["games"][0].to<JsonObject>();
-  fg["id"] = true;
-  fg["situation"]["homeTeam"]["strength"] = true;
-  fg["situation"]["awayTeam"]["strength"] = true;
-  fg["situation"]["homeTeam"]["situationDescriptions"][0] = true;
-  fg["situation"]["awayTeam"]["situationDescriptions"][0] = true;
-  DynamicJsonDocument doc(24576);
-  const DeserializationError err = deserializeJson(
-    doc, http.getStream(), DeserializationOption::Filter(filter));
+  const String url="https://api-web.nhle.com/v1/gamecenter/"+
+                   String(target->id)+"/landing";
+  if(!http.begin(client,url))return;
+  http.addHeader("Accept-Encoding","identity");
+  if(http.GET()!=HTTP_CODE_OK) {
+    http.end(); return;
+  }
+  // Keep only event keys needed for verified penalties. Filtering in the
+  // stream avoids allocating the complete (occasionally large) game landing.
+  DynamicJsonDocument filter(2048);
+  JsonObject summary = filter["summary"].to<JsonObject>();
+  JsonObject penaltyPeriod = summary["penalties"][0].to<JsonObject>();
+  penaltyPeriod["periodDescriptor"]["number"]=true;
+  JsonObject penalty = penaltyPeriod["penalties"][0].to<JsonObject>();
+  penalty["timeInPeriod"]=true;
+  penalty["type"]=true;
+  penalty["duration"]=true;
+  penalty["descKey"]=true;
+  penalty["teamAbbrev"]["default"]=true;
+  JsonObject scorePeriod = summary["scoring"][0].to<JsonObject>();
+  scorePeriod["periodDescriptor"]["number"]=true;
+  JsonObject goal=scorePeriod["goals"][0].to<JsonObject>();
+  goal["timeInPeriod"]=true;
+  goal["strength"]=true;
+  goal["teamAbbrev"]["default"]=true;
+  DynamicJsonDocument doc(14336);
+  if(filter.overflowed()||!doc.capacity()) {
+    http.end();return;
+  }
+  Stream &body=http.getStream();
+  body.setTimeout(4200);
+  const DeserializationError err=deserializeJson(
+      doc,body,DeserializationOption::Filter(filter));
   http.end();
-  if (err) { Serial.printf("Rear PP fallback JSON: %s\n", err.c_str()); return; }
-
-  JsonArray dates = doc["gamesByDate"].as<JsonArray>();
-  for (JsonObject date : dates) for (JsonObject entry : date["games"].as<JsonArray>()) {
-    const uint32_t id = entry["id"] | 0U;
-    for (uint8_t i = 0; i < gameCount; ++i) {
-      Game &g = games[i];
-      if (g.id != id || !rearFollows(id)) continue;
-      JsonVariantConst situation = entry["situation"];
-      // An absent situation is unknown. It is not evidence of 5v5 and
-      // MUST NOT be logged as a power-play end.
-      if (situation.isNull()) continue;
-      const uint8_t side = detectPowerPlay(situation);
-      g.ppSide = side;
-      g.ppDataKnown = true;
-      g.ppUpdatedAt = millis();
-      ppCache[i].id = id;
-      ppCache[i].side = side;
-      ppCache[i].known = true;
-      ppCache[i].updatedAt = g.ppUpdatedAt;
-      break;
+  if(err||doc.overflowed()) {
+    Serial.printf("[PP VERIFY] NHL landing parse: %s\n",err.c_str());
+    return;
+  }
+  const JsonArrayConst penalties=doc["summary"]["penalties"].as<JsonArrayConst>();
+  const JsonArrayConst scoring=doc["summary"]["scoring"].as<JsonArrayConst>();
+  if(penalties.isNull() && scoring.isNull())return;
+  NhlPenaltyLedger::Book next;
+  next.reset(target->id);
+  for (JsonVariantConst period : penalties) {
+    const uint8_t p=period["periodDescriptor"]["number"]|0;
+    for (JsonVariantConst call : period["penalties"].as<JsonArrayConst>()) {
+      const String team=call["teamAbbrev"]["default"].as<String>();
+      const uint8_t penalized=team==target->home ? 1 :
+          team==target->away ? 2 : 0;
+      next.addPenalty(p,call["timeInPeriod"]|"",
+          penalized,call["type"]|"",call["duration"]|0,
+          call["descKey"]|"");
     }
   }
+  for (JsonVariantConst period : scoring) {
+    const uint8_t p=period["periodDescriptor"]["number"]|0;
+    for (JsonVariantConst goal : period["goals"].as<JsonArrayConst>()) {
+      const char *strength=goal["strength"]|"";
+      if(strcmp(strength,"pp") && strcmp(strength,"PP"))continue;
+      const String team=goal["teamAbbrev"]["default"].as<String>();
+      const uint8_t scoringSide=team==target->home ? 1 :
+          team==target->away ? 2 : 0;
+      next.addPpGoal(p,goal["timeInPeriod"]|"",scoringSide);
+    }
+  }
+  next.loaded=true;
+  next.checkedAt=millis();
+  *book=next;
+  const uint8_t oldPP=target->ppSide;
+  validatePowerPlay(*target);
+  if(oldPP!=target->ppSide && screen==Screen::LIVE &&
+     currentCarouselPage().kind==LiveCarousel::Kind::GAME &&
+     &games[currentCarouselPage().index]==target && !overlayController.active()) {
+    partialLiveUpdate=true;
+  }
+  Serial.printf("[PP VERIFY] game=%lu penalties=%u PPG=%u confirmed=%u emptyNet=%u\n",
+      (unsigned long)target->id,next.penaltyCount,next.goalCount,
+      target->ppSide,target->emptyNetSide);
 }
 
 void markNhlFetchFailure(const String &message) {
