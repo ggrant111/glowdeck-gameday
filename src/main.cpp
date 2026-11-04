@@ -17,6 +17,7 @@
 #include "ConferenceRecords.h"
 #include "GameDetailMode.h"
 #include "StandingsCarousel.h"
+#include "LiveCarousel.h"
 #include "NhlFetchPolicy.h"
 #include "CelebrationEngine.h"
 #include "TeamGradient.h"
@@ -115,7 +116,8 @@ uint8_t rearLastDuty[3] = {255, 255, 255};
 uint32_t lastPpFallback = 0;
 uint32_t rearTestPpUntil = 0, rearTestPpColor = 0;
 uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
-uint8_t carouselSlide = 0; // Independent of the armed game and game-detail index.
+uint8_t carouselSlide = 0; // Independent of armed game and detail index.
+LiveCarousel::Plan carouselPlan; // 28 fixed entries, no heap or sprite buffer.
 uint32_t lastCarouselAdvance = 0;
 String scoreboardDate;
 String targetScoreboardDate;
@@ -190,18 +192,35 @@ struct SeasonStanding {
 // The carousel can show games followed by eight league-wide standings slides.
 // Browsing a standings slide must NEVER change the WLED armed game, score
 // baselines, live polls or the selected game detail.
-uint8_t carouselPageCount() {
-  return StandingsCarousel::totalSlides(gameCount, cfg.showStandings);
+// Each successful NHL score fetch rebuilds this small index-only plan.
+// During live games: show ONLY live matchups full-screen plus 4-up summaries.
+// Outside live action: retain the existing all-games + 8-standings rotation.
+uint8_t carouselPageCount() { return carouselPlan.count; }
+LiveCarousel::Page currentCarouselPage() {
+  return carouselPlan.at(carouselSlide);
 }
 bool showingStandingsPage() {
-  return cfg.showStandings && carouselSlide >= gameCount &&
-         carouselSlide < carouselPageCount();
+  return currentCarouselPage().kind == LiveCarousel::Kind::STANDINGS;
+}
+bool showingSummaryPage() {
+  return currentCarouselPage().kind == LiveCarousel::Kind::SUMMARY;
+}
+bool showingGamePage() {
+  return currentCarouselPage().kind == LiveCarousel::Kind::GAME;
+}
+void rebuildCarouselPlan() {
+  carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings);
+  if (carouselSlide >= carouselPageCount()) carouselSlide = 0;
+  const LiveCarousel::Page page = currentCarouselPage();
+  if (page.kind == LiveCarousel::Kind::GAME)
+    featuredIndex = page.index;
 }
 void advanceCarousel(int direction) {
-  const uint8_t total = carouselPageCount();
-  carouselSlide = StandingsCarousel::advance(carouselSlide, total, direction);
-  if (carouselSlide < gameCount) featuredIndex = carouselSlide;
+  carouselSlide = LiveCarousel::advance(carouselSlide, carouselPlan, direction);
+  const LiveCarousel::Page page = currentCarouselPage();
+  if (page.kind == LiveCarousel::Kind::GAME) featuredIndex = page.index;
   lastCarouselAdvance = millis();
+  partialLiveUpdate = false;
   needsDraw = true;
 }
 
