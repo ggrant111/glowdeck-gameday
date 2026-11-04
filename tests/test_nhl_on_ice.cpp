@@ -10,6 +10,9 @@ int main() {
   assert(fromSituationCode("1451")==0); // VAN 5v4 PP, both goalies in
   assert(fromSituationCode("1551")==0); // even strength
   assert(fromSituationCode("0550")==3); // both nets empty
+  assert(emptyNetLabel("EN") && emptyNetLabel("EMPTY NET"));
+  assert(emptyNetLabel("Extra Attacker"));
+  assert(!emptyNetLabel("PP") && !emptyNetLabel("PENALTY"));
   assert(!fromSituationCode("bad"));
   assert(!emptyNetSide(5,5,false,false));
   assert(emptyNetSide(5,6,false,false)==1);
