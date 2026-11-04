@@ -22,6 +22,7 @@
 #include "TeamGradient.h"
 #include "GameEventLog.h"
 #include "PowerPlayLogPolicy.h"
+#include "EventOverlay.h"
 #include "RearLedPattern.h"
 #include <time.h>
 
@@ -72,6 +73,10 @@ struct Settings {
   bool invertScreen = true; // This CYD panel needs INVON to render dark colors correctly.
   bool cycleGames = true;
   bool showStandings = true; // Add 4 conference + 4 division table slides.
+  bool overlayEnabled = true, overlayGoals = true, overlayPowerPlays = true;
+  bool overlayStart = true, overlayFinal = true, overlayFlash = true;
+  bool overlayLogos = true;
+  uint8_t overlayGoalSeconds = 8, overlayFinalSeconds = 7;
   uint8_t cycleSeconds = 9;
   uint8_t timezone = 1; // 0=ET, 1=CT, 2=MT, 3=PT, 4=AZ
   int touchX0 = 300, touchX1 = 3800, touchY0 = 300, touchY1 = 3800;
@@ -149,6 +154,9 @@ uint32_t hornStart = 0;
 uint16_t hornFrequency = 0;
 
 enum class Screen : uint8_t { LIVE, GAMES, SETUP, CALIBRATE, STATS };
+EventOverlay::Controller overlayController;
+uint32_t overlayLastFrame = 0;
+uint32_t overlayCount = 0;
 struct DetailStats {
   uint32_t gameId = 0, updatedAt = 0;
   bool loaded = false;
@@ -1160,6 +1168,15 @@ void loadSettings() {
   cfg.invertScreen = prefs.getBool("invert", true);
   cfg.cycleGames = prefs.getBool("carousel", true);
   cfg.showStandings = prefs.getBool("standPages", true);
+  cfg.overlayEnabled = prefs.getBool("ovOn", true);
+  cfg.overlayGoals = prefs.getBool("ovGoal", true);
+  cfg.overlayPowerPlays = prefs.getBool("ovPP", true);
+  cfg.overlayStart = prefs.getBool("ovStart", true);
+  cfg.overlayFinal = prefs.getBool("ovFinal", true);
+  cfg.overlayFlash = prefs.getBool("ovFlash", true);
+  cfg.overlayLogos = prefs.getBool("ovLogos", true);
+  cfg.overlayGoalSeconds = constrain(prefs.getUChar("ovGoalSec", 8), 3, 12);
+  cfg.overlayFinalSeconds = constrain(prefs.getUChar("ovFinalSec", 7), 3, 12);
   cfg.cycleSeconds = constrain(prefs.getUChar("cycleSec", 9), 5, 30);
   cfg.timezone = constrain(prefs.getUChar("timezone", 1), 0, 4);
   cfg.touchX0 = prefs.getInt("tx0", 300);
@@ -1197,6 +1214,15 @@ void saveSettings() {
   prefs.putBool("invert", cfg.invertScreen);
   prefs.putBool("carousel", cfg.cycleGames);
   prefs.putBool("standPages", cfg.showStandings);
+  prefs.putBool("ovOn", cfg.overlayEnabled);
+  prefs.putBool("ovGoal", cfg.overlayGoals);
+  prefs.putBool("ovPP", cfg.overlayPowerPlays);
+  prefs.putBool("ovStart", cfg.overlayStart);
+  prefs.putBool("ovFinal", cfg.overlayFinal);
+  prefs.putBool("ovFlash", cfg.overlayFlash);
+  prefs.putBool("ovLogos", cfg.overlayLogos);
+  prefs.putUChar("ovGoalSec", cfg.overlayGoalSeconds);
+  prefs.putUChar("ovFinalSec", cfg.overlayFinalSeconds);
   prefs.putUChar("cycleSec", cfg.cycleSeconds);
   prefs.putUChar("timezone", cfg.timezone);
 }
