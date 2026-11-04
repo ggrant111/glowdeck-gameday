@@ -20,6 +20,7 @@
 #include "NhlFetchPolicy.h"
 #include "CelebrationEngine.h"
 #include "TeamGradient.h"
+#include "GameEventLog.h"
 #include "RearLedPattern.h"
 #include <time.h>
 
@@ -87,6 +88,16 @@ struct GoalWatch {
   bool baseline = false;
 };
 GoalWatch goalWatch[MAX_GAMES];
+// Session-only ring buffer, 64 entries; no flash wear or framebuffer use.
+GameEventLog::Buffer gameEventHistory;
+uint32_t wledEventOwner[MAX_WLED] = {0, 0, 0, 0};
+uint32_t armedPpLogSeq = 0, queuedWledLogSeq = 0;
+struct PpEventWatch {
+  uint32_t id = 0;
+  uint8_t side = 0;
+  bool baseline = false;
+};
+PpEventWatch ppEventWatch[MAX_GAMES];
 struct PowerPlaySnapshot {
   uint32_t id = 0, updatedAt = 0;
   uint8_t side = 0;
@@ -408,6 +419,48 @@ void tickRearLed() {
 
 // Every game gets an independent baseline, preventing false flashes on reboot,
 // date rollover, first fetch, or when following a game already in progress.
+// Only record what this firmware OBSERVED from the NHL API. The endpoint
+// does not backfill previous goals and cannot confirm physical LED output.
+uint32_t gameEventEpoch() {
+  const time_t epoch = time(nullptr);
+  return epoch > 1700000000 ? (uint32_t)epoch : 0;
+}
+GameEventLog::Entry &addGameEvent(const Game &g, GameEventLog::Type type,
+                                   const String &team, uint8_t delta = 1,
+                                   bool preview = false) {
+  GameEventLog::Entry &entry = gameEventHistory.add(
+      type, gameEventEpoch(), millis()/1000UL, g.id,
+      g.away.c_str(), g.home.c_str(), team.c_str(),
+      (uint16_t)max(0, g.awayScore), (uint16_t)max(0, g.homeScore),
+      g.period, preview, delta);
+  Serial.printf("[EVENT] #%lu %s %s %s@%s %d-%d\n",
+      (unsigned long)entry.sequence, GameEventLog::typeLabel(type),
+      team.c_str(), g.away.c_str(), g.home.c_str(),
+      g.awayScore, g.homeScore);
+  return entry;
+}
+void markWledEvent(uint32_t sequence, uint8_t i, GameEventLog::Wled status,
+                   bool accepted = false) {
+  if (i >= MAX_WLED) return;
+  GameEventLog::Entry *entry = gameEventHistory.find(sequence);
+  if (!entry) return; // Circular log may already have overwritten the row.
+  entry->wled[i] = status;
+  if (accepted) entry->wledAcknowledgedMask |= 1U << i;
+}
+void markPpRearEvent(uint32_t id, const String &team) {
+  for (uint8_t i = 0; i < gameEventHistory.size(); ++i) {
+    GameEventLog::Entry *entry = gameEventHistory.newest(i);
+    if (!entry || entry->gameId != id ||
+        entry->type != GameEventLog::Type::POWER_PLAY_START ||
+        team != entry->team) continue;
+    entry->rear = GameEventLog::Rear::ACTIVE;
+    return;
+  }
+}
+void celebrate(uint32_t color, uint32_t eventSequence);
+bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
+                    uint32_t eventSequence = 0);
+
 void detectRearGoalChanges() {
   for (uint8_t i = 0; i < gameCount; ++i) {
     const Game &g = games[i];
@@ -417,13 +470,82 @@ void detectRearGoalChanges() {
       watch.id = g.id;
     }
     const bool live = g.state == "LIVE" || g.state == "CRIT";
-    if (watch.baseline && live && rearFollows(g.id)) {
-      if (g.homeScore > watch.home) triggerRearGoal(teamRgb(g.home));
-      if (g.awayScore > watch.away) triggerRearGoal(teamRgb(g.away));
+    // Record observed NHL score increments, even when that game's lighting
+    // isn't selected. No synthetic goals are added from current scores at boot.
+    if (watch.baseline && live) {
+      const int deltaHome = g.homeScore - watch.home;
+      const int deltaAway = g.awayScore - watch.away;
+      for (uint8_t side = 0; side < 2; ++side) {
+        const int delta = side == 0 ? deltaHome : deltaAway;
+        if (delta <= 0) continue;
+        const String &scorer = side == 0 ? g.home : g.away;
+        GameEventLog::Entry &entry = addGameEvent(
+            g, GameEventLog::Type::GOAL, scorer,
+            (uint8_t)min(delta, 255));
+        const bool followed = rearFollows(g.id);
+        if (!followed) entry.rear = GameEventLog::Rear::NOT_SELECTED;
+        else if (!cfg.rearLedEnabled || !cfg.rearGoal)
+          entry.rear = GameEventLog::Rear::DISABLED;
+        // WLED is driven only by the armed game and only by allowed teams.
+        const bool armedForGoal = g.id == selectedGameId && haveBaseline &&
+            (side == 0 ? (cfg.mode == 1 || cfg.mode == 3)
+                       : (cfg.mode == 2 || cfg.mode == 3));
+        if (armedForGoal) celebrate(teamRgb(scorer), entry.sequence);
+        // Start the internal LED flash AFTER all WLED network requests so
+        // multi-device snapshots don't consume its 2–12s animation window.
+        if (followed && cfg.rearLedEnabled && cfg.rearGoal) {
+          triggerRearGoal(teamRgb(scorer));
+          entry.rear = GameEventLog::Rear::ACTIVE;
+        }
+      }
     }
     watch.home = g.homeScore;
     watch.away = g.awayScore;
     watch.baseline = true;
+  }
+}
+
+// Track PP changes only when fresh situation data is known. Missing NHL
+// situation data is not interpreted as PP ending.
+void observePowerPlayEvents() {
+  for (uint8_t i = 0; i < gameCount; ++i) {
+    const Game &g = games[i];
+    PpEventWatch &w = ppEventWatch[i];
+    if (w.id != g.id) {
+      w = PpEventWatch();
+      w.id = g.id;
+    }
+    if (!rearFollows(g.id) || !g.ppDataKnown ||
+        (g.state != "LIVE" && g.state != "CRIT")) continue;
+    if (!w.baseline) {
+      w.side = g.ppSide;
+      w.baseline = true;
+      // A game followed mid-power-play is already active. Record detection,
+      // not an invented start timestamp.
+      if (g.ppSide) {
+        const String &team = g.ppSide == 1 ? g.home : g.away;
+        GameEventLog::Entry &e = addGameEvent(
+            g, GameEventLog::Type::POWER_PLAY_START, team, 0);
+        e.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
+            ? GameEventLog::Rear::DISABLED : GameEventLog::Rear::SCHEDULED;
+        if (g.id == selectedGameId) armedPpLogSeq = e.sequence;
+      }
+      continue;
+    }
+    if (g.ppSide == w.side) continue;
+    if (w.side) {
+      const String &team = w.side == 1 ? g.home : g.away;
+      addGameEvent(g, GameEventLog::Type::POWER_PLAY_END, team);
+    }
+    if (g.ppSide) {
+      const String &team = g.ppSide == 1 ? g.home : g.away;
+      GameEventLog::Entry &e = addGameEvent(
+          g, GameEventLog::Type::POWER_PLAY_START, team);
+      e.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
+          ? GameEventLog::Rear::DISABLED : GameEventLog::Rear::SCHEDULED;
+      if (g.id == selectedGameId) armedPpLogSeq = e.sequence;
+    }
+    w.side = g.ppSide;
   }
 }
 
