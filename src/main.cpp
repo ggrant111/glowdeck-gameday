@@ -483,6 +483,48 @@ void celebrate(uint32_t color, uint32_t eventSequence = 0);
 bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
                     uint32_t eventSequence = 0);
 
+// Display event overlays share the NHL observation that produced the
+// WLED/rear RGB celebration. They never create a second score trigger.
+bool overlayAllowed(EventOverlay::Kind kind) {
+  if (!cfg.overlayEnabled || screen == Screen::CALIBRATE) return false;
+  switch(kind) {
+    case EventOverlay::Kind::GOAL: return cfg.overlayGoals;
+    case EventOverlay::Kind::POWER_PLAY_START:
+    case EventOverlay::Kind::POWER_PLAY_END: return cfg.overlayPowerPlays;
+    case EventOverlay::Kind::GAME_START: return cfg.overlayStart;
+    case EventOverlay::Kind::FINAL_WIN:
+    case EventOverlay::Kind::FINAL_LOSS: return cfg.overlayFinal;
+    default: return false;
+  }
+}
+bool queueGameOverlay(const Game *g, EventOverlay::Kind kind,
+                      const String &team, uint32_t sequence) {
+  if (!overlayAllowed(kind)) return false;
+  EventOverlay::Item item;
+  item.kind = kind;
+  item.gameId = g ? g->id : 0;
+  item.eventSequence = sequence;
+  item.color = teamRgb(team);
+  item.duration = EventOverlay::durationMs(kind, cfg.overlayGoalSeconds,
+                                           cfg.overlayFinalSeconds);
+  EventOverlay::copy(item.team, team.c_str(), sizeof(item.team));
+  if (g) {
+    EventOverlay::copy(item.home, g->home.c_str(), sizeof(item.home));
+    EventOverlay::copy(item.away, g->away.c_str(), sizeof(item.away));
+    EventOverlay::copy(item.clock, g->clock.c_str(), sizeof(item.clock));
+    item.period = g->period;
+    item.awayScore = (uint8_t)constrain(g->awayScore, 0, 255);
+    item.homeScore = (uint8_t)constrain(g->homeScore, 0, 255);
+  }
+  const bool admitted = overlayController.push(item, millis());
+  if (admitted) {
+    ++overlayCount;
+    needsDraw = true;
+    partialLiveUpdate = false;
+    overlayLastFrame = 0;
+  }
+  return admitted;
+}
 void detectRearGoalChanges() {
   for (uint8_t i = 0; i < gameCount; ++i) {
     const Game &g = games[i];
@@ -519,6 +561,11 @@ void detectRearGoalChanges() {
           triggerRearGoal(teamRgb(scorer));
           entry.rear = GameEventLog::Rear::ACTIVE;
         }
+        // Only followed/armed games interrupt the screen. Goal overlays
+        // appear even when the WLED slots are empty or disabled.
+        if (followed)
+          queueGameOverlay(&g, EventOverlay::Kind::GOAL,
+                           scorer, entry.sequence);
       }
     }
     watch.home = g.homeScore;
@@ -557,7 +604,9 @@ void observePowerPlayEvents() {
         *watch, g.id, reliable, g.ppSide, millis());
     if (change.ended) {
       const String &team = change.ended == 1 ? g.home : g.away;
-      addGameEvent(g, GameEventLog::Type::POWER_PLAY_END, team, 0);
+      const uint32_t seq = addGameEvent(
+          g, GameEventLog::Type::POWER_PLAY_END, team, 0).sequence;
+      queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_END, team, seq);
       if (g.id == selectedGameId) armedPpLogSeq = 0;
     }
     if (change.started) {
@@ -568,6 +617,8 @@ void observePowerPlayEvents() {
           ? GameEventLog::Rear::NOT_ENABLED
           : GameEventLog::Rear::SCHEDULED;
       if (g.id == selectedGameId) armedPpLogSeq = entry.sequence;
+      queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_START,
+                       team, entry.sequence);
     }
   }
 }
@@ -1989,6 +2040,13 @@ void pollNhl() {
               ? GameEventLog::Type::FINAL_WIN
               : GameEventLog::Type::FINAL_LOSS;
       GameEventLog::Entry &logged = addGameEvent(*g, eventType, fav);
+      const EventOverlay::Kind kind =
+        transition == CelebrationEngine::Event::GAME_START
+          ? EventOverlay::Kind::GAME_START
+          : transition == CelebrationEngine::Event::FINAL_WIN
+            ? EventOverlay::Kind::FINAL_WIN
+            : EventOverlay::Kind::FINAL_LOSS;
+      queueGameOverlay(g, kind, fav, logged.sequence);
       const bool enabled = transition == CelebrationEngine::Event::GAME_START
                            ? cfg.wledGameStart : cfg.wledFinal;
       if (enabled) {
