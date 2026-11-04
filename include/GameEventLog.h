@@ -64,6 +64,21 @@ inline const char *wledLabel(Wled w) {
     default: return "Not triggered";
   }
 }
+inline bool matchesCategory(Type t, const char *category) {
+  if (!category || !strcmp(category, "all")) return true;
+  if (!strcmp(category, "goals")) return t == Type::GOAL;
+  if (!strcmp(category, "powerplays"))
+    return t == Type::POWER_PLAY_START || t == Type::POWER_PLAY_END;
+  if (!strcmp(category, "previews"))
+    return t == Type::PREVIEW_GOAL || t == Type::PREVIEW_POWER_PLAY ||
+           t == Type::PREVIEW_START || t == Type::PREVIEW_WIN ||
+           t == Type::PREVIEW_LOSS || t == Type::PREVIEW_STOP ||
+           t == Type::REAR_TEST;
+  if (!strcmp(category, "other"))
+    return t == Type::GAME_START || t == Type::FINAL_WIN ||
+           t == Type::FINAL_LOSS;
+  return false;
+}
 inline void copyAbbr(char (&dst)[4], const char *src) {
   if (!src) { dst[0] = '\0'; return; }
   size_t i=0;
