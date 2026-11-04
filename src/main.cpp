@@ -2246,6 +2246,69 @@ void drawScoreboardHeader(const Game &g) {
 
 // 320x240: 8 rank rows, full NHL team list across eight carousel slides.
 // All drawing is simple TFT primitives; no image buffers or extra tasks.
+// Four upcoming/finished matches per compact slide while NHL games are live.
+// No off-screen buffer: one header and four fixed 46px charcoal rows.
+// Tap a row for that game's pregame/live/final details.
+void drawOtherGamesSummary() {
+  const LiveCarousel::Page slide = currentCarouselPage();
+  tft.fillScreen(ARENA_BLACK);
+  tft.fillRect(0, 0, 320, 31, ARENA_PLATE);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(WHITE, ARENA_PLATE);
+  tft.drawString("OTHER GAMES", 8, 7, 2);
+  tft.setTextColor(ICE_TEXT, ARENA_PLATE);
+  tft.drawString("LIVE " + String(carouselPlan.liveCount), 150, 7, 2);
+  tft.setTextDatum(TR_DATUM);
+  tft.drawString(String(carouselSlide + 1) + "/" +
+                 String(carouselPageCount()), 297, 7, 2);
+  tft.drawFastHLine(306, 7, 11, WHITE);
+  tft.drawFastHLine(306, 13, 11, WHITE);
+  tft.drawFastHLine(306, 19, 11, WHITE);
+  for (uint8_t row = 0; row < slide.count; ++row) {
+    const uint8_t idx = slide.rows[row];
+    if (idx >= gameCount) continue;
+    const Game &g = games[idx];
+    const int16_t y = 36 + row * 49;
+    const uint16_t bg = row % 2 ? 0x18C3 : ARENA_PLATE;
+    tft.fillRoundRect(7, y, 306, 46, 5, bg);
+    tft.fillRect(11, y + 9, 4, 28, to565(teamRgb(g.away)));
+    tft.fillRect(305, y + 9, 4, 28, to565(teamRgb(g.home)));
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(WHITE, bg);
+    tft.drawString(g.away, 22, y + 4, 2);
+    if (gameIsFuture(g)) {
+      tft.setTextColor(ICE_TEXT, bg);
+      tft.drawString("VS", 91, y + 4, 2);
+      tft.setTextColor(WHITE, bg);
+      tft.drawString(g.home, 137, y + 4, 2);
+      String start = formattedStart(g.startUTC);
+      if (start.length() > 13) start = start.substring(0,13);
+      tft.setTextDatum(TR_DATUM);
+      tft.drawString(start.length() ? start : String("TBD"), 300, y + 6, 2);
+      tft.setTextDatum(TL_DATUM);
+      tft.setTextColor(ICE_TEXT, bg);
+      tft.drawString("UPCOMING", 22, y + 27, 2);
+    } else {
+      // Only non-live games are grouped here. This path is normally FINAL,
+      // but handles delayed NHL final labels as well.
+      tft.drawString(String(g.awayScore), 82, y + 2, 4);
+      tft.setTextColor(ICE_TEXT, bg);
+      tft.drawString("-", 119, y + 7, 2);
+      tft.setTextColor(WHITE, bg);
+      tft.drawString(String(g.homeScore), 141, y + 2, 4);
+      tft.drawString(g.home, 189, y + 4, 2);
+      tft.setTextColor(ICE_TEXT, bg);
+      const String status = gameStatus(g);
+      tft.drawString(status.length() > 22 ? status.substring(0, 22) : status,
+                     22, y + 27, 2);
+    }
+    tft.setTextDatum(TR_DATUM);
+    tft.setTextColor(ICE_TEXT, bg);
+    tft.drawString("TAP FOR STATS", 299, y + 32, 1);
+  }
+  tft.setTextDatum(TL_DATUM);
+}
+
 void drawStandingsSlide() {
   const uint8_t slideNumber = currentCarouselPage().index;
   const StandingsCarousel::Page page = StandingsCarousel::page(slideNumber);
@@ -2557,6 +2620,8 @@ void draw() {
   if (screen == Screen::LIVE) {
     if (showingStandingsPage()) {
       drawStandingsSlide();
+    } else if (showingSummaryPage()) {
+      drawOtherGamesSummary();
     } else if (!gameCount) {
       tft.fillScreen(ARENA_BLACK);
       tft.setTextDatum(MC_DATUM);
@@ -2571,7 +2636,9 @@ void draw() {
       tft.drawString("Tap top-right for the menu", 160, 193, 2);
       tft.setTextDatum(TL_DATUM);
     } else {
-      const Game &g = games[featuredIndex % gameCount];
+      const LiveCarousel::Page slide = currentCarouselPage();
+      const Game &g = games[slide.kind == LiveCarousel::Kind::GAME
+                                ? slide.index : featuredIndex % gameCount];
       drawScoreboardStatic(g);
       drawLiveReadout(g);
     }
@@ -2686,6 +2753,8 @@ void selectGame(uint32_t id) {
   screen = Screen::LIVE;
   for (uint8_t i = 0; i < gameCount; ++i)
     if (games[i].id == id) { featuredIndex = i; break; }
+  const uint8_t selectedSlide = LiveCarousel::locateGame(carouselPlan, games, id);
+  if (selectedSlide != 255) carouselSlide = selectedSlide;
   lastCarouselAdvance = millis();
   // Fetch soon when the user arms a new matchup; first response is a baseline.
   lastPoll = millis() - GameDayCadence::kIdleMs;
@@ -2742,12 +2811,21 @@ void handleTouch() {
         advanceCarousel(dx < 0 ? 1 : -1);
       } else if (gestureStartY <= 35 && gestureStartX >= 263) {
         screen = Screen::GAMES; // Menu is available on every slide.
-      } else if (carouselPageCount() > 1 && gestureStartY >= 213 && gestureStartX < 58) {
+      } else if (!showingSummaryPage() && carouselPageCount() > 1 &&
+                 gestureStartY >= 213 && gestureStartX < 58) {
         advanceCarousel(-1);
-      } else if (carouselPageCount() > 1 && gestureStartY >= 213 && gestureStartX > 263) {
+      } else if (!showingSummaryPage() && carouselPageCount() > 1 &&
+                 gestureStartY >= 213 && gestureStartX > 263) {
         advanceCarousel(1);
-      } else if (!showingStandingsPage() && gameCount) {
-        showDetail(games[carouselSlide].id);
+      } else if (showingSummaryPage()) {
+        const LiveCarousel::Page slide = currentCarouselPage();
+        if (gestureStartY >= 36 && gestureStartY < 232) {
+          const uint8_t row = (gestureStartY - 36) / 49;
+          if (row < slide.count && slide.rows[row] < gameCount)
+            showDetail(games[slide.rows[row]].id);
+        }
+      } else if (showingGamePage() && gameCount) {
+        showDetail(games[currentCarouselPage().index].id);
       } else if (!showingStandingsPage()) {
         screen = Screen::GAMES;
       } // Standings rows are informational, not game-arm buttons.
