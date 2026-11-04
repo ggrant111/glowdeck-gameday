@@ -25,11 +25,20 @@ def main():
     for name, path in (
         ("play-by-play", f"/gamecenter/{GAME_ID}/play-by-play"),
         ("score", "/score/2026-11-03"),
+        ("landing", f"/gamecenter/{GAME_ID}/landing"),
     ):
         try:
             doc = retrieve(BASE + path)
         except Exception as err:
             print(f"OFFICIAL {name}: UNAVAILABLE {type(err).__name__} {err}", flush=True)
+            continue
+        if name == "landing":
+            print("LANDING top keys", list(doc.keys()))
+            summary=doc.get("summary", {})
+            print("LANDING summary keys", list(summary.keys()))
+            for key in ("penalties","scoring","plays"):
+                data=summary.get(key, doc.get(key, []))
+                print("LANDING",key,"sample",json.dumps(data)[:5800])
             continue
         if name == "score":
             for game in doc.get("games", []):
