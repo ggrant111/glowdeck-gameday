@@ -3182,6 +3182,53 @@ void registerRoutes() {
     saveSettings();
     StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
   });
+  // On-device visual test: intentionally does not trigger WLED or rear LED,
+  // so it remains usable even before adding external LED controllers.
+  server.on("/api/overlay/preview", HTTP_POST, []() {
+    if (!authorized()) return;
+    StaticJsonDocument<192> request;
+    if (deserializeJson(request, server.arg("plain")))
+      return errorResponse("Invalid overlay preview JSON");
+    const String type = request["kind"] | String("goal");
+    const String side = request["side"] | String("home");
+    if (side != "home" && side != "away")
+      return errorResponse("Invalid team side");
+    EventOverlay::Kind kind = EventOverlay::Kind::NONE;
+    if (type == "goal") kind = EventOverlay::Kind::GOAL;
+    else if (type == "pp") kind = EventOverlay::Kind::POWER_PLAY_START;
+    else if (type == "ppend") kind = EventOverlay::Kind::POWER_PLAY_END;
+    else if (type == "start") kind = EventOverlay::Kind::GAME_START;
+    else if (type == "win") kind = EventOverlay::Kind::FINAL_WIN;
+    else if (type == "loss") kind = EventOverlay::Kind::FINAL_LOSS;
+    else if (type != "stop") return errorResponse("Invalid overlay event");
+    if (kind == EventOverlay::Kind::NONE) {
+      overlayController.clear();
+      overlayLastFrame = 0;
+      needsDraw = true;
+      lastCarouselAdvance = millis();
+    } else {
+      Game *g = selectedGame();
+      if (!g && gameCount) g = &games[featuredIndex % gameCount];
+      const String team = g ? (side == "home" ? g->home : g->away)
+                            : String("UTA");
+      if (!overlayAllowed(kind))
+        return errorResponse("Enable this event overlay in Display settings");
+      const GameEventLog::Type logType = type == "goal"
+        ? GameEventLog::Type::PREVIEW_GOAL :
+        type == "pp" || type == "ppend"
+        ? GameEventLog::Type::PREVIEW_POWER_PLAY :
+        type == "start" ? GameEventLog::Type::PREVIEW_START :
+        type == "win" ? GameEventLog::Type::PREVIEW_WIN :
+                        GameEventLog::Type::PREVIEW_LOSS;
+      const uint32_t seq = addPreviewEvent(g, logType, team).sequence;
+      queueGameOverlay(g, kind, team, seq);
+    }
+    StaticJsonDocument<128> response;
+    response["ok"] = true;
+    response["active"] = overlayController.active();
+    response["pending"] = overlayController.pending();
+    sendJson(response);
+  });
   server.on("/api/rear/test", HTTP_POST, []() {
     if (!authorized()) return;
     StaticJsonDocument<160> doc;
@@ -3215,6 +3262,12 @@ void registerRoutes() {
     }
     testRow.rear = mode == "off" ? GameEventLog::Rear::NA
                                : GameEventLog::Rear::ACTIVE;
+    if (mode == "goal")
+      queueGameOverlay(g, EventOverlay::Kind::GOAL,
+                       selectedTeam, testRow.sequence);
+    else if (mode == "powerplay")
+      queueGameOverlay(g, EventOverlay::Kind::POWER_PLAY_START,
+                       selectedTeam, testRow.sequence);
     StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
   });
   server.on("/api/wled/preview", HTTP_POST, []() {
@@ -3261,6 +3314,17 @@ void registerRoutes() {
           wledPpTestUntil = 0;
       }
     }
+    // Existing WLED preview controls now demonstrate the matching overlay,
+    // regardless of whether any WLED controllers are currently configured.
+    const EventOverlay::Kind overlayKind =
+        event == CelebrationEngine::Event::GOAL ? EventOverlay::Kind::GOAL :
+        event == CelebrationEngine::Event::POWER_PLAY ? EventOverlay::Kind::POWER_PLAY_START :
+        event == CelebrationEngine::Event::GAME_START ? EventOverlay::Kind::GAME_START :
+        event == CelebrationEngine::Event::FINAL_WIN ? EventOverlay::Kind::FINAL_WIN :
+        event == CelebrationEngine::Event::FINAL_LOSS ? EventOverlay::Kind::FINAL_LOSS :
+        EventOverlay::Kind::NONE;
+    if (overlayKind != EventOverlay::Kind::NONE)
+      queueGameOverlay(previewGame, overlayKind, previewTeam, previewRow.sequence);
     StaticJsonDocument<256> response;
     response["event"] = CelebrationEngine::label(wledActiveEvent);
     response["devices"] = wledEligibleCount(event == CelebrationEngine::Event::NONE
