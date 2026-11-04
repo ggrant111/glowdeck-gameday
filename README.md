@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.3.6 live-first NHL carousel with 4-up other-game summaries.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.3.7 verified NHL power plays and live empty-net indicators.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
@@ -21,6 +21,14 @@ The first score after selecting a game is used as a baseline and never replays a
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+
+## Verified NHL power plays and empty-net badges (v0.3.7)
+
+The CYD's full-screen LIVE game slide now shows small **PP** (verified power play) and **EN** (empty net; goalie pulled) badges beside the relevant team's abbreviation. If both apply simultaneously the badge reads **PP+EN**. Away is left; home is right. These redraw with live status changes, without extra carousel slides or images.
+
+After auditing the official November 3 Anaheim–Vancouver play-by-play, v0.3.7 stops inferring PP from raw skater counts (which can mean a pulled goalie). A current NHL PP label must agree with actual gamecenter penalty and power-play-goal records at the NHL clock. Missing or inconsistent data fails closed instead of creating repeated false PP events. This same verified PP state drives the web Event Log, CYD rear RGB pulse, on-screen PP event overlay, and selected WLED devices. EN is tracked independently and never activates PP lighting by itself.
+
+See [official NHL event audit and PP/EN verification guide](docs/NHL_EVENT_VALIDATION.md). Actual on-device/broadcast timing remains subject to the NHL public feed and needs physical verification.
 
 ## Live-first game carousel (v0.3.6)
 
