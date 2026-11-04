@@ -28,6 +28,18 @@ int main() {
   assert(b.add(Type::PREVIEW_GOAL,0,1,0,nullptr,nullptr,nullptr,0,0,0,true).sequence==before+1);
   assert(b.newest(0)->preview);
   assert(!strcmp(b.newest(0)->away,""));
+  assert(matchesCategory(Type::GOAL, "goals"));
+  assert(matchesCategory(Type::POWER_PLAY_START, "powerplays"));
+  assert(matchesCategory(Type::POWER_PLAY_END, "powerplays"));
+  assert(matchesCategory(Type::FINAL_WIN, "other"));
+  assert(matchesCategory(Type::PREVIEW_GOAL, "previews"));
+  assert(!matchesCategory(Type::GOAL, "previews"));
+  assert(!matchesCategory(Type::FINAL_LOSS, "goals"));
+  assert(matchesCategory(Type::GOAL, "all"));
+  b.newest(0)->wledAcknowledgedMask |= (1 << 2);
+  b.newest(0)->wled[2] = Wled::RESTORED;
+  assert((b.newest(0)->wledAcknowledgedMask & (1 << 2)) != 0);
+  assert(b.newest(0)->wled[2] == Wled::RESTORED);
   assert(!strcmp(rearLabel(Rear::NOT_SELECTED),"Not followed"));
   puts("PASS: fixed-memory event ring, wrap, update, reset, status labels");
 }
