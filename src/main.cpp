@@ -1203,7 +1203,8 @@ void fetchDetailStats(uint32_t id) {
   for (uint8_t i = 0; i < gameCount; ++i) {
     if (games[i].id == id) {
       updateCarouselStatsFromDetail(i, detail);
-      if (screen == Screen::LIVE && featuredIndex == i) partialLiveUpdate = true;
+      if (screen == Screen::LIVE && showingGamePage() &&
+        currentCarouselPage().index == i) partialLiveUpdate = true;
       break;
     }
   }
