@@ -2564,6 +2564,31 @@ void drawLiveReadout(const Game &g) {
     tft.drawFastVLine(160, 88, 42, ARENA_LINE);
   }
 
+  // Team-specific active NHL status beneath the score plate. These short
+  // labels are updated with live scores; PP is penalty-verified and EN means
+  // the team's goalie is OFF the ice. Both can coexist without confusion.
+  if (gameIsLive(g) && !g.intermission) {
+    const uint32_t now=millis();
+    for(uint8_t i=0;i<2;++i) {
+      const uint8_t side=i==0 ? 2 : 1; // left=away, right=home
+      const int16_t x=i==0 ? 79 : 179;
+      const bool pp=g.ppDataKnown && g.ppSide==side &&
+          uint32_t(now-g.ppUpdatedAt)<45000UL;
+      const bool en=g.emptyNetKnown &&
+          NhlOnIce::teamHasEmptyNet(g.emptyNetSide,side) &&
+          uint32_t(now-g.emptyNetUpdatedAt)<45000UL;
+      const uint16_t chip=pp ? 0xC3A0 : en ? 0xA145 : ARENA_PLATE;
+      tft.fillRoundRect(x, 143, 62, 18, 4, chip);
+      if (pp || en) {
+        tft.setTextColor(WHITE, chip);
+        tft.drawString(pp && en ? "PP+EN" : pp ? "PP" : "EMPTY NET",
+                       x+31, 152, (pp||!en)?2:1);
+      }
+    }
+  } else {
+    tft.fillRect(79,143,62,18,ARENA_PLATE);
+    tft.fillRect(179,143,62,18,ARENA_PLATE);
+  }
   tft.fillRect(10, 169, 300, 25, ARENA_PLATE);
   tft.setTextColor(ICE_TEXT, ARENA_PLATE);
   tft.drawString("SOG", 37, 181, 2);
@@ -3092,7 +3117,7 @@ void registerRoutes() {
     // New slide/standings metadata should not enlarge the loopTask stack.
     DynamicJsonDocument doc(3584);
     if (doc.capacity() < 3584) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.6";
+    doc["version"] = "0.3.7";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -3187,6 +3212,9 @@ void registerRoutes() {
       g["clock"] = games[i].clock;
       g["intermission"] = games[i].intermission;
       g["powerPlaySide"] = games[i].ppSide;
+      g["powerPlayVerified"] = games[i].ppDataKnown;
+      g["emptyNetSide"] = games[i].emptyNetSide;
+      g["emptyNetKnown"] = games[i].emptyNetKnown;
       g["followed"] = rearFollows(games[i].id);
     }
     sendJson(doc);
@@ -3640,7 +3668,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.3.6 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.3.7 — CYD only");
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),
