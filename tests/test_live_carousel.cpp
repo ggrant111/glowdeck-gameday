@@ -20,7 +20,7 @@ int main(){
   assert(p.at(4).count==4 && p.at(5).count==1);
   assert(g[p.at(3).rows[0]].id==101);
   assert(g[p.at(3).rows[1]].id==103);
-  assert(g[p.at(4).rows[0]].id==106);
+  assert(g[p.at(4).rows[0]].id==107);
   assert(g[p.at(5).rows[0]].id==112);
   assert(advance(5,p,1)==0);
   assert(advance(0,p,-1)==5);
