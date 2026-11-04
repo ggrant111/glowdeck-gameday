@@ -1448,21 +1448,10 @@ bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
     scheduleWledRestoreAll();
     return false;
   }
-  // When the NHL first reports an already-active PP, the engine may start
-  // without a transition log. Mark it as detected, not a fabricated start.
-  if (!eventSequence && event == CelebrationEngine::Event::POWER_PLAY) {
-    Game *g = selectedGame();
-    if (g && g->ppSide) {
-      const String &team = g->ppSide == 1 ? g->home : g->away;
-      GameEventLog::Entry &e = addGameEvent(
-          *g, GameEventLog::Type::POWER_PLAY_START, team, 0);
-      e.rear = cfg.rearLedEnabled && cfg.rearPowerPlay
-                   ? GameEventLog::Rear::SCHEDULED
-                   : GameEventLog::Rear::NOT_ENABLED;
-      eventSequence = e.sequence;
-      armedPpLogSeq = e.sequence;
-    }
-  }
+  // The NHL observer exclusively owns power-play start/end history.
+  // This controller must not invent new NHL events when retrying effects,
+  // especially with ZERO configured WLED devices.
+  if (!wledEligibleCount(event)) return false;
   bool prepared[MAX_WLED] = {};
   for (uint8_t i = 0; i < MAX_WLED; ++i)
     if (wledParticipates(i, event))
@@ -1600,7 +1589,6 @@ void tickWledCelebrations() {
     // reports an advantage, otherwise restore the original WLED state.
     if (hasPP && startWledEvent(CelebrationEngine::Event::POWER_PLAY,
                                 powerPlayColor, armedPpLogSeq)) {
-      armedPpLogSeq = 0;
       return;
     }
     scheduleWledRestoreAll();
@@ -1612,15 +1600,16 @@ void tickWledCelebrations() {
     } else if (wledEventColor != powerPlayColor) {
       startWledEvent(CelebrationEngine::Event::POWER_PLAY, powerPlayColor);
     }
-  } else if (hasPP && wledActiveEvent == CelebrationEngine::Event::NONE) {
+  } else if (hasPP && wledActiveEvent == CelebrationEngine::Event::NONE &&
+             wledEligibleCount(CelebrationEngine::Event::POWER_PLAY) > 0) {
     // Avoid re-triggering a failed WLED every 5ms; NHL situation updates are
     // already throttled and each event transition can initiate up to 4 HTTPs.
     static uint32_t lastPpAttempt = 0;
     if (uint32_t(now - lastPpAttempt) > 8000UL) {
       lastPpAttempt = now;
+      // Repeated WLED retries update the *same* observed PP event row.
       startWledEvent(CelebrationEngine::Event::POWER_PLAY,
                      powerPlayColor, armedPpLogSeq);
-      armedPpLogSeq = 0;
     }
   }
 }
@@ -2636,7 +2625,7 @@ void registerRoutes() {
     // New slide/standings metadata should not enlarge the loopTask stack.
     DynamicJsonDocument doc(3072);
     if (doc.capacity() < 3072) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.3";
+    doc["version"] = "0.3.4";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -3071,7 +3060,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.3.3 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.3.4 — CYD only");
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),
