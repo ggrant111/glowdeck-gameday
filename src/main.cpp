@@ -450,6 +450,12 @@ GameEventLog::Entry &addGameEvent(const Game &g, GameEventLog::Type type,
       g.awayScore, g.homeScore);
   return entry;
 }
+GameEventLog::Entry &addPreviewEvent(const Game *g, GameEventLog::Type type,
+                                     const String &team) {
+  if (g) return addGameEvent(*g, type, team, 0, true);
+  return gameEventHistory.add(type, gameEventEpoch(), millis()/1000UL,
+                              0, "", "", team.c_str(), 0, 0, 0, true, 0);
+}
 void markWledEvent(uint32_t sequence, uint8_t i, GameEventLog::Wled status,
                    bool accepted = false) {
   if (i >= MAX_WLED) return;
@@ -2946,6 +2952,9 @@ void registerRoutes() {
     if (!g && gameCount) g = &games[featuredIndex % gameCount];
     const uint32_t color = teamRgb(g ? (side == "home" ? g->home : g->away)
                                       : String("UTA"));
+    const String selectedTeam = g ? (side == "home" ? g->home : g->away) : String("UTA");
+    GameEventLog::Entry &testRow = addPreviewEvent(
+        g, GameEventLog::Type::REAR_TEST, selectedTeam);
     if (mode == "off") stopRearLed();
     else if (mode == "goal") {
       rearTestPpUntil = 0;
@@ -2959,6 +2968,8 @@ void registerRoutes() {
       rearTestPpUntil = millis() + 9000UL;
       rearEvent = RearEvent::IDLE;
     }
+    testRow.rear = mode == "off" ? GameEventLog::Rear::NA
+                               : GameEventLog::Rear::ACTIVE;
     StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
   });
   server.on("/api/wled/preview", HTTP_POST, []() {
@@ -2977,17 +2988,28 @@ void registerRoutes() {
     else if (type == "win") event = CelebrationEngine::Event::FINAL_WIN;
     else if (type == "loss") event = CelebrationEngine::Event::FINAL_LOSS;
     else if (type != "stop") return errorResponse("Invalid celebration type");
+    Game *previewGame = selectedGame();
+    if (!previewGame && gameCount) previewGame = &games[featuredIndex % gameCount];
+    const String previewTeam = previewGame
+        ? (side == "home" ? previewGame->home : previewGame->away)
+        : String("UTA");
+    const GameEventLog::Type previewType =
+        type == "goal" ? GameEventLog::Type::PREVIEW_GOAL :
+        type == "pp" ? GameEventLog::Type::PREVIEW_POWER_PLAY :
+        type == "start" ? GameEventLog::Type::PREVIEW_START :
+        type == "win" ? GameEventLog::Type::PREVIEW_WIN :
+        type == "loss" ? GameEventLog::Type::PREVIEW_LOSS :
+                         GameEventLog::Type::PREVIEW_STOP;
+    GameEventLog::Entry &previewRow =
+        addPreviewEvent(previewGame, previewType, previewTeam);
     if (event == CelebrationEngine::Event::NONE) {
       wledSuppressPpUntil = millis() + 30000UL;
       scheduleWledRestoreAll();
       tickRestores();
     } else {
-      Game *game = selectedGame();
-      if (!game && gameCount) game = &games[featuredIndex % gameCount];
-      const uint32_t color = teamRgb(
-          game ? (side == "home" ? game->home : game->away) : String("UTA"));
+      const uint32_t color = teamRgb(previewTeam);
       wledSuppressPpUntil = 0;
-      if (startWledEvent(event, color)) {
+      if (startWledEvent(event, color, previewRow.sequence)) {
         if (event == CelebrationEngine::Event::POWER_PLAY)
           wledPpTestUntil = millis() + 9000UL;
         else
@@ -3009,7 +3031,10 @@ void registerRoutes() {
     String side = doc["side"] | String("home");
     if (side != "home" && side != "away") return errorResponse("Invalid side");
     Game *g = selectedGame();
-    celebrate(teamRgb(g ? (side == "home" ? g->home : g->away) : String("UTA")));
+    const String team = g ? (side == "home" ? g->home : g->away) : String("UTA");
+    const uint32_t seq = addPreviewEvent(
+        g, GameEventLog::Type::PREVIEW_GOAL, team).sequence;
+    celebrate(teamRgb(team), seq);
     StaticJsonDocument<96> ok; ok["ok"] = true; sendJson(ok);
   });
   server.on("/api/update", HTTP_POST, []() {
