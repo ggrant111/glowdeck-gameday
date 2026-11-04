@@ -1,0 +1,40 @@
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+#include "EventOverlay.h"
+using namespace EventOverlay;
+int main() {
+  static_assert(kQueueSize==4,"Overlay queue must be bounded");
+  assert(priority(Kind::GOAL)>priority(Kind::FINAL_WIN));
+  assert(priority(Kind::FINAL_WIN)>priority(Kind::GAME_START));
+  assert(durationMs(Kind::GOAL,8,7)==8000);
+  assert(durationMs(Kind::POWER_PLAY_END,8,7)==2500);
+  assert(durationMs(Kind::FINAL_WIN,8,7)==7000);
+  assert(isFlash(Kind::GOAL));
+  assert(isPulse(Kind::POWER_PLAY_START));
+  char team[4];copy(team,"WASHINGTON",sizeof(team));
+  assert(!strcmp(team,"WAS"));
+  Controller c;
+  Item pp;pp.kind=Kind::POWER_PLAY_START;pp.duration=4500;pp.gameId=123;pp.eventSequence=1;
+  assert(c.push(pp,1000)); assert(c.active());
+  assert(!c.push(pp,1300)); // dedupe
+  assert(!c.tick(3000)); // still active
+  Item goal;goal.kind=Kind::GOAL;goal.duration=8000;goal.gameId=123;goal.eventSequence=2;
+  assert(c.push(goal,3200));assert(c.current().kind==Kind::GOAL);
+  assert(c.pending()==1); // PP pause
+  Item final;final.kind=Kind::FINAL_WIN;final.duration=7000;final.gameId=123;final.eventSequence=3;
+  assert(c.push(final,4000));assert(c.current().kind==Kind::GOAL);
+  assert(c.pending()==2);
+  assert(!c.tick(11200-1));
+  assert(c.tick(11200));assert(c.current().kind==Kind::FINAL_WIN);
+  assert(c.tick(18200));assert(c.current().kind==Kind::POWER_PLAY_START);
+  assert(c.tick(20500)); assert(!c.active()); // resumes paused PP remainder
+  // Bounded queue; low-priority overflow does not evict a final.
+  c.clear();
+  Item h;h.kind=Kind::GAME_START;h.duration=5000;h.eventSequence=10;h.gameId=10;
+  c.push(h,0);
+  for(int i=1;i<=4;i++) { Item x=final;x.eventSequence=30+i;x.gameId=100+i;c.push(x,100); }
+  assert(c.pending()<=kQueueSize);
+  c.clear();assert(!c.active()&&!c.pending());
+  puts("PASS: overlays priority, preemption, queue bounds, timing, dedupe and return");
+}

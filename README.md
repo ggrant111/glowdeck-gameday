@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.3.4 stable power-play event logging with optional WLED.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.3.5 animated NHL event overlays on CYD.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
@@ -21,6 +21,12 @@ The first score after selecting a game is used as a baseline and never replays a
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+
+## Animated NHL event overlays on the CYD (v0.3.5)
+
+A detected **goal, power-play start/end, puck drop or final result** can temporarily take over the 320×240 touchscreen with the team's official logo, color, event title, score and period/clock. Goal overlays flash a thin team-color perimeter; power plays pulse slowly; final screens use calmer effects. After the configurable duration, the **previous exact carousel/standings/stats/setup page returns**. Goals take priority through a bounded four-event queue. NHL polling, the rear RGB LED and any selected WLED controllers continue independently.
+
+Configure the enabled event types, goal border flashing, logos and durations under the web dashboard **Display → Live event overlays**. Preview each event from the web dashboard without connecting WLED or playing sound. This version uses existing logo sprites and direct RGB565 TFT rendering; **no framebuffer or heavy sprite allocations**. [Read the v0.3.5 overlay guide](docs/EVENT_OVERLAYS.md).
 
 ## Power-play logging stability (v0.3.4)
 

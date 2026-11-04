@@ -22,6 +22,7 @@
 #include "TeamGradient.h"
 #include "GameEventLog.h"
 #include "PowerPlayLogPolicy.h"
+#include "EventOverlay.h"
 #include "RearLedPattern.h"
 #include <time.h>
 
@@ -72,6 +73,10 @@ struct Settings {
   bool invertScreen = true; // This CYD panel needs INVON to render dark colors correctly.
   bool cycleGames = true;
   bool showStandings = true; // Add 4 conference + 4 division table slides.
+  bool overlayEnabled = true, overlayGoals = true, overlayPowerPlays = true;
+  bool overlayStart = true, overlayFinal = true, overlayFlash = true;
+  bool overlayLogos = true;
+  uint8_t overlayGoalSeconds = 8, overlayFinalSeconds = 7;
   uint8_t cycleSeconds = 9;
   uint8_t timezone = 1; // 0=ET, 1=CT, 2=MT, 3=PT, 4=AZ
   int touchX0 = 300, touchX1 = 3800, touchY0 = 300, touchY1 = 3800;
@@ -149,6 +154,9 @@ uint32_t hornStart = 0;
 uint16_t hornFrequency = 0;
 
 enum class Screen : uint8_t { LIVE, GAMES, SETUP, CALIBRATE, STATS };
+EventOverlay::Controller overlayController;
+uint32_t overlayLastFrame = 0;
+uint32_t overlayCount = 0;
 struct DetailStats {
   uint32_t gameId = 0, updatedAt = 0;
   bool loaded = false;
@@ -475,6 +483,48 @@ void celebrate(uint32_t color, uint32_t eventSequence = 0);
 bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
                     uint32_t eventSequence = 0);
 
+// Display event overlays share the NHL observation that produced the
+// WLED/rear RGB celebration. They never create a second score trigger.
+bool overlayAllowed(EventOverlay::Kind kind) {
+  if (!cfg.overlayEnabled || screen == Screen::CALIBRATE) return false;
+  switch(kind) {
+    case EventOverlay::Kind::GOAL: return cfg.overlayGoals;
+    case EventOverlay::Kind::POWER_PLAY_START:
+    case EventOverlay::Kind::POWER_PLAY_END: return cfg.overlayPowerPlays;
+    case EventOverlay::Kind::GAME_START: return cfg.overlayStart;
+    case EventOverlay::Kind::FINAL_WIN:
+    case EventOverlay::Kind::FINAL_LOSS: return cfg.overlayFinal;
+    default: return false;
+  }
+}
+bool queueGameOverlay(const Game *g, EventOverlay::Kind kind,
+                      const String &team, uint32_t sequence) {
+  if (!overlayAllowed(kind)) return false;
+  EventOverlay::Item item;
+  item.kind = kind;
+  item.gameId = g ? g->id : 0;
+  item.eventSequence = sequence;
+  item.color = teamRgb(team);
+  item.duration = EventOverlay::durationMs(kind, cfg.overlayGoalSeconds,
+                                           cfg.overlayFinalSeconds);
+  EventOverlay::copy(item.team, team.c_str(), sizeof(item.team));
+  if (g) {
+    EventOverlay::copy(item.home, g->home.c_str(), sizeof(item.home));
+    EventOverlay::copy(item.away, g->away.c_str(), sizeof(item.away));
+    EventOverlay::copy(item.clock, g->clock.c_str(), sizeof(item.clock));
+    item.period = g->period;
+    item.awayScore = (uint8_t)constrain(g->awayScore, 0, 255);
+    item.homeScore = (uint8_t)constrain(g->homeScore, 0, 255);
+  }
+  const bool admitted = overlayController.push(item, millis());
+  if (admitted) {
+    ++overlayCount;
+    needsDraw = true;
+    partialLiveUpdate = false;
+    overlayLastFrame = 0;
+  }
+  return admitted;
+}
 void detectRearGoalChanges() {
   for (uint8_t i = 0; i < gameCount; ++i) {
     const Game &g = games[i];
@@ -511,6 +561,11 @@ void detectRearGoalChanges() {
           triggerRearGoal(teamRgb(scorer));
           entry.rear = GameEventLog::Rear::ACTIVE;
         }
+        // Only followed/armed games interrupt the screen. Goal overlays
+        // appear even when the WLED slots are empty or disabled.
+        if (followed)
+          queueGameOverlay(&g, EventOverlay::Kind::GOAL,
+                           scorer, entry.sequence);
       }
     }
     watch.home = g.homeScore;
@@ -549,7 +604,9 @@ void observePowerPlayEvents() {
         *watch, g.id, reliable, g.ppSide, millis());
     if (change.ended) {
       const String &team = change.ended == 1 ? g.home : g.away;
-      addGameEvent(g, GameEventLog::Type::POWER_PLAY_END, team, 0);
+      const uint32_t seq = addGameEvent(
+          g, GameEventLog::Type::POWER_PLAY_END, team, 0).sequence;
+      queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_END, team, seq);
       if (g.id == selectedGameId) armedPpLogSeq = 0;
     }
     if (change.started) {
@@ -560,6 +617,8 @@ void observePowerPlayEvents() {
           ? GameEventLog::Rear::NOT_ENABLED
           : GameEventLog::Rear::SCHEDULED;
       if (g.id == selectedGameId) armedPpLogSeq = entry.sequence;
+      queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_START,
+                       team, entry.sequence);
     }
   }
 }
@@ -630,6 +689,8 @@ void prepareNewScoreboardDate(const String &today) {
     lastConferenceFetch = 0;
     webPreviewGameId = 0;
     scheduleWledRestoreAll();
+    overlayController.clear();
+    overlayLastFrame = 0;
     lastArmedGameState = "";
     for (auto &entry : goalWatch) entry = GoalWatch();
     for (auto &entry : ppEventWatch) entry = PowerPlayLogPolicy::Watch();
@@ -1160,6 +1221,15 @@ void loadSettings() {
   cfg.invertScreen = prefs.getBool("invert", true);
   cfg.cycleGames = prefs.getBool("carousel", true);
   cfg.showStandings = prefs.getBool("standPages", true);
+  cfg.overlayEnabled = prefs.getBool("ovOn", true);
+  cfg.overlayGoals = prefs.getBool("ovGoal", true);
+  cfg.overlayPowerPlays = prefs.getBool("ovPP", true);
+  cfg.overlayStart = prefs.getBool("ovStart", true);
+  cfg.overlayFinal = prefs.getBool("ovFinal", true);
+  cfg.overlayFlash = prefs.getBool("ovFlash", true);
+  cfg.overlayLogos = prefs.getBool("ovLogos", true);
+  cfg.overlayGoalSeconds = constrain(prefs.getUChar("ovGoalSec", 8), 3, 12);
+  cfg.overlayFinalSeconds = constrain(prefs.getUChar("ovFinalSec", 7), 3, 12);
   cfg.cycleSeconds = constrain(prefs.getUChar("cycleSec", 9), 5, 30);
   cfg.timezone = constrain(prefs.getUChar("timezone", 1), 0, 4);
   cfg.touchX0 = prefs.getInt("tx0", 300);
@@ -1197,6 +1267,15 @@ void saveSettings() {
   prefs.putBool("invert", cfg.invertScreen);
   prefs.putBool("carousel", cfg.cycleGames);
   prefs.putBool("standPages", cfg.showStandings);
+  prefs.putBool("ovOn", cfg.overlayEnabled);
+  prefs.putBool("ovGoal", cfg.overlayGoals);
+  prefs.putBool("ovPP", cfg.overlayPowerPlays);
+  prefs.putBool("ovStart", cfg.overlayStart);
+  prefs.putBool("ovFinal", cfg.overlayFinal);
+  prefs.putBool("ovFlash", cfg.overlayFlash);
+  prefs.putBool("ovLogos", cfg.overlayLogos);
+  prefs.putUChar("ovGoalSec", cfg.overlayGoalSeconds);
+  prefs.putUChar("ovFinalSec", cfg.overlayFinalSeconds);
   prefs.putUChar("cycleSec", cfg.cycleSeconds);
   prefs.putUChar("timezone", cfg.timezone);
 }
@@ -1963,6 +2042,13 @@ void pollNhl() {
               ? GameEventLog::Type::FINAL_WIN
               : GameEventLog::Type::FINAL_LOSS;
       GameEventLog::Entry &logged = addGameEvent(*g, eventType, fav);
+      const EventOverlay::Kind kind =
+        transition == CelebrationEngine::Event::GAME_START
+          ? EventOverlay::Kind::GAME_START
+          : transition == CelebrationEngine::Event::FINAL_WIN
+            ? EventOverlay::Kind::FINAL_WIN
+            : EventOverlay::Kind::FINAL_LOSS;
+      queueGameOverlay(g, kind, fav, logged.sequence);
       const bool enabled = transition == CelebrationEngine::Event::GAME_START
                            ? cfg.wledGameStart : cfg.wledFinal;
       if (enabled) {
@@ -2304,8 +2390,128 @@ void drawCalibration() {
   textAt("Use a stylus for accuracy", 12, 215, MUTED);
 }
 
+// Full-screen CYD event takeover. Draw once when the event changes; only
+// 5px border accents animate, so NHL/WLED polling stays responsive and no
+// 320x240 sprite/framebuffer is required.
+void drawOverlayStatic() {
+  if (!overlayController.active()) return;
+  const EventOverlay::Item &e = overlayController.current();
+  const uint32_t color = e.color ? e.color : 0x39777AUL;
+  // A team-color backdrop fades through a dark center while keeping all
+  // white typography on a neutral opaque plate.
+  for (uint16_t x=0; x<320; x+=4) {
+    const uint16_t c = TeamGradient::rgb565(
+        TeamGradient::colorAt(color, color, x+2));
+    tft.fillRect(x, 0, 4, 240, c);
+  }
+  tft.fillRoundRect(24, 102, 272, 127, 8, 0x1082);
+  tft.drawRoundRect(24, 102, 272, 127, 8, 0x5AEB);
+  tft.fillRoundRect(92, 32, 136, 72, 9, 0x0841);
+
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE, 0x1082);
+  tft.drawString("NHL GAME EVENT", 160, 18, 2);
+
+  if (cfg.overlayLogos && e.team[0]) {
+    // Reuse the official 56px NHL sprite already embedded at build time.
+    // No network image request and no extra RAM allocation.
+    drawTeamLogo(tft, String(e.team), 132, 38);
+  } else {
+    tft.setTextColor(WHITE, 0x0841);
+    tft.drawString(e.team[0] ? String(e.team) : String("NHL"),
+                   160, 69, 4);
+  }
+  const String title = EventOverlay::label(e.kind);
+  tft.setTextColor(WHITE, 0x1082);
+  tft.drawString(title, 160, 124,
+                 title.length() > 10 ? 2 : 4);
+
+  String description;
+  switch(e.kind) {
+    case EventOverlay::Kind::GOAL:
+      description = String(e.team) + " SCORES!"; break;
+    case EventOverlay::Kind::POWER_PLAY_START:
+      description = String(e.team) + " MAN ADVANTAGE"; break;
+    case EventOverlay::Kind::POWER_PLAY_END:
+      description = "BACK AT FULL STRENGTH"; break;
+    case EventOverlay::Kind::GAME_START:
+      description = String(e.away) + " VS " + String(e.home); break;
+    case EventOverlay::Kind::FINAL_WIN:
+      description = String(e.team) + " WINS"; break;
+    case EventOverlay::Kind::FINAL_LOSS:
+      description = String(e.team) + " FALLS"; break;
+    default: description = "";
+  }
+  tft.setTextColor(0xCE79, 0x1082);
+  tft.drawString(description, 160, 154, 2);
+
+  if (e.away[0] && e.home[0]) {
+    tft.setTextColor(WHITE, 0x1082);
+    const String score = String(e.away) + " " + String(e.awayScore) +
+                          "  -  " + String(e.homeScore) + " " + String(e.home);
+    tft.drawString(score, 160, 186, 2);
+  }
+  String clock;
+  if (e.period) clock = "P" + String(e.period);
+  if (e.clock[0]) {
+    if (clock.length()) clock += "  ";
+    clock += e.clock;
+  }
+  tft.setTextColor(0xBDF7, 0x1082);
+  if (clock.length()) tft.drawString(clock, 160, 213, 2);
+  tft.setTextColor(0xC618);
+  tft.drawString("X", 303, 20, 2); // Tap upper-right to dismiss.
+  tft.setTextDatum(TL_DATUM);
+}
+
+// Called at most once per ~140ms for goals and 240ms for calmer events.
+// Colors animate only the perimeter; no full-screen flashing.
+void drawOverlayAnimation(uint32_t now) {
+  if (!overlayController.active()) return;
+  const EventOverlay::Item &e = overlayController.current();
+  const uint32_t elapsed = now - overlayController.startedAt();
+  uint8_t brightness = 72;
+  if (EventOverlay::isFlash(e.kind)) {
+    if (cfg.overlayFlash && elapsed < 1100UL)
+      brightness = ((elapsed / 180UL) % 2UL) ? 38 : 100;
+    else brightness = 82;
+  } else if (EventOverlay::isPulse(e.kind)) {
+    // Triangle wave in 1.6s using only integer operations.
+    const uint32_t phase = elapsed % 1600UL;
+    const uint32_t up = phase < 800UL ? phase : (1600UL-phase);
+    brightness = (uint8_t)(35UL + up * 60UL / 800UL);
+  } else {
+    const uint32_t phase = elapsed % 2000UL;
+    const uint32_t up = phase < 1000UL ? phase : (2000UL-phase);
+    brightness = (uint8_t)(52UL + up * 42UL / 1000UL);
+  }
+  const uint32_t r = TeamGradient::scale(
+      (uint8_t)((e.color>>16)&255), brightness);
+  const uint32_t g = TeamGradient::scale(
+      (uint8_t)((e.color>>8)&255), brightness);
+  const uint32_t b = TeamGradient::scale(
+      (uint8_t)(e.color&255), brightness);
+  const uint16_t c = TeamGradient::rgb565((r<<16)|(g<<8)|b);
+  tft.fillRect(0, 0, 320, 5, c);
+  tft.fillRect(0, 235, 320, 5, c);
+  tft.fillRect(0, 0, 5, 240, c);
+  tft.fillRect(315, 0, 5, 240, c);
+  // Progress stripe keeps the expected return time visually obvious.
+  const uint32_t remain = overlayController.remaining(now);
+  const uint16_t progress = e.duration
+      ? (uint16_t)(310UL * remain / e.duration) : 0;
+  tft.fillRect(5, 230, 310, 3, 0x1082);
+  if (progress) tft.fillRect(5, 230, progress, 3, c);
+  overlayLastFrame = now;
+}
+
 void draw() {
   needsDraw = false;
+  if (overlayController.active()) {
+    drawOverlayStatic();
+    drawOverlayAnimation(millis());
+    return;
+  }
   if (screen == Screen::CALIBRATE) { drawCalibration(); return; }
   if (screen == Screen::LIVE) {
     if (showingStandingsPage()) {
@@ -2447,6 +2653,27 @@ void selectGame(uint32_t id) {
 
 void handleTouch() {
   const bool pressed = touch.touched();
+  if (overlayController.active()) {
+    // Suppress ordinary carousel swipes/stat taps during an event. The
+    // upper-right corner dismisses the current overlay without changing
+    // the previously selected screen or armed NHL game.
+    if (!pressed) {
+      touchWasDown = false;
+    } else if (!touchWasDown && millis() - lastTouch > 160UL) {
+      touchWasDown = true;
+      lastTouch = millis();
+      const TS_Point p = touch.getPoint();
+      const int16_t x = constrain((int)map(p.x, cfg.touchX0, cfg.touchX1, 0, 319), 0, 319);
+      const int16_t y = constrain((int)map(p.y, cfg.touchY0, cfg.touchY1, 0, 239), 0, 239);
+      if (x >= 266 && y <= 39) {
+        overlayController.dismiss(millis());
+        overlayLastFrame = 0;
+        lastCarouselAdvance = millis();
+        needsDraw = true;
+      }
+    }
+    return;
+  }
   // On the full-screen broadcast view, gestures are recognized on finger lift:
   // swipe left/right to change games, tap a matchup for stats, tap top-right
   // menu glyph to open GAMES (which provides SETUP in its footer).
@@ -2623,9 +2850,9 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     // New slide/standings metadata should not enlarge the loopTask stack.
-    DynamicJsonDocument doc(3072);
-    if (doc.capacity() < 3072) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.4";
+    DynamicJsonDocument doc(3584);
+    if (doc.capacity() < 3584) return errorResponse("Status memory unavailable", 503);
+    doc["version"] = "0.3.5";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -2640,6 +2867,12 @@ void registerRoutes() {
     JsonArray wledResults = doc.createNestedArray("wledResults");
     for (uint8_t i = 0; i < MAX_WLED; ++i)
       wledResults.add(wledDeviceResult[i]);
+    doc["overlayActive"] = overlayController.active();
+    doc["overlayEvent"] = EventOverlay::label(overlayController.current().kind);
+    doc["overlayTeam"] = overlayController.current().team;
+    doc["overlayQueue"] = overlayController.pending();
+    doc["overlayRemainingMs"] = overlayController.remaining(millis());
+    doc["overlayCount"] = overlayCount;
     doc["rearEnabled"] = cfg.rearLedEnabled;
     doc["rearEvent"] = rearEvent == RearEvent::GOAL ? "GOAL" :
                        rearEvent == RearEvent::POWER_PLAY ? "POWER_PLAY" : "IDLE";
@@ -2661,6 +2894,15 @@ void registerRoutes() {
     doc["standingsHttpCode"] = standingsLastHttpCode;
     doc["standingsTeams"] = standingsLastTeamCount;
     doc["showStandings"] = cfg.showStandings;
+    doc["overlayEnabled"] = cfg.overlayEnabled;
+    doc["overlayGoals"] = cfg.overlayGoals;
+    doc["overlayPowerPlays"] = cfg.overlayPowerPlays;
+    doc["overlayStart"] = cfg.overlayStart;
+    doc["overlayFinal"] = cfg.overlayFinal;
+    doc["overlayFlash"] = cfg.overlayFlash;
+    doc["overlayLogos"] = cfg.overlayLogos;
+    doc["overlayGoalSeconds"] = cfg.overlayGoalSeconds;
+    doc["overlayFinalSeconds"] = cfg.overlayFinalSeconds;
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
     doc["scorePollSeconds"] = NhlFetchPolicy::pollIntervalMs(
@@ -2760,8 +3002,8 @@ void registerRoutes() {
   });
   server.on("/api/config", HTTP_GET, []() {
     if (!authorized()) return;
-    DynamicJsonDocument doc(2560);
-    if (doc.capacity() < 2560) return errorResponse("Config memory unavailable", 503);
+    DynamicJsonDocument doc(3072);
+    if (doc.capacity() < 3072) return errorResponse("Config memory unavailable", 503);
     doc["ssid"] = cfg.ssid;
     doc["mode"] = cfg.mode;
     doc["brightness"] = cfg.brightness;
@@ -2824,6 +3066,23 @@ void registerRoutes() {
     cfg.rearBrightness = constrain((int)(doc["rearBrightness"] | cfg.rearBrightness), 1, 255);
     cfg.rearGoalSeconds = constrain((int)(doc["rearGoalSeconds"] | cfg.rearGoalSeconds), 2, 12);
     if (!cfg.rearLedEnabled) stopRearLed();
+    cfg.overlayEnabled = doc["overlayEnabled"] | cfg.overlayEnabled;
+    cfg.overlayGoals = doc["overlayGoals"] | cfg.overlayGoals;
+    cfg.overlayPowerPlays = doc["overlayPowerPlays"] | cfg.overlayPowerPlays;
+    cfg.overlayStart = doc["overlayStart"] | cfg.overlayStart;
+    cfg.overlayFinal = doc["overlayFinal"] | cfg.overlayFinal;
+    cfg.overlayFlash = doc["overlayFlash"] | cfg.overlayFlash;
+    cfg.overlayLogos = doc["overlayLogos"] | cfg.overlayLogos;
+    cfg.overlayGoalSeconds = constrain(
+        (int)(doc["overlayGoalSeconds"] | cfg.overlayGoalSeconds), 3, 12);
+    cfg.overlayFinalSeconds = constrain(
+        (int)(doc["overlayFinalSeconds"] | cfg.overlayFinalSeconds), 3, 12);
+    if (!cfg.overlayEnabled) {
+      overlayController.clear();
+      overlayLastFrame = 0;
+      needsDraw = true;
+      lastCarouselAdvance = millis();
+    }
     cfg.cycleGames = doc["cycleGames"] | cfg.cycleGames;
     const bool newShowStandings = doc["showStandings"] | cfg.showStandings;
     if (newShowStandings != cfg.showStandings) {
@@ -2923,6 +3182,53 @@ void registerRoutes() {
     saveSettings();
     StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
   });
+  // On-device visual test: intentionally does not trigger WLED or rear LED,
+  // so it remains usable even before adding external LED controllers.
+  server.on("/api/overlay/preview", HTTP_POST, []() {
+    if (!authorized()) return;
+    StaticJsonDocument<192> request;
+    if (deserializeJson(request, server.arg("plain")))
+      return errorResponse("Invalid overlay preview JSON");
+    const String type = request["kind"] | String("goal");
+    const String side = request["side"] | String("home");
+    if (side != "home" && side != "away")
+      return errorResponse("Invalid team side");
+    EventOverlay::Kind kind = EventOverlay::Kind::NONE;
+    if (type == "goal") kind = EventOverlay::Kind::GOAL;
+    else if (type == "pp") kind = EventOverlay::Kind::POWER_PLAY_START;
+    else if (type == "ppend") kind = EventOverlay::Kind::POWER_PLAY_END;
+    else if (type == "start") kind = EventOverlay::Kind::GAME_START;
+    else if (type == "win") kind = EventOverlay::Kind::FINAL_WIN;
+    else if (type == "loss") kind = EventOverlay::Kind::FINAL_LOSS;
+    else if (type != "stop") return errorResponse("Invalid overlay event");
+    if (kind == EventOverlay::Kind::NONE) {
+      overlayController.clear();
+      overlayLastFrame = 0;
+      needsDraw = true;
+      lastCarouselAdvance = millis();
+    } else {
+      Game *g = selectedGame();
+      if (!g && gameCount) g = &games[featuredIndex % gameCount];
+      const String team = g ? (side == "home" ? g->home : g->away)
+                            : String("UTA");
+      if (!overlayAllowed(kind))
+        return errorResponse("Enable this event overlay in Display settings");
+      const GameEventLog::Type logType = type == "goal"
+        ? GameEventLog::Type::PREVIEW_GOAL :
+        type == "pp" || type == "ppend"
+        ? GameEventLog::Type::PREVIEW_POWER_PLAY :
+        type == "start" ? GameEventLog::Type::PREVIEW_START :
+        type == "win" ? GameEventLog::Type::PREVIEW_WIN :
+                        GameEventLog::Type::PREVIEW_LOSS;
+      const uint32_t seq = addPreviewEvent(g, logType, team).sequence;
+      queueGameOverlay(g, kind, team, seq);
+    }
+    StaticJsonDocument<128> response;
+    response["ok"] = true;
+    response["active"] = overlayController.active();
+    response["pending"] = overlayController.pending();
+    sendJson(response);
+  });
   server.on("/api/rear/test", HTTP_POST, []() {
     if (!authorized()) return;
     StaticJsonDocument<160> doc;
@@ -2956,6 +3262,12 @@ void registerRoutes() {
     }
     testRow.rear = mode == "off" ? GameEventLog::Rear::NA
                                : GameEventLog::Rear::ACTIVE;
+    if (mode == "goal")
+      queueGameOverlay(g, EventOverlay::Kind::GOAL,
+                       selectedTeam, testRow.sequence);
+    else if (mode == "powerplay")
+      queueGameOverlay(g, EventOverlay::Kind::POWER_PLAY_START,
+                       selectedTeam, testRow.sequence);
     StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
   });
   server.on("/api/wled/preview", HTTP_POST, []() {
@@ -3002,6 +3314,17 @@ void registerRoutes() {
           wledPpTestUntil = 0;
       }
     }
+    // Existing WLED preview controls now demonstrate the matching overlay,
+    // regardless of whether any WLED controllers are currently configured.
+    const EventOverlay::Kind overlayKind =
+        event == CelebrationEngine::Event::GOAL ? EventOverlay::Kind::GOAL :
+        event == CelebrationEngine::Event::POWER_PLAY ? EventOverlay::Kind::POWER_PLAY_START :
+        event == CelebrationEngine::Event::GAME_START ? EventOverlay::Kind::GAME_START :
+        event == CelebrationEngine::Event::FINAL_WIN ? EventOverlay::Kind::FINAL_WIN :
+        event == CelebrationEngine::Event::FINAL_LOSS ? EventOverlay::Kind::FINAL_LOSS :
+        EventOverlay::Kind::NONE;
+    if (overlayKind != EventOverlay::Kind::NONE)
+      queueGameOverlay(previewGame, overlayKind, previewTeam, previewRow.sequence);
     StaticJsonDocument<256> response;
     response["event"] = CelebrationEngine::label(wledActiveEvent);
     response["devices"] = wledEligibleCount(event == CelebrationEngine::Event::NONE
@@ -3060,7 +3383,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.3.4 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.3.5 — CYD only");
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),
@@ -3188,7 +3511,16 @@ void loop() {
       observePowerPlayEvents();
     }
   }
-  if (screen == Screen::LIVE && cfg.cycleGames && carouselPageCount() > 1 &&
+  if (overlayController.tick(millis())) {
+    // An overlay ended or a queued higher-priority event took over.
+    // Redraw the exact underlying page without advancing the carousel.
+    lastCarouselAdvance = millis();
+    overlayLastFrame = 0;
+    partialLiveUpdate = false;
+    needsDraw = true;
+  }
+  if (!overlayController.active() && screen == Screen::LIVE &&
+      cfg.cycleGames && carouselPageCount() > 1 &&
       uint32_t(now - lastCarouselAdvance) >= uint32_t(cfg.cycleSeconds) * 1000UL) {
     advanceCarousel(1);
   }
@@ -3200,7 +3532,8 @@ void loop() {
   // pregame cache and 3m live / 15m idle refresh. Keep goal-restoration
   // latency higher priority and never allocate a second full NHL scoreboard.
   static uint32_t lastSlideStandingsCheck = 0;
-  if (connected && screen == Screen::LIVE && showingStandingsPage() &&
+  if (!overlayController.active() && connected &&
+      screen == Screen::LIVE && showingStandingsPage() &&
       uint32_t(millis() - lastSlideStandingsCheck) > 5000UL) {
     bool restoringLights = false;
     for (uint8_t i = 0; i < MAX_WLED; ++i)
@@ -3213,7 +3546,8 @@ void loop() {
   // Prefetch stats for the displayed carousel game; the background request
   // happens only once per game/TTL, never once per frame. Defer requests
   // while a WLED restoration is pending to avoid delaying light recovery.
-  if (screen == Screen::LIVE && !showingStandingsPage() && gameCount && connected &&
+  if (!overlayController.active() && screen == Screen::LIVE &&
+      !showingStandingsPage() && gameCount && connected &&
       uint32_t(now - lastCarouselStatsCheck) >= 2500UL) {
     bool lightRestorePending = false;
     for (uint8_t i = 0; i < MAX_WLED; ++i)
@@ -3228,6 +3562,12 @@ void loop() {
   if (needsDraw) {
     partialLiveUpdate = false;
     draw();
+  } else if (overlayController.active()) {
+    const uint32_t frameNow = millis();
+    const uint32_t period = EventOverlay::isFlash(overlayController.current().kind)
+                            ? 140UL : 240UL;
+    if (uint32_t(frameNow - overlayLastFrame) >= period)
+      drawOverlayAnimation(frameNow);
   } else if (partialLiveUpdate && screen == Screen::LIVE &&
              !showingStandingsPage() && gameCount > 0) {
     partialLiveUpdate = false;
@@ -3235,7 +3575,7 @@ void loop() {
   }
   // Update one optional pregame conference record after the current frame
   // is painted. This keeps the first season/standings view responsive.
-  tickPregameConferenceRecords();
+  if (!overlayController.active()) tickPregameConferenceRecords();
   if (rebootAt && int32_t(now - rebootAt) >= 0) ESP.restart();
   delay(5);
 }
