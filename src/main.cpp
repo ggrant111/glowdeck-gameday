@@ -23,6 +23,7 @@
 #include "TeamGradient.h"
 #include "GameEventLog.h"
 #include "PowerPlayLogPolicy.h"
+#include "NhlPowerPlayEvidence.h"
 #include "EventOverlay.h"
 #include "RearLedPattern.h"
 #include <time.h>
@@ -383,23 +384,18 @@ void stopRearLed() {
 // Treat missing data as UNKNOWN: no invented power-play event.
 uint8_t detectPowerPlay(JsonVariantConst situation) {
   if (situation.isNull()) return 0;
+  // The NHL /scoreboard/now feed explicitly identifies PP via
+  // situationDescriptions. Never infer a penalty from strength alone:
+  // 6-on-5 with a pulled goalie is NOT a power play.
   JsonVariantConst home = situation["homeTeam"];
   JsonVariantConst away = situation["awayTeam"];
   auto hasPP = [](JsonVariantConst team) -> bool {
     for (JsonVariantConst label : team["situationDescriptions"].as<JsonArrayConst>()) {
-      if (label.as<String>().indexOf("PP") >= 0) return true;
+      if (NhlPowerPlayEvidence::ppLabel(label.as<const char*>())) return true;
     }
     return false;
   };
-  const bool homePP = hasPP(home), awayPP = hasPP(away);
-  if (homePP && !awayPP) return 1;
-  if (awayPP && !homePP) return 2;
-  if (!home["strength"].isNull() && !away["strength"].isNull()) {
-    const int h = home["strength"] | 0, a = away["strength"] | 0;
-    if (h > a) return 1;
-    if (a > h) return 2;
-  }
-  return 0;
+  return NhlPowerPlayEvidence::confirmedSide(hasPP(home), hasPP(away));
 }
 
 uint8_t activePowerPlaySide(uint32_t now, uint32_t &color) {
@@ -1784,9 +1780,12 @@ void fetchFollowedPowerPlays() {
       Game &g = games[i];
       if (g.id != id || !rearFollows(id)) continue;
       JsonVariantConst situation = entry["situation"];
+      // An absent situation is unknown. It is not evidence of 5v5 and
+      // MUST NOT be logged as a power-play end.
+      if (situation.isNull()) continue;
       const uint8_t side = detectPowerPlay(situation);
       g.ppSide = side;
-      g.ppDataKnown = true; // Present in standings; absent situation == no PP.
+      g.ppDataKnown = true;
       g.ppUpdatedAt = millis();
       ppCache[i].id = id;
       ppCache[i].side = side;
@@ -1976,13 +1975,12 @@ void pollNhl() {
       ppCache[gameCount - 1].known = true;
       ppCache[gameCount - 1].updatedAt = g.ppUpdatedAt;
     } else {
-      const PowerPlaySnapshot &cached = ppCache[gameCount - 1];
-      if (cached.id == g.id && cached.known &&
-          uint32_t(millis() - cached.updatedAt) < 80000UL) {
-        g.ppSide = cached.side;
-        g.ppDataKnown = true;
-        g.ppUpdatedAt = cached.updatedAt;
-      }
+      // No official live situation in the date-scoped score payload.
+      // Leave PP UNKNOWN until the dedicated live scoreboard reports one.
+      // Replaying a cached PP for up to 80s caused false repeat events as
+      // the goalie was pulled and the NHL feed changed between endpoints.
+      g.ppDataKnown = false;
+      g.ppSide = 0;
     }
   }
   if (newDay) {
