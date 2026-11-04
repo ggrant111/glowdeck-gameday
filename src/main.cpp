@@ -24,6 +24,8 @@
 #include "GameEventLog.h"
 #include "PowerPlayLogPolicy.h"
 #include "NhlPowerPlayEvidence.h"
+#include "NhlPenaltyLedger.h"
+#include "NhlOnIce.h"
 #include "EventOverlay.h"
 #include "RearLedPattern.h"
 #include <time.h>
@@ -49,9 +51,13 @@ struct Game {
   int homeScore = 0, awayScore = 0, homeShots = -1, awayShots = -1;
   uint8_t period = 0;
   bool intermission = false;
-  uint8_t ppSide = 0; // 0=not known/no PP, 1=home PP, 2=away PP
-  bool ppDataKnown = false;
+  uint8_t ppSide = 0; // Confirmed PP: 0 none, 1 home, 2 away
+  uint8_t ppCandidate = 0; // Unverified NHL situation-description label
+  bool ppDataKnown = false, ppSituationKnown = false;
   uint32_t ppUpdatedAt = 0;
+  uint8_t emptyNetSide = 0; // 0 none, 1 home goalie pulled, 2 away, 3 both
+  bool emptyNetKnown = false;
+  uint32_t emptyNetUpdatedAt = 0;
 };
 struct Settings {
   String ssid, wifiPassword, adminPassword;
@@ -108,6 +114,8 @@ struct PowerPlaySnapshot {
   bool known = false;
 };
 PowerPlaySnapshot ppCache[MAX_GAMES];
+NhlPenaltyLedger::Book penaltyLedgers[MAX_GAMES];
+uint32_t lastPenaltyLedgerAttempt = 0;
 enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY };
 RearEvent rearEvent = RearEvent::IDLE;
 uint32_t rearGoalAt = 0, rearGoalColor = 0, rearGoalDuration = 0;
@@ -396,6 +404,57 @@ uint8_t detectPowerPlay(JsonVariantConst situation) {
     return false;
   };
   return NhlPowerPlayEvidence::confirmedSide(hasPP(home), hasPP(away));
+}
+
+// Never confuse a pulled goalie with a penalized side. The NHL score feed's
+// optional situation reports six skaters for the team with an empty net.
+uint8_t detectEmptyNet(JsonVariantConst situation) {
+  if (situation.isNull()) return 0;
+  const JsonVariantConst home = situation["homeTeam"];
+  const JsonVariantConst away = situation["awayTeam"];
+  const int h = home["strength"] | -1, a = away["strength"] | -1;
+  const bool hp = !home["goaliePulled"].isNull() &&
+                  home["goaliePulled"].as<bool>();
+  const bool ap = !away["goaliePulled"].isNull() &&
+                  away["goaliePulled"].as<bool>();
+  return NhlOnIce::emptyNetSide(a,h,ap,hp);
+}
+NhlPenaltyLedger::Book *penaltyLedger(uint32_t id) {
+  if (!id) return nullptr;
+  for (auto &ledger : penaltyLedgers)
+    if (ledger.gameId == id) return &ledger;
+  for (auto &ledger : penaltyLedgers)
+    if (!ledger.gameId) {
+      ledger.reset(id);
+      return &ledger;
+    }
+  return nullptr;
+}
+// Both a documented NHL "PP" label and an active, applicable official minor
+// or major are required. A missing/expired penalty ledger is UNKNOWN, not PP.
+void validatePowerPlay(Game &g) {
+  g.ppSide = 0;
+  g.ppDataKnown = false;
+  if (g.state != "LIVE" && g.state != "CRIT") return;
+  if (g.intermission) return;
+  NhlPenaltyLedger::Book *ledger = penaltyLedger(g.id);
+  if (!ledger || !ledger->loaded ||
+      uint32_t(millis()-ledger->checkedAt) > 65000UL) return;
+  uint16_t seconds=0;
+  if (!NhlPenaltyLedger::Book::fromRemaining(
+          g.period,g.clock.c_str(),seconds))return;
+  const uint8_t penaltySide=ledger->sideAt(seconds);
+  // A verified active penalty alone is insufficient if it is offsetting,
+  // delayed, or not yet reflected by the NHL manpower situation.
+  if (penaltySide && g.ppSituationKnown && g.ppCandidate==penaltySide) {
+    g.ppSide=penaltySide;
+    g.ppDataKnown=true;
+  } else if (!penaltySide) {
+    // Official penalties (including PP-goal termination) show normal play.
+    g.ppSide=0;
+    g.ppDataKnown=true;
+  }
+  if (g.ppDataKnown) g.ppUpdatedAt=millis();
 }
 
 uint8_t activePowerPlaySide(uint32_t now, uint32_t &color) {
