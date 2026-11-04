@@ -1914,10 +1914,16 @@ void pollNhl() {
   }
   const uint32_t previouslyFeatured = gameCount ?
       games[min((int)featuredIndex, (int)gameCount - 1)].id : 0;
-  const int8_t previouslyStandingPage = showingStandingsPage()
-      ? (int8_t)(carouselSlide - gameCount) : -1;
-  const uint32_t previouslyShownGameId = !showingStandingsPage() &&
-      carouselSlide < gameCount ? games[carouselSlide].id : 0;
+  const LiveCarousel::Page oldSlide = currentCarouselPage();
+  const LiveCarousel::Kind oldSlideKind = oldSlide.kind;
+  const bool previouslyLiveMode = carouselPlan.liveMode;
+  const uint8_t previousStandingsIndex = oldSlide.kind ==
+      LiveCarousel::Kind::STANDINGS ? oldSlide.index : 0;
+  const uint8_t previousGameIndex = oldSlide.kind == LiveCarousel::Kind::GAME
+      ? oldSlide.index : oldSlide.kind == LiveCarousel::Kind::SUMMARY &&
+        oldSlide.count ? oldSlide.rows[0] : 255;
+  const uint32_t previouslyShownGameId =
+      previousGameIndex < gameCount ? games[previousGameIndex].id : 0;
   String newScoreboardDate = doc["currentDate"].as<String>();
   if (newScoreboardDate.length() != 10) {
     markNhlFetchFailure("Invalid NHL scoreboard date");
@@ -2004,12 +2010,17 @@ void pollNhl() {
     }
     if (!found) featuredIndex = 0;
   } else featuredIndex = 0;
-  // A score poll must never reset the visible game or standings page.
-  // Keep its ID across NHL game reordering without changing the armed game.
-  carouselSlide = newDay ? 0 : StandingsCarousel::restoreSlide(
-      previouslyStandingPage, previouslyShownGameId, games, gameCount,
-      cfg.showStandings, featuredIndex);
-  if (carouselSlide >= carouselPageCount()) carouselSlide = 0;
+  // Preserve the currently visible *game ID* across NHL feed reordering
+  // and when games transition from FUT -> LIVE -> FINAL. A former full
+  // game page can become a 4-up summary, or vice versa, without resetting
+  // the armed game. A live slate intentionally hides standings slides.
+  carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings);
+  carouselSlide = newDay ? 0 : LiveCarousel::restore(
+      carouselPlan, games, oldSlideKind, previouslyShownGameId,
+      previousStandingsIndex, featuredIndex);
+  const LiveCarousel::Page visibleSlide = currentCarouselPage();
+  if (visibleSlide.kind == LiveCarousel::Kind::GAME)
+    featuredIndex = visibleSlide.index;
   if (gamePage * 3 >= gameCount) gamePage = 0;
   // A valid full JSON document (including games: []) resets retry backoff.
   if (nhlConsecutiveFailures)
@@ -2092,11 +2103,22 @@ void pollNhl() {
     haveBaseline = false;
     lastArmedGameState = "";
   }
-  if (gamesFingerprint() != previousFingerprint || newDay) {
-    if (!newDay && !showingStandingsPage() && screen == Screen::LIVE &&
-        gameCount > 0 && previouslyFeatured == games[featuredIndex].id)
+  if (gamesFingerprint() != previousFingerprint || newDay ||
+      previouslyLiveMode != carouselPlan.liveMode ||
+      oldSlideKind != visibleSlide.kind) {
+    // Summary pages may have several score/status updates in a single poll.
+    // Only partial-update a full-screen matchup that remains the same game.
+    if (!newDay && !overlayController.active() &&
+        previouslyLiveMode == carouselPlan.liveMode &&
+        oldSlideKind == LiveCarousel::Kind::GAME &&
+        visibleSlide.kind == LiveCarousel::Kind::GAME &&
+        screen == Screen::LIVE && gameCount &&
+        previouslyShownGameId == games[visibleSlide.index].id)
       partialLiveUpdate = true;
-    else needsDraw = true;
+    else {
+      partialLiveUpdate = false;
+      needsDraw = true;
+    }
   }
   // If puck drop occurs while the pregame detail page is open, replace
   // season/conference rows with the live shots, faceoffs, PP and hits view
@@ -2225,7 +2247,7 @@ void drawScoreboardHeader(const Game &g) {
 // 320x240: 8 rank rows, full NHL team list across eight carousel slides.
 // All drawing is simple TFT primitives; no image buffers or extra tasks.
 void drawStandingsSlide() {
-  const uint8_t slideNumber = carouselSlide - gameCount;
+  const uint8_t slideNumber = currentCarouselPage().index;
   const StandingsCarousel::Page page = StandingsCarousel::page(slideNumber);
   tft.fillScreen(ARENA_BLACK);
   tft.fillRect(0, 0, 320, 28, ARENA_PLATE);
