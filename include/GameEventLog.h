@@ -16,7 +16,7 @@ enum class Type : uint8_t {
   PREVIEW_WIN, PREVIEW_LOSS, PREVIEW_STOP, REAR_TEST
 };
 enum class Rear : uint8_t {
-  NA = 0, NOT_SELECTED, DISABLED, SCHEDULED, ACTIVE
+  NA = 0, NOT_SELECTED, NOT_ENABLED, SCHEDULED, ACTIVE
 };
 enum class Wled : uint8_t {
   NA = 0, NOT_SELECTED, PENDING, ACCEPTED, SNAPSHOT_FAILED,
@@ -44,7 +44,7 @@ inline const char *typeLabel(Type t) {
 inline const char *rearLabel(Rear r) {
   switch(r) {
     case Rear::NOT_SELECTED: return "Not followed";
-    case Rear::DISABLED: return "Disabled";
+    case Rear::NOT_ENABLED: return "Disabled";
     case Rear::SCHEDULED: return "Scheduled";
     case Rear::ACTIVE: return "Triggered";
     default: return "Not applicable";
