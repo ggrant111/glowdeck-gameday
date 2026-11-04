@@ -693,6 +693,7 @@ void prepareNewScoreboardDate(const String &today) {
     gamePage = 0;
     featuredIndex = 0;
     carouselSlide = 0;
+    rebuildCarouselPlan();
     lastCarouselAdvance = millis();
     needDetailLoad = false;
     detail.loaded = false;
@@ -1256,6 +1257,7 @@ void loadSettings() {
   cfg.touchY0 = prefs.getInt("ty0", 300);
   cfg.touchY1 = prefs.getInt("ty1", 3800);
   selectedGameId = prefs.getUInt("game", 0);
+  rebuildCarouselPlan(); // Standings-only fallback until the first NHL fetch.
 }
 
 void saveSettings() {
@@ -2971,7 +2973,7 @@ void registerRoutes() {
     // New slide/standings metadata should not enlarge the loopTask stack.
     DynamicJsonDocument doc(3584);
     if (doc.capacity() < 3584) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.5";
+    doc["version"] = "0.3.6";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -3006,8 +3008,15 @@ void registerRoutes() {
     doc["carouselSlide"] = carouselSlide;
     doc["carouselTotal"] = carouselPageCount();
     doc["slideStandings"] = showingStandingsPage();
+    doc["slideSummary"] = showingSummaryPage();
+    doc["liveMode"] = carouselPlan.liveMode;
+    doc["liveGameCount"] = carouselPlan.liveCount;
+    doc["summaryGameCount"] = carouselPlan.otherCount;
+    doc["summaryPageCount"] = carouselPlan.summaryPages;
+    doc["summaryPageNumber"] = showingSummaryPage()
+        ? currentCarouselPage().index + 1 : 0;
     doc["standingsPage"] = showingStandingsPage()
-        ? StandingsCarousel::page(carouselSlide - gameCount).title : "";
+        ? StandingsCarousel::page(currentCarouselPage().index).title : "";
     doc["standingsReady"] = standingsReady;
     doc["standingsError"] = standingsError;
     doc["standingsHttpCode"] = standingsLastHttpCode;
@@ -3205,10 +3214,20 @@ void registerRoutes() {
     cfg.cycleGames = doc["cycleGames"] | cfg.cycleGames;
     const bool newShowStandings = doc["showStandings"] | cfg.showStandings;
     if (newShowStandings != cfg.showStandings) {
+      const LiveCarousel::Page old = currentCarouselPage();
+      const uint32_t oldId = old.kind == LiveCarousel::Kind::GAME &&
+                                 old.index < gameCount ? games[old.index].id :
+          old.kind == LiveCarousel::Kind::SUMMARY && old.count &&
+            old.rows[0] < gameCount ? games[old.rows[0]].id : 0;
       cfg.showStandings = newShowStandings;
-      if (!cfg.showStandings || carouselSlide >= carouselPageCount())
-        carouselSlide = gameCount ? featuredIndex : 0;
+      rebuildCarouselPlan();
+      carouselSlide = LiveCarousel::restore(
+          carouselPlan, games, old.kind, oldId, old.index, featuredIndex);
+      const LiveCarousel::Page restored = currentCarouselPage();
+      if (restored.kind == LiveCarousel::Kind::GAME)
+        featuredIndex = restored.index;
       lastCarouselAdvance = millis();
+      partialLiveUpdate = false;
       needsDraw = true;
     }
     cfg.cycleSeconds = constrain((int)(doc["cycleSeconds"] | cfg.cycleSeconds), 5, 30);
@@ -3502,7 +3521,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.3.5 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.3.6 — CYD only");
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),
@@ -3666,7 +3685,7 @@ void loop() {
   // happens only once per game/TTL, never once per frame. Defer requests
   // while a WLED restoration is pending to avoid delaying light recovery.
   if (!overlayController.active() && screen == Screen::LIVE &&
-      !showingStandingsPage() && gameCount && connected &&
+      showingGamePage() && gameCount && connected &&
       uint32_t(now - lastCarouselStatsCheck) >= 2500UL) {
     bool lightRestorePending = false;
     for (uint8_t i = 0; i < MAX_WLED; ++i)
@@ -3688,7 +3707,7 @@ void loop() {
     if (uint32_t(frameNow - overlayLastFrame) >= period)
       drawOverlayAnimation(frameNow);
   } else if (partialLiveUpdate && screen == Screen::LIVE &&
-             !showingStandingsPage() && gameCount > 0) {
+             showingGamePage() && gameCount > 0) {
     partialLiveUpdate = false;
     drawLiveReadout(games[featuredIndex % gameCount]);
   }
