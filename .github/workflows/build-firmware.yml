@@ -16,6 +16,14 @@ jobs:
           python-version: "3.11"
       - name: Audit official 2026-11-03 Anaheim Vancouver play-by-play
         run: python scripts/audit_nhl_pbp.py
+      - name: Test verified NHL PP timeline and independent pulled-goalie indicators
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_nhl_pp_evidence.cpp -o /tmp/glowdeck-nhl-pp-evidence
+          /tmp/glowdeck-nhl-pp-evidence
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_nhl_penalty_ledger.cpp -o /tmp/glowdeck-penalty-ledger
+          /tmp/glowdeck-penalty-ledger
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_nhl_on_ice.cpp -o /tmp/glowdeck-on-ice
+          /tmp/glowdeck-on-ice
       - name: Test local calendar rollover
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_day_rollover.cpp -o /tmp/glowdeck-day-test
