@@ -2566,6 +2566,68 @@ void registerRoutes() {
     if (!authorized()) return;
     server.send_P(200, "text/html; charset=utf-8", WEB_UI);
   });
+  // Read-only, authenticated, page-sized session event log. Never writes
+  // NVS/flash or changes the physical CYD display.
+  server.on("/api/events", HTTP_GET, []() {
+    if (!authorized()) return;
+    const int offset = constrain(server.arg("offset").toInt(), 0, 63);
+    const int limit = constrain(server.arg("limit").toInt(), 1, 16);
+    const String category = server.hasArg("category")
+        ? server.arg("category") : String("all");
+    DynamicJsonDocument doc(11000);
+    if (doc.capacity() < 11000)
+      return errorResponse("Event history memory unavailable", 503);
+    doc["capacity"] = GameEventLog::kCapacity;
+    doc["sessionOnly"] = true;
+    doc["timeSynced"] = time(nullptr) > 1700000000;
+    doc["offset"] = offset;
+    doc["limit"] = limit;
+    doc["lastSequence"] = gameEventHistory.lastSequence();
+    JsonArray rows = doc.createNestedArray("events");
+    int eligible = 0, appended = 0;
+    for (uint8_t i = 0; i < gameEventHistory.size(); ++i) {
+      const GameEventLog::Entry *e = gameEventHistory.newest(i);
+      if (!e || !GameEventLog::matchesCategory(
+                     e->type, category.c_str())) continue;
+      if (eligible++ < offset || appended >= limit) continue;
+      ++appended;
+      JsonObject row = rows.createNestedObject();
+      row["id"] = e->sequence;
+      row["timestamp"] = e->timestamp;
+      row["uptime"] = e->uptimeSeconds;
+      row["gameId"] = e->gameId;
+      row["type"] = GameEventLog::typeLabel(e->type);
+      row["home"] = e->home;
+      row["away"] = e->away;
+      row["team"] = e->team;
+      row["homeScore"] = e->homeScore;
+      row["awayScore"] = e->awayScore;
+      row["period"] = e->period;
+      row["goalsDelta"] = e->goalsDelta;
+      row["preview"] = e->preview;
+      row["rear"] = GameEventLog::rearLabel(e->rear);
+      JsonArray devices = row.createNestedArray("devices");
+      for (uint8_t d = 0; d < MAX_WLED; ++d) {
+        JsonObject device = devices.createNestedObject();
+        device["slot"] = d + 1;
+        device["result"] = GameEventLog::wledLabel(e->wled[d]);
+        device["accepted"] = (e->wledAcknowledgedMask & (1U << d)) != 0;
+      }
+    }
+    doc["total"] = eligible;
+    if (doc.overflowed()) return errorResponse("Event response too large", 503);
+    sendJson(doc);
+  });
+  server.on("/api/events/clear", HTTP_POST, []() {
+    if (!authorized()) return;
+    gameEventHistory.clear();
+    for (uint8_t i = 0; i < MAX_WLED; ++i) wledEventOwner[i] = 0;
+    armedPpLogSeq = 0;
+    queuedWledLogSeq = 0;
+    StaticJsonDocument<96> response;
+    response["ok"] = true;
+    sendJson(response);
+  });
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     // New slide/standings metadata should not enlarge the loopTask stack.
