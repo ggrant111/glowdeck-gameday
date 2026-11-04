@@ -62,6 +62,10 @@ jobs:
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_event_overlay.cpp -o /tmp/glowdeck-overlay-test
           /tmp/glowdeck-overlay-test
+      - name: Test live-first carousel and four-game summary grouping
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_live_carousel.cpp -o /tmp/glowdeck-live-carousel-test
+          /tmp/glowdeck-live-carousel-test
       - name: Install PlatformIO
         run: pip install platformio==6.1.18
       - name: Install logo build dependencies

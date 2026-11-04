@@ -17,6 +17,7 @@
 #include "ConferenceRecords.h"
 #include "GameDetailMode.h"
 #include "StandingsCarousel.h"
+#include "LiveCarousel.h"
 #include "NhlFetchPolicy.h"
 #include "CelebrationEngine.h"
 #include "TeamGradient.h"
@@ -115,7 +116,8 @@ uint8_t rearLastDuty[3] = {255, 255, 255};
 uint32_t lastPpFallback = 0;
 uint32_t rearTestPpUntil = 0, rearTestPpColor = 0;
 uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
-uint8_t carouselSlide = 0; // Independent of the armed game and game-detail index.
+uint8_t carouselSlide = 0; // Independent of armed game and detail index.
+LiveCarousel::Plan carouselPlan; // 28 fixed entries, no heap or sprite buffer.
 uint32_t lastCarouselAdvance = 0;
 String scoreboardDate;
 String targetScoreboardDate;
@@ -190,18 +192,35 @@ struct SeasonStanding {
 // The carousel can show games followed by eight league-wide standings slides.
 // Browsing a standings slide must NEVER change the WLED armed game, score
 // baselines, live polls or the selected game detail.
-uint8_t carouselPageCount() {
-  return StandingsCarousel::totalSlides(gameCount, cfg.showStandings);
+// Each successful NHL score fetch rebuilds this small index-only plan.
+// During live games: show ONLY live matchups full-screen plus 4-up summaries.
+// Outside live action: retain the existing all-games + 8-standings rotation.
+uint8_t carouselPageCount() { return carouselPlan.count; }
+LiveCarousel::Page currentCarouselPage() {
+  return carouselPlan.at(carouselSlide);
 }
 bool showingStandingsPage() {
-  return cfg.showStandings && carouselSlide >= gameCount &&
-         carouselSlide < carouselPageCount();
+  return currentCarouselPage().kind == LiveCarousel::Kind::STANDINGS;
+}
+bool showingSummaryPage() {
+  return currentCarouselPage().kind == LiveCarousel::Kind::SUMMARY;
+}
+bool showingGamePage() {
+  return currentCarouselPage().kind == LiveCarousel::Kind::GAME;
+}
+void rebuildCarouselPlan() {
+  carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings);
+  if (carouselSlide >= carouselPageCount()) carouselSlide = 0;
+  const LiveCarousel::Page page = currentCarouselPage();
+  if (page.kind == LiveCarousel::Kind::GAME)
+    featuredIndex = page.index;
 }
 void advanceCarousel(int direction) {
-  const uint8_t total = carouselPageCount();
-  carouselSlide = StandingsCarousel::advance(carouselSlide, total, direction);
-  if (carouselSlide < gameCount) featuredIndex = carouselSlide;
+  carouselSlide = LiveCarousel::advance(carouselSlide, carouselPlan, direction);
+  const LiveCarousel::Page page = currentCarouselPage();
+  if (page.kind == LiveCarousel::Kind::GAME) featuredIndex = page.index;
   lastCarouselAdvance = millis();
+  partialLiveUpdate = false;
   needsDraw = true;
 }
 
@@ -674,6 +693,7 @@ void prepareNewScoreboardDate(const String &today) {
     gamePage = 0;
     featuredIndex = 0;
     carouselSlide = 0;
+    rebuildCarouselPlan();
     lastCarouselAdvance = millis();
     needDetailLoad = false;
     detail.loaded = false;
@@ -1183,7 +1203,8 @@ void fetchDetailStats(uint32_t id) {
   for (uint8_t i = 0; i < gameCount; ++i) {
     if (games[i].id == id) {
       updateCarouselStatsFromDetail(i, detail);
-      if (screen == Screen::LIVE && featuredIndex == i) partialLiveUpdate = true;
+      if (screen == Screen::LIVE && showingGamePage() &&
+        currentCarouselPage().index == i) partialLiveUpdate = true;
       break;
     }
   }
@@ -1237,6 +1258,7 @@ void loadSettings() {
   cfg.touchY0 = prefs.getInt("ty0", 300);
   cfg.touchY1 = prefs.getInt("ty1", 3800);
   selectedGameId = prefs.getUInt("game", 0);
+  rebuildCarouselPlan(); // Standings-only fallback until the first NHL fetch.
 }
 
 void saveSettings() {
@@ -1895,10 +1917,16 @@ void pollNhl() {
   }
   const uint32_t previouslyFeatured = gameCount ?
       games[min((int)featuredIndex, (int)gameCount - 1)].id : 0;
-  const int8_t previouslyStandingPage = showingStandingsPage()
-      ? (int8_t)(carouselSlide - gameCount) : -1;
-  const uint32_t previouslyShownGameId = !showingStandingsPage() &&
-      carouselSlide < gameCount ? games[carouselSlide].id : 0;
+  const LiveCarousel::Page oldSlide = currentCarouselPage();
+  const LiveCarousel::Kind oldSlideKind = oldSlide.kind;
+  const bool previouslyLiveMode = carouselPlan.liveMode;
+  const uint8_t previousStandingsIndex = oldSlide.kind ==
+      LiveCarousel::Kind::STANDINGS ? oldSlide.index : 0;
+  const uint8_t previousGameIndex = oldSlide.kind == LiveCarousel::Kind::GAME
+      ? oldSlide.index : oldSlide.kind == LiveCarousel::Kind::SUMMARY &&
+        oldSlide.count ? oldSlide.rows[0] : 255;
+  const uint32_t previouslyShownGameId =
+      previousGameIndex < gameCount ? games[previousGameIndex].id : 0;
   String newScoreboardDate = doc["currentDate"].as<String>();
   if (newScoreboardDate.length() != 10) {
     markNhlFetchFailure("Invalid NHL scoreboard date");
@@ -1985,12 +2013,17 @@ void pollNhl() {
     }
     if (!found) featuredIndex = 0;
   } else featuredIndex = 0;
-  // A score poll must never reset the visible game or standings page.
-  // Keep its ID across NHL game reordering without changing the armed game.
-  carouselSlide = newDay ? 0 : StandingsCarousel::restoreSlide(
-      previouslyStandingPage, previouslyShownGameId, games, gameCount,
-      cfg.showStandings, featuredIndex);
-  if (carouselSlide >= carouselPageCount()) carouselSlide = 0;
+  // Preserve the currently visible *game ID* across NHL feed reordering
+  // and when games transition from FUT -> LIVE -> FINAL. A former full
+  // game page can become a 4-up summary, or vice versa, without resetting
+  // the armed game. A live slate intentionally hides standings slides.
+  carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings);
+  carouselSlide = newDay ? 0 : LiveCarousel::restore(
+      carouselPlan, games, oldSlideKind, previouslyShownGameId,
+      previousStandingsIndex, featuredIndex);
+  const LiveCarousel::Page visibleSlide = currentCarouselPage();
+  if (visibleSlide.kind == LiveCarousel::Kind::GAME)
+    featuredIndex = visibleSlide.index;
   if (gamePage * 3 >= gameCount) gamePage = 0;
   // A valid full JSON document (including games: []) resets retry backoff.
   if (nhlConsecutiveFailures)
@@ -2073,11 +2106,22 @@ void pollNhl() {
     haveBaseline = false;
     lastArmedGameState = "";
   }
-  if (gamesFingerprint() != previousFingerprint || newDay) {
-    if (!newDay && !showingStandingsPage() && screen == Screen::LIVE &&
-        gameCount > 0 && previouslyFeatured == games[featuredIndex].id)
+  if (gamesFingerprint() != previousFingerprint || newDay ||
+      previouslyLiveMode != carouselPlan.liveMode ||
+      oldSlideKind != visibleSlide.kind) {
+    // Summary pages may have several score/status updates in a single poll.
+    // Only partial-update a full-screen matchup that remains the same game.
+    if (!newDay && !overlayController.active() &&
+        previouslyLiveMode == carouselPlan.liveMode &&
+        oldSlideKind == LiveCarousel::Kind::GAME &&
+        visibleSlide.kind == LiveCarousel::Kind::GAME &&
+        screen == Screen::LIVE && gameCount &&
+        previouslyShownGameId == games[visibleSlide.index].id)
       partialLiveUpdate = true;
-    else needsDraw = true;
+    else {
+      partialLiveUpdate = false;
+      needsDraw = true;
+    }
   }
   // If puck drop occurs while the pregame detail page is open, replace
   // season/conference rows with the live shots, faceoffs, PP and hits view
@@ -2205,8 +2249,71 @@ void drawScoreboardHeader(const Game &g) {
 
 // 320x240: 8 rank rows, full NHL team list across eight carousel slides.
 // All drawing is simple TFT primitives; no image buffers or extra tasks.
+// Four upcoming/finished matches per compact slide while NHL games are live.
+// No off-screen buffer: one header and four fixed 46px charcoal rows.
+// Tap a row for that game's pregame/live/final details.
+void drawOtherGamesSummary() {
+  const LiveCarousel::Page slide = currentCarouselPage();
+  tft.fillScreen(ARENA_BLACK);
+  tft.fillRect(0, 0, 320, 31, ARENA_PLATE);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(WHITE, ARENA_PLATE);
+  tft.drawString("OTHER GAMES", 8, 7, 2);
+  tft.setTextColor(ICE_TEXT, ARENA_PLATE);
+  tft.drawString("LIVE " + String(carouselPlan.liveCount), 150, 7, 2);
+  tft.setTextDatum(TR_DATUM);
+  tft.drawString(String(carouselSlide + 1) + "/" +
+                 String(carouselPageCount()), 297, 7, 2);
+  tft.drawFastHLine(306, 7, 11, WHITE);
+  tft.drawFastHLine(306, 13, 11, WHITE);
+  tft.drawFastHLine(306, 19, 11, WHITE);
+  for (uint8_t row = 0; row < slide.count; ++row) {
+    const uint8_t idx = slide.rows[row];
+    if (idx >= gameCount) continue;
+    const Game &g = games[idx];
+    const int16_t y = 36 + row * 49;
+    const uint16_t bg = row % 2 ? 0x18C3 : ARENA_PLATE;
+    tft.fillRoundRect(7, y, 306, 46, 5, bg);
+    tft.fillRect(11, y + 9, 4, 28, to565(teamRgb(g.away)));
+    tft.fillRect(305, y + 9, 4, 28, to565(teamRgb(g.home)));
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(WHITE, bg);
+    tft.drawString(g.away, 22, y + 4, 2);
+    if (gameIsFuture(g)) {
+      tft.setTextColor(ICE_TEXT, bg);
+      tft.drawString("VS", 91, y + 4, 2);
+      tft.setTextColor(WHITE, bg);
+      tft.drawString(g.home, 137, y + 4, 2);
+      String start = formattedStart(g.startUTC);
+      if (start.length() > 13) start = start.substring(0,13);
+      tft.setTextDatum(TR_DATUM);
+      tft.drawString(start.length() ? start : String("TBD"), 300, y + 6, 2);
+      tft.setTextDatum(TL_DATUM);
+      tft.setTextColor(ICE_TEXT, bg);
+      tft.drawString("UPCOMING", 22, y + 27, 2);
+    } else {
+      // Only non-live games are grouped here. This path is normally FINAL,
+      // but handles delayed NHL final labels as well.
+      tft.drawString(String(g.awayScore), 82, y + 2, 4);
+      tft.setTextColor(ICE_TEXT, bg);
+      tft.drawString("-", 119, y + 7, 2);
+      tft.setTextColor(WHITE, bg);
+      tft.drawString(String(g.homeScore), 141, y + 2, 4);
+      tft.drawString(g.home, 189, y + 4, 2);
+      tft.setTextColor(ICE_TEXT, bg);
+      const String status = gameStatus(g);
+      tft.drawString(status.length() > 22 ? status.substring(0, 22) : status,
+                     22, y + 27, 2);
+    }
+    tft.setTextDatum(TR_DATUM);
+    tft.setTextColor(ICE_TEXT, bg);
+    tft.drawString("TAP FOR STATS", 299, y + 32, 1);
+  }
+  tft.setTextDatum(TL_DATUM);
+}
+
 void drawStandingsSlide() {
-  const uint8_t slideNumber = carouselSlide - gameCount;
+  const uint8_t slideNumber = currentCarouselPage().index;
   const StandingsCarousel::Page page = StandingsCarousel::page(slideNumber);
   tft.fillScreen(ARENA_BLACK);
   tft.fillRect(0, 0, 320, 28, ARENA_PLATE);
@@ -2516,6 +2623,8 @@ void draw() {
   if (screen == Screen::LIVE) {
     if (showingStandingsPage()) {
       drawStandingsSlide();
+    } else if (showingSummaryPage()) {
+      drawOtherGamesSummary();
     } else if (!gameCount) {
       tft.fillScreen(ARENA_BLACK);
       tft.setTextDatum(MC_DATUM);
@@ -2530,7 +2639,9 @@ void draw() {
       tft.drawString("Tap top-right for the menu", 160, 193, 2);
       tft.setTextDatum(TL_DATUM);
     } else {
-      const Game &g = games[featuredIndex % gameCount];
+      const LiveCarousel::Page slide = currentCarouselPage();
+      const Game &g = games[slide.kind == LiveCarousel::Kind::GAME
+                                ? slide.index : featuredIndex % gameCount];
       drawScoreboardStatic(g);
       drawLiveReadout(g);
     }
@@ -2645,6 +2756,8 @@ void selectGame(uint32_t id) {
   screen = Screen::LIVE;
   for (uint8_t i = 0; i < gameCount; ++i)
     if (games[i].id == id) { featuredIndex = i; break; }
+  const uint8_t selectedSlide = LiveCarousel::locateGame(carouselPlan, games, id);
+  if (selectedSlide != 255) carouselSlide = selectedSlide;
   lastCarouselAdvance = millis();
   // Fetch soon when the user arms a new matchup; first response is a baseline.
   lastPoll = millis() - GameDayCadence::kIdleMs;
@@ -2701,12 +2814,21 @@ void handleTouch() {
         advanceCarousel(dx < 0 ? 1 : -1);
       } else if (gestureStartY <= 35 && gestureStartX >= 263) {
         screen = Screen::GAMES; // Menu is available on every slide.
-      } else if (carouselPageCount() > 1 && gestureStartY >= 213 && gestureStartX < 58) {
+      } else if (!showingSummaryPage() && carouselPageCount() > 1 &&
+                 gestureStartY >= 213 && gestureStartX < 58) {
         advanceCarousel(-1);
-      } else if (carouselPageCount() > 1 && gestureStartY >= 213 && gestureStartX > 263) {
+      } else if (!showingSummaryPage() && carouselPageCount() > 1 &&
+                 gestureStartY >= 213 && gestureStartX > 263) {
         advanceCarousel(1);
-      } else if (!showingStandingsPage() && gameCount) {
-        showDetail(games[carouselSlide].id);
+      } else if (showingSummaryPage()) {
+        const LiveCarousel::Page slide = currentCarouselPage();
+        if (gestureStartY >= 36 && gestureStartY < 232) {
+          const uint8_t row = (gestureStartY - 36) / 49;
+          if (row < slide.count && slide.rows[row] < gameCount)
+            showDetail(games[slide.rows[row]].id);
+        }
+      } else if (showingGamePage() && gameCount) {
+        showDetail(games[currentCarouselPage().index].id);
       } else if (!showingStandingsPage()) {
         screen = Screen::GAMES;
       } // Standings rows are informational, not game-arm buttons.
@@ -2852,7 +2974,7 @@ void registerRoutes() {
     // New slide/standings metadata should not enlarge the loopTask stack.
     DynamicJsonDocument doc(3584);
     if (doc.capacity() < 3584) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.5";
+    doc["version"] = "0.3.6";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -2887,8 +3009,15 @@ void registerRoutes() {
     doc["carouselSlide"] = carouselSlide;
     doc["carouselTotal"] = carouselPageCount();
     doc["slideStandings"] = showingStandingsPage();
+    doc["slideSummary"] = showingSummaryPage();
+    doc["liveMode"] = carouselPlan.liveMode;
+    doc["liveGameCount"] = carouselPlan.liveCount;
+    doc["summaryGameCount"] = carouselPlan.otherCount;
+    doc["summaryPageCount"] = carouselPlan.summaryPages;
+    doc["summaryPageNumber"] = showingSummaryPage()
+        ? currentCarouselPage().index + 1 : 0;
     doc["standingsPage"] = showingStandingsPage()
-        ? StandingsCarousel::page(carouselSlide - gameCount).title : "";
+        ? StandingsCarousel::page(currentCarouselPage().index).title : "";
     doc["standingsReady"] = standingsReady;
     doc["standingsError"] = standingsError;
     doc["standingsHttpCode"] = standingsLastHttpCode;
@@ -3086,10 +3215,20 @@ void registerRoutes() {
     cfg.cycleGames = doc["cycleGames"] | cfg.cycleGames;
     const bool newShowStandings = doc["showStandings"] | cfg.showStandings;
     if (newShowStandings != cfg.showStandings) {
+      const LiveCarousel::Page old = currentCarouselPage();
+      const uint32_t oldId = old.kind == LiveCarousel::Kind::GAME &&
+                                 old.index < gameCount ? games[old.index].id :
+          old.kind == LiveCarousel::Kind::SUMMARY && old.count &&
+            old.rows[0] < gameCount ? games[old.rows[0]].id : 0;
       cfg.showStandings = newShowStandings;
-      if (!cfg.showStandings || carouselSlide >= carouselPageCount())
-        carouselSlide = gameCount ? featuredIndex : 0;
+      rebuildCarouselPlan();
+      carouselSlide = LiveCarousel::restore(
+          carouselPlan, games, old.kind, oldId, old.index, featuredIndex);
+      const LiveCarousel::Page restored = currentCarouselPage();
+      if (restored.kind == LiveCarousel::Kind::GAME)
+        featuredIndex = restored.index;
       lastCarouselAdvance = millis();
+      partialLiveUpdate = false;
       needsDraw = true;
     }
     cfg.cycleSeconds = constrain((int)(doc["cycleSeconds"] | cfg.cycleSeconds), 5, 30);
@@ -3383,7 +3522,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.3.5 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.3.6 — CYD only");
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),
@@ -3547,7 +3686,7 @@ void loop() {
   // happens only once per game/TTL, never once per frame. Defer requests
   // while a WLED restoration is pending to avoid delaying light recovery.
   if (!overlayController.active() && screen == Screen::LIVE &&
-      !showingStandingsPage() && gameCount && connected &&
+      showingGamePage() && gameCount && connected &&
       uint32_t(now - lastCarouselStatsCheck) >= 2500UL) {
     bool lightRestorePending = false;
     for (uint8_t i = 0; i < MAX_WLED; ++i)
@@ -3569,7 +3708,7 @@ void loop() {
     if (uint32_t(frameNow - overlayLastFrame) >= period)
       drawOverlayAnimation(frameNow);
   } else if (partialLiveUpdate && screen == Screen::LIVE &&
-             !showingStandingsPage() && gameCount > 0) {
+             showingGamePage() && gameCount > 0) {
     partialLiveUpdate = false;
     drawLiveReadout(games[featuredIndex % gameCount]);
   }

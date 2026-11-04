@@ -2,7 +2,7 @@
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
-**Status: v0.3.5 animated NHL event overlays on CYD.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+**Status: v0.3.6 live-first NHL carousel with 4-up other-game summaries.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
 
 ## Touchscreen
 
@@ -21,6 +21,12 @@ The first score after selecting a game is used as a baseline and never replays a
 **Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
 
 **Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+
+## Live-first game carousel (v0.3.6)
+
+When NHL games are **live**, the CYD rotates only through full-screen LIVE matchups, plus the minimum number of compact **four-games-per-slide** pages containing every upcoming or finished matchup. During active play, conference/division standings temporarily leave the automatic rotation. **When no NHL games are live**, the previous carousel returns unchanged: all individual game slides plus eight standings slides (if enabled), or standings alone on a no-game day. This reduces the number of screens at the most interesting time of the night.
+
+Summary rows show away/home teams, team-color accents, upcoming game times or completed final scores. Tap a row for its detailed stats. The layout dynamically updates on NHL game-state transitions without rearming a matchup or affecting CYD RGB/WLED celebrations, live API polling or screen event overlays. Web Dashboard → Display reports which carousel mode is active and how many live/summary slides are included. See [Live-first carousel details](docs/LIVE_FIRST_CAROUSEL.md).
 
 ## Animated NHL event overlays on the CYD (v0.3.5)
 
