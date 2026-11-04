@@ -21,6 +21,7 @@
 #include "CelebrationEngine.h"
 #include "TeamGradient.h"
 #include "GameEventLog.h"
+#include "PowerPlayLogPolicy.h"
 #include "RearLedPattern.h"
 #include <time.h>
 
@@ -92,12 +93,8 @@ GoalWatch goalWatch[MAX_GAMES];
 GameEventLog::Buffer gameEventHistory;
 uint32_t wledEventOwner[MAX_WLED] = {0, 0, 0, 0};
 uint32_t armedPpLogSeq = 0, queuedWledLogSeq = 0;
-struct PpEventWatch {
-  uint32_t id = 0;
-  uint8_t side = 0;
-  bool baseline = false;
-};
-PpEventWatch ppEventWatch[MAX_GAMES];
+// NHL game ID is the stable key: game positions can reorder every poll.
+PowerPlayLogPolicy::Watch ppEventWatch[MAX_GAMES];
 struct PowerPlaySnapshot {
   uint32_t id = 0, updatedAt = 0;
   uint8_t side = 0;
@@ -524,46 +521,46 @@ void detectRearGoalChanges() {
 
 // Track PP changes only when fresh situation data is known. Missing NHL
 // situation data is not interpreted as PP ending.
+// Power-play logging is keyed by NHL game ID, not by array index, because the
+// NHL's daily score feed can reorder matches between 10-second polls.
+PowerPlayLogPolicy::Watch *getPowerPlayLogWatch(uint32_t id) {
+  if (!id) return nullptr;
+  for (auto &watch : ppEventWatch)
+    if (watch.gameId == id) return &watch;
+  for (auto &watch : ppEventWatch)
+    if (!watch.gameId) {
+      watch = PowerPlayLogPolicy::Watch();
+      watch.gameId = id;
+      return &watch;
+    }
+  return nullptr; // Full (normally one slot per game on the date).
+}
+
 void observePowerPlayEvents() {
   for (uint8_t i = 0; i < gameCount; ++i) {
     const Game &g = games[i];
-    PpEventWatch &w = ppEventWatch[i];
-    if (w.id != g.id) {
-      w = PpEventWatch();
-      w.id = g.id;
-    }
-    if (!rearFollows(g.id) || !g.ppDataKnown ||
+    if (!rearFollows(g.id) ||
         (g.state != "LIVE" && g.state != "CRIT")) continue;
-    if (!w.baseline) {
-      w.side = g.ppSide;
-      w.baseline = true;
-      // A game followed mid-power-play is already active. Record detection,
-      // not an invented start timestamp.
-      if (g.ppSide) {
-        const String &team = g.ppSide == 1 ? g.home : g.away;
-        GameEventLog::Entry &e = addGameEvent(
-            g, GameEventLog::Type::POWER_PLAY_START, team, 0);
-        e.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
-            ? GameEventLog::Rear::NOT_ENABLED : GameEventLog::Rear::SCHEDULED;
-        if (g.id == selectedGameId) armedPpLogSeq = e.sequence;
-      }
-      continue;
+    PowerPlayLogPolicy::Watch *watch = getPowerPlayLogWatch(g.id);
+    if (!watch) continue;
+    const bool reliable = g.ppDataKnown &&
+       uint32_t(millis() - g.ppUpdatedAt) < 80000UL;
+    const PowerPlayLogPolicy::Change change = PowerPlayLogPolicy::observe(
+        *watch, g.id, reliable, g.ppSide, millis());
+    if (change.ended) {
+      const String &team = change.ended == 1 ? g.home : g.away;
+      addGameEvent(g, GameEventLog::Type::POWER_PLAY_END, team, 0);
+      if (g.id == selectedGameId) armedPpLogSeq = 0;
     }
-    if (g.ppSide == w.side) continue;
-    if (!g.ppSide && g.id == selectedGameId) armedPpLogSeq = 0;
-    if (w.side) {
-      const String &team = w.side == 1 ? g.home : g.away;
-      addGameEvent(g, GameEventLog::Type::POWER_PLAY_END, team);
+    if (change.started) {
+      const String &team = change.started == 1 ? g.home : g.away;
+      GameEventLog::Entry &entry = addGameEvent(
+          g, GameEventLog::Type::POWER_PLAY_START, team, 0);
+      entry.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
+          ? GameEventLog::Rear::NOT_ENABLED
+          : GameEventLog::Rear::SCHEDULED;
+      if (g.id == selectedGameId) armedPpLogSeq = entry.sequence;
     }
-    if (g.ppSide) {
-      const String &team = g.ppSide == 1 ? g.home : g.away;
-      GameEventLog::Entry &e = addGameEvent(
-          g, GameEventLog::Type::POWER_PLAY_START, team);
-      e.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
-          ? GameEventLog::Rear::NOT_ENABLED : GameEventLog::Rear::SCHEDULED;
-      if (g.id == selectedGameId) armedPpLogSeq = e.sequence;
-    }
-    w.side = g.ppSide;
   }
 }
 
@@ -635,7 +632,7 @@ void prepareNewScoreboardDate(const String &today) {
     scheduleWledRestoreAll();
     lastArmedGameState = "";
     for (auto &entry : goalWatch) entry = GoalWatch();
-    for (auto &entry : ppEventWatch) entry = PpEventWatch();
+    for (auto &entry : ppEventWatch) entry = PowerPlayLogPolicy::Watch();
     armedPpLogSeq = 0;
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) cfg.followIds[i] = 0;
@@ -1451,21 +1448,10 @@ bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
     scheduleWledRestoreAll();
     return false;
   }
-  // When the NHL first reports an already-active PP, the engine may start
-  // without a transition log. Mark it as detected, not a fabricated start.
-  if (!eventSequence && event == CelebrationEngine::Event::POWER_PLAY) {
-    Game *g = selectedGame();
-    if (g && g->ppSide) {
-      const String &team = g->ppSide == 1 ? g->home : g->away;
-      GameEventLog::Entry &e = addGameEvent(
-          *g, GameEventLog::Type::POWER_PLAY_START, team, 0);
-      e.rear = cfg.rearLedEnabled && cfg.rearPowerPlay
-                   ? GameEventLog::Rear::SCHEDULED
-                   : GameEventLog::Rear::NOT_ENABLED;
-      eventSequence = e.sequence;
-      armedPpLogSeq = e.sequence;
-    }
-  }
+  // The NHL observer exclusively owns power-play start/end history.
+  // This controller must not invent new NHL events when retrying effects,
+  // especially with ZERO configured WLED devices.
+  if (!wledEligibleCount(event)) return false;
   bool prepared[MAX_WLED] = {};
   for (uint8_t i = 0; i < MAX_WLED; ++i)
     if (wledParticipates(i, event))
@@ -1603,7 +1589,6 @@ void tickWledCelebrations() {
     // reports an advantage, otherwise restore the original WLED state.
     if (hasPP && startWledEvent(CelebrationEngine::Event::POWER_PLAY,
                                 powerPlayColor, armedPpLogSeq)) {
-      armedPpLogSeq = 0;
       return;
     }
     scheduleWledRestoreAll();
@@ -1615,15 +1600,16 @@ void tickWledCelebrations() {
     } else if (wledEventColor != powerPlayColor) {
       startWledEvent(CelebrationEngine::Event::POWER_PLAY, powerPlayColor);
     }
-  } else if (hasPP && wledActiveEvent == CelebrationEngine::Event::NONE) {
+  } else if (hasPP && wledActiveEvent == CelebrationEngine::Event::NONE &&
+             wledEligibleCount(CelebrationEngine::Event::POWER_PLAY) > 0) {
     // Avoid re-triggering a failed WLED every 5ms; NHL situation updates are
     // already throttled and each event transition can initiate up to 4 HTTPs.
     static uint32_t lastPpAttempt = 0;
     if (uint32_t(now - lastPpAttempt) > 8000UL) {
       lastPpAttempt = now;
+      // Repeated WLED retries update the *same* observed PP event row.
       startWledEvent(CelebrationEngine::Event::POWER_PLAY,
                      powerPlayColor, armedPpLogSeq);
-      armedPpLogSeq = 0;
     }
   }
 }
@@ -2639,7 +2625,7 @@ void registerRoutes() {
     // New slide/standings metadata should not enlarge the loopTask stack.
     DynamicJsonDocument doc(3072);
     if (doc.capacity() < 3072) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.3";
+    doc["version"] = "0.3.4";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -3074,7 +3060,7 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.3.3 — CYD only");
+  Serial.println("\nGlowDeck GameDay v0.3.4 — CYD only");
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),

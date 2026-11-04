@@ -300,10 +300,16 @@ function createEventElement(row){
   card.append(builtIn);
   const devices=document.createElement("div");devices.className="small muted";
   devices.style.marginTop="5px";
-  devices.textContent=(row.devices||[]).map(d=>
-    "WLED "+d.slot+" (strip): "+(d.result||"Not triggered")+
-    (d.accepted&&d.result!=="Command accepted"?" · command accepted":"")
-  ).join("  |  ");
+  const configured=currentConfig?.wled||[];
+  const selected=(row.devices||[]).filter(d=>{
+    const w=configured[d.slot-1]; return !!w?.enabled && !!w?.ip;
+  });
+  devices.textContent=selected.length
+    ?selected.map(d=>
+      "WLED "+d.slot+": "+(d.result||"Not triggered")+
+      (d.accepted&&d.result!=="Command accepted"?" · command accepted":"")
+    ).join("  |  ")
+    :"WLED: No controllers enabled for celebrations";
   card.append(devices);
   return card;
 }
