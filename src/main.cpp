@@ -413,10 +413,14 @@ uint8_t detectEmptyNet(JsonVariantConst situation) {
   const JsonVariantConst home = situation["homeTeam"];
   const JsonVariantConst away = situation["awayTeam"];
   const int h = home["strength"] | -1, a = away["strength"] | -1;
-  const bool hp = !home["goaliePulled"].isNull() &&
-                  home["goaliePulled"].as<bool>();
-  const bool ap = !away["goaliePulled"].isNull() &&
-                  away["goaliePulled"].as<bool>();
+  bool hp = !home["goaliePulled"].isNull() &&
+            home["goaliePulled"].as<bool>();
+  bool ap = !away["goaliePulled"].isNull() &&
+            away["goaliePulled"].as<bool>();
+  for (JsonVariantConst label : home["situationDescriptions"].as<JsonArrayConst>())
+    if (NhlOnIce::emptyNetLabel(label.as<const char*>())) hp=true;
+  for (JsonVariantConst label : away["situationDescriptions"].as<JsonArrayConst>())
+    if (NhlOnIce::emptyNetLabel(label.as<const char*>())) ap=true;
   return NhlOnIce::emptyNetSide(a,h,ap,hp);
 }
 NhlPenaltyLedger::Book *penaltyLedger(uint32_t id) {
