@@ -597,16 +597,33 @@ bool overlayAllowed(EventOverlay::Kind kind) {
     default: return false;
   }
 }
+// NHL display alerts are independent of the armed/rear LED selection.
+// Manual visual previews bypass the NHL game-admission policy.
 bool queueGameOverlay(const Game *g, EventOverlay::Kind kind,
-                      const String &team, uint32_t sequence) {
+                      const String &team, uint32_t sequence,
+                      bool observed = false) {
   if (!overlayAllowed(kind)) return false;
+  const bool followed = g && rearFollows(g->id);
+  if (observed && (!g || (!cfg.displayAllLiveEvents && !followed)))
+    return false;
+  const uint8_t tier = observed ? DisplayEventPolicy::tier(
+      cfg.favoriteTeams, g->away.c_str(), g->home.c_str(), followed) : 2;
+  const uint32_t now = millis();
+  if (observed && !DisplayEventPolicy::backgroundAllowed(
+          kind, tier, now, lastBackgroundOverlayAt, hasBackgroundOverlay)) {
+    ++backgroundEventsSkipped;
+    return false;
+  }
   EventOverlay::Item item;
   item.kind = kind;
   item.gameId = g ? g->id : 0;
   item.eventSequence = sequence;
   item.color = teamRgb(team);
-  item.duration = EventOverlay::durationMs(kind, cfg.overlayGoalSeconds,
-                                           cfg.overlayFinalSeconds);
+  item.tier = tier;
+  item.duration = observed ? DisplayEventPolicy::duration(
+      kind, tier, cfg.overlayGoalSeconds, cfg.overlayFinalSeconds)
+      : EventOverlay::durationMs(kind, cfg.overlayGoalSeconds,
+                                cfg.overlayFinalSeconds);
   EventOverlay::copy(item.team, team.c_str(), sizeof(item.team));
   if (g) {
     EventOverlay::copy(item.home, g->home.c_str(), sizeof(item.home));
@@ -616,12 +633,18 @@ bool queueGameOverlay(const Game *g, EventOverlay::Kind kind,
     item.awayScore = (uint8_t)constrain(g->awayScore, 0, 255);
     item.homeScore = (uint8_t)constrain(g->homeScore, 0, 255);
   }
-  const bool admitted = overlayController.push(item, millis());
+  const bool admitted = overlayController.push(item, now);
   if (admitted) {
+    if (observed && tier == 0 && kind != EventOverlay::Kind::GOAL) {
+      lastBackgroundOverlayAt = now;
+      hasBackgroundOverlay = true;
+    }
     ++overlayCount;
     needsDraw = true;
     partialLiveUpdate = false;
     overlayLastFrame = 0;
+  } else if (observed) {
+    ++overlayEventsDropped;
   }
   return admitted;
 }
