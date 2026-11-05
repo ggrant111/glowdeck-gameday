@@ -429,6 +429,7 @@ header{padding:19px 17px}
 const $ = id => document.getElementById(id);
 let currentConfig = null, currentStatus = null, currentGames = [], noticeTimeout;
 let rearPalette = [];
+let gameFilter="all", favoriteTeamDraftMask=0;
 let detailPreviewToken = 0;
 const modes = ["Off","Home only","Away only","Both teams"];
 function message(text){
@@ -446,7 +447,12 @@ const post = (url,body) => api(url,{method:"POST",headers:{"Content-Type":"appli
 async function perform(fn){try{await fn()}catch(err){message("Error: "+err.message)}}
 function tab(id){
   document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===id));
-  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("selected",x.dataset.tab===id));
+  document.querySelectorAll(".tab").forEach(x=>{
+    const selected=x.dataset.tab===id;
+    x.classList.toggle("selected",selected);
+    if(selected)x.setAttribute("aria-current","page");
+    else x.removeAttribute("aria-current");
+  });
   scrollTo({top:0,behavior:"smooth"});
 }
 document.querySelectorAll("[data-tab]").forEach(x=>x.addEventListener("click",()=>tab(x.dataset.tab)));
@@ -539,6 +545,12 @@ function renderStatus(){
   $("rearEvent").textContent=(s.rearEvent||"IDLE").replaceAll("_"," ");
   $("rearFollowCount").textContent=(s.followed||[]).length+
     (s.selectedId?" additional + armed":" additional");
+  $("dashLiveCount").textContent=String(s.liveGameCount??0);
+  $("dashFavoriteCount").textContent=String(popcount(s.favoriteTeams??0));
+  $("dashFollowCount").textContent=String((s.followed||[]).length+(s.selectedId?1:0));
+  $("dashDisplayMode").textContent=s.displayAllLiveEvents?"League-wide":"Followed only";
+  $("backgroundSkipped").textContent=String(s.backgroundEventsSkipped??0);
+  $("overlayDropped").textContent=String(s.overlayEventsDropped??0);
   renderRearTestControls();
   const showing=currentGames[s.featuredIndex]||null;
   $("showingGame").textContent=showing?showing.away+" @ "+showing.home:"No games";
@@ -578,6 +590,27 @@ function renderStatus(){
   $("uptime").textContent=Math.floor(s.uptimeSeconds/60)+" minutes";
   document.querySelectorAll("[data-mode]").forEach(b=>b.classList.toggle("selected",Number(b.dataset.mode)===s.mode));
 }
+function popcount(mask){
+  mask=Number(mask)>>>0;
+  let count=0;
+  while(mask){mask&=mask-1;++count;}
+  return count;
+}
+function isFavoriteGame(g){
+  return !!(currentStatus && rearPalette.some((t,i)=>
+    ((Number(currentStatus.favoriteTeams)>>>i)&1) &&
+    (t.abbr===g.away || t.abbr===g.home)));
+}
+function showGame(g){
+  const live=g.state==="LIVE"||g.state==="CRIT";
+  const following=g.followed || g.id===currentStatus?.selectedId;
+  const query=$("gameSearch").value.toLowerCase().trim();
+  const text=[g.away,g.home,g.awayName,g.homeName].join(" ").toLowerCase();
+  return (!query||text.includes(query))&&
+    (gameFilter==="all"||gameFilter==="live"&&live||
+     gameFilter==="favorites"&&isFavoriteGame(g)||
+     gameFilter==="following"&&following);
+}
 function renderGames(){
   const list=$("gameList");list.replaceChildren();
   if(!currentGames.length){
@@ -587,9 +620,19 @@ function renderGames(){
       : "Loading today's NHL games. "+(currentStatus&&currentStatus.error||"Check Wi-Fi and time synchronization.");
     list.append(p);return;
   }
-  currentGames.forEach(g=>{
-    const line=document.createElement("div");line.className="game";
-    const detail=document.createElement("div");detail.style.flex="1";
+  const visible=currentGames.filter(showGame).sort((a,b)=>{
+    const rank=g=>((g.state==="LIVE"||g.state==="CRIT")?4:0)+
+      (isFavoriteGame(g)?2:0)+(g.followed?1:0);
+    return rank(b)-rank(a);
+  });
+  if(!visible.length){
+    const p=document.createElement("p");p.className="muted";
+    p.textContent="No games match this filter.";
+    list.append(p);return;
+  }
+  visible.forEach(g=>{
+    const line=document.createElement("div");line.className="game game-row";
+    const detail=document.createElement("div");detail.className="game-details";
     const matchup=document.createElement("div");
     matchup.style.display="flex";matchup.style.alignItems="center";matchup.style.gap="6px";
     function teamLogo(code){
@@ -608,7 +651,13 @@ function renderGames(){
       g.away+" "+g.awayScore+" - "+g.homeScore+" "+g.home;
     matchup.append(teamLogo(g.away),score,teamLogo(g.home));
     const subtitle=document.createElement("div");
-    subtitle.className="muted small";subtitle.textContent=g.status||g.state;
+    subtitle.className="muted small";
+    const flags=[];
+    if(isFavoriteGame(g))flags.push("FAVORITE TEAM");
+    if(g.followed)flags.push("FOLLOWED");
+    if(g.id===currentStatus?.selectedId)flags.push("ARMED");
+    subtitle.textContent=(g.status||g.state)+
+      (flags.length?" · "+flags.join(" · "):"");
     detail.append(matchup,subtitle);
     const actions=document.createElement("div");actions.className="actions";
     actions.style.justifyContent="flex-end";
@@ -620,6 +669,22 @@ function renderGames(){
       await post("/api/select",{id:g.id});
       message("Goal alerts armed: "+g.away+" @ "+g.home);
       await refresh();
+    });
+    const star=document.createElement("button");
+    const isFollowing=!!g.followed||selected;
+    star.className="star-button";
+    star.textContent=isFollowing?"★":"☆";
+    star.setAttribute("aria-label",(isFollowing?"Unfollow ":"Follow ")+g.away+" at "+g.home);
+    star.setAttribute("aria-pressed",String(isFollowing));
+    star.title=selected?"Armed game automatically follows rear LED and screen alerts":
+      "Follow this game for screen celebrations and rear RGB LED";
+    star.disabled=selected;
+    star.onclick=()=>perform(async()=>{
+      star.disabled=true;
+      await post("/api/rear/follow",{id:g.id,follow:!isFollowing});
+      await refresh();
+      message((isFollowing?"Unfollowed ":"Following ")+g.away+" @ "+g.home+
+        " · screen and rear RGB");
     });
     const stats=document.createElement("button");
     const isFuture=g.state==="FUT"||g.state==="PRE";
@@ -674,10 +739,22 @@ function renderGames(){
       if(token===detailPreviewToken)
         box.scrollIntoView({behavior:"smooth",block:"nearest"});
     });
-    actions.append(stats,arm);
+    actions.append(star,stats,arm);
     line.append(detail,actions);list.append(line);
   });
 }
+document.querySelectorAll("[data-game-filter]").forEach(button=>{
+  button.onclick=()=>{
+    gameFilter=button.dataset.gameFilter;
+    document.querySelectorAll("[data-game-filter]").forEach(el=>{
+      const selected=el.dataset.gameFilter===gameFilter;
+      el.classList.toggle("selected",selected);
+      el.setAttribute("aria-pressed",String(selected));
+    });
+    renderGames();
+  };
+});
+$("gameSearch").oninput=renderGames;
 async function refresh(){
   const [s,g]=await Promise.all([api("/api/status"),api("/api/games")]);
   currentStatus=s;currentGames=g.games||[];
@@ -803,7 +880,37 @@ async function loadRearPalette(){
   select.value=rearPalette.some(item=>item.abbr===old)?old:"UTA";
   renderRearSelected();
   renderRearTestControls();
+  renderFavoriteTeams();
 }
+function renderFavoriteTeams(){
+  const grid=$("favoriteTeamGrid");grid.replaceChildren();
+  rearPalette.forEach((team,index)=>{
+    const checked=!!((favoriteTeamDraftMask>>>index)&1);
+    const button=document.createElement("button");
+    button.type="button";button.className="team-choice";
+    button.setAttribute("aria-pressed",String(checked));
+    button.setAttribute("aria-label",(checked?"Remove ":"Add ")+team.abbr+" as favorite team");
+    const dot=document.createElement("span");
+    dot.className="team-dot";dot.style.backgroundColor=team.hex;
+    const title=document.createElement("span");title.textContent=team.abbr;
+    button.append(dot,title);
+    button.onclick=()=>{
+      favoriteTeamDraftMask=(favoriteTeamDraftMask^(1<<index))>>>0;
+      renderFavoriteTeams();
+    };
+    grid.append(button);
+  });
+  const count=popcount(favoriteTeamDraftMask);
+  $("favoriteTeamCount").textContent=count?count+
+    " favorite team"+(count===1?"":"s")+" selected · Save to apply across game days."
+    :"No favorites selected. Every live game will have equal screen priority.";
+}
+$("saveFavorites").onclick=()=>perform(async()=>{
+  const data=await post("/api/display/favorites",{mask:favoriteTeamDraftMask});
+  currentConfig.favoriteTeams=data.favoriteTeams;
+  await refresh();
+  message(popcount(data.favoriteTeams)+" favorite teams saved");
+});
 function deviceSettings(){
   return Array.from({length:4},(_,i)=>{
     const choices=[["goal",1],["pp",2],["start",4],["final",8]];
@@ -833,6 +940,7 @@ function formConfig(){
     overlayFinal:$("overlayFinal").checked,
     overlayFlash:$("overlayFlash").checked,
     overlayLogos:$("overlayLogos").checked,
+    displayAllLiveEvents:$("displayAllLiveEvents").value==="true",
     overlayGoalSeconds:Number($("overlayGoalSeconds").value),
     overlayFinalSeconds:Number($("overlayFinalSeconds").value),
     cycleGames:$("cycleGames").checked,showStandings:$("showStandings").checked,
@@ -873,6 +981,8 @@ async function loadConfig(){
   $("overlayFinal").checked=currentConfig.overlayFinal!==false;
   $("overlayFlash").checked=currentConfig.overlayFlash!==false;
   $("overlayLogos").checked=currentConfig.overlayLogos!==false;
+  $("displayAllLiveEvents").value=currentConfig.displayAllLiveEvents===false?"false":"true";
+  favoriteTeamDraftMask=Number(currentConfig.favoriteTeams??0)>>>0;
   $("overlayGoalSeconds").value=currentConfig.overlayGoalSeconds||8;
   $("overlayFinalSeconds").value=currentConfig.overlayFinalSeconds||7;
   $("cycleGames").checked=!!currentConfig.cycleGames;
