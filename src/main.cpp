@@ -9,7 +9,11 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#ifdef GLOWDECK_WAVESHARE_S3
+#include "GameDayS3Hardware.h"
+#else
 #include <XPT2046_Touchscreen.h>
+#endif
 #include "WebUi.h"
 #include "TeamLogos.h"
 #include "GameDayDate.h"
@@ -39,7 +43,11 @@
 // No Wi-Fi or NHL network call is allowed to block boot.
 
 namespace {
+#ifdef GLOWDECK_WAVESHARE_S3
+constexpr uint8_t PIN_BL = 6; // Waveshare backlight; no direct PWM horn or CYD rear RGB.
+#else
 constexpr uint8_t PIN_BL = 21, PIN_AUDIO = 26, PIN_TOUCH_CS = 33, PIN_TOUCH_IRQ = 36;
+#endif
 constexpr uint8_t AUDIO_CH = 6;
 // GPIO map is tested independently of the NHL color palette. A CYD
 // hardware test found green/blue were reversed in the earlier firmware.
@@ -100,9 +108,14 @@ struct Settings {
 } cfg;
 
 Preferences prefs;
+#ifdef GLOWDECK_WAVESHARE_S3
+GameDayS3Display tft;
+GameDayS3Touch touch;
+#else
 TFT_eSPI tft;
 SPIClass touchSPI(VSPI);
 XPT2046_Touchscreen touch(PIN_TOUCH_CS, PIN_TOUCH_IRQ);
+#endif
 WebServer server(80);
 Game games[MAX_GAMES];
 struct GoalWatch {
@@ -386,6 +399,10 @@ uint32_t currentScoreboardPollIntervalMs() {
 }
 
 void setupRearLed() {
+#ifdef GLOWDECK_WAVESHARE_S3
+  // CYD rear RGB pins are NOT safe to drive on the Waveshare board.
+  return;
+#else
   // Active-LOW common-anode LED: PWM duty 255 is OFF.
   const uint8_t pins[3] = {PIN_RGB_R, PIN_RGB_G, PIN_RGB_B};
   const uint8_t channels[3] = {RGB_CH_R, RGB_CH_G, RGB_CH_B};
@@ -396,9 +413,14 @@ void setupRearLed() {
     ledcAttachPin(pins[i], channels[i]);
     ledcWrite(channels[i], 255);
   }
+#endif
 }
 
 void writeRearLed(uint32_t rgb, uint8_t intensity) {
+#ifdef GLOWDECK_WAVESHARE_S3
+  (void)rgb; (void)intensity;  // No onboard rear RGB LED.
+  return;
+#else
   const uint8_t colors[3] = {
     (uint8_t)((rgb >> 16) & 255), (uint8_t)((rgb >> 8) & 255),
     (uint8_t)(rgb & 255)
@@ -412,6 +434,7 @@ void writeRearLed(uint32_t rgb, uint8_t intensity) {
       ledcWrite(channels[i], duty);
     }
   }
+#endif
 }
 
 void triggerRearGoal(uint32_t rgb) {
@@ -1376,14 +1399,22 @@ void loadSettings() {
   cfg.brightness = constrain(prefs.getUChar("bright", 190), 1, 255);
   cfg.seconds = constrain(prefs.getUChar("seconds", 8), 2, 30);
   cfg.horn = prefs.getBool("horn", false);
+  #ifdef GLOWDECK_WAVESHARE_S3
+  cfg.rearLedEnabled = false; // S3 has no CYD-style built-in rear LED.
+#else
   cfg.rearLedEnabled = prefs.getBool("rearOn", true);
+#endif
   cfg.rearGoal = prefs.getBool("rearGoal", true);
   cfg.rearPowerPlay = prefs.getBool("rearPP", true);
   cfg.rearBrightness = prefs.getUChar("rearBri", 128);
   cfg.rearGoalSeconds = constrain(prefs.getUChar("rearDur", 6), 2, 12);
   for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
     cfg.followIds[i] = prefs.getUInt(("follow" + String(i)).c_str(), 0);
+  #ifdef GLOWDECK_WAVESHARE_S3
+  cfg.invertScreen = prefs.getBool("invert", false);
+#else
   cfg.invertScreen = prefs.getBool("invert", true);
+#endif
   cfg.cycleGames = prefs.getBool("carousel", true);
   cfg.showStandings = prefs.getBool("standPages", true);
   cfg.overlayEnabled = prefs.getBool("ovOn", true);
@@ -1517,7 +1548,9 @@ void tickHorn() {
                              elapsed < 490 ? 880 : elapsed < 580 ? 0 :
                              elapsed < 900 ? 784 : 0;
   if (nextFreq != hornFrequency) {
-    ledcWriteTone(AUDIO_CH, nextFreq);
+#ifndef GLOWDECK_WAVESHARE_S3
+    ledcWriteTone(AUDIO_CH, nextFreq); // CYD amp; S3 requires ES8311 codec support.
+#endif
     hornFrequency = nextFreq;
   }
   if (elapsed >= 900) hornPlaying = false;
@@ -3970,27 +4003,45 @@ void registerRoutes() {
 void setup() {
   Serial.begin(115200);
   delay(100);
-  Serial.println("\nGlowDeck GameDay v0.3.7 — CYD only");
+#ifdef GLOWDECK_WAVESHARE_S3
+  Serial.println("\\nGlowDeck GameDay — Waveshare ESP32-S3 3.5-inch (beta)");
+#else
+  Serial.println("\\nGlowDeck GameDay v0.3.7 — CYD only");
+#endif
   Serial.printf("Configured loopTask stack: %u bytes\n", ARDUINO_LOOP_STACK_SIZE);
   Serial.printf("Setup stack watermark: %u, freeHeap: %u\n",
                 (unsigned)uxTaskGetStackHighWaterMark(nullptr),
                 (unsigned)ESP.getFreeHeap());
 
+#ifdef GLOWDECK_WAVESHARE_S3
+  // Waveshare LCD reset is on TCA9554 I/O expander P1, not an ESP GPIO.
+  GameDayS3::beginHardware();
+#endif
   pinMode(PIN_BL, OUTPUT);
   digitalWrite(PIN_BL, HIGH);
+#ifdef GLOWDECK_WAVESHARE_S3
+  if (!tft.init()) Serial.println("[S3] Display init or PSRAM allocation failed");
+#else
   tft.init();
+#endif
   tft.setRotation(1);
   tft.fillScreen(BG);
   textAt("GlowDeck GameDay", 15, 30, WHITE, 4);
   textAt("Starting local controls...", 15, 68, MUTED);
 
+#ifdef GLOWDECK_WAVESHARE_S3
+  touch.begin(); // FT6336 on shared I2C: GPIO8 SDA / GPIO7 SCL.
+#else
   touchSPI.begin(25, 39, 32, PIN_TOUCH_CS);
   touch.begin(touchSPI);
   touch.setRotation(1);
+#endif
 
+#ifndef GLOWDECK_WAVESHARE_S3
   ledcSetup(AUDIO_CH, 2000, 8);
   ledcAttachPin(PIN_AUDIO, AUDIO_CH);
   ledcWriteTone(AUDIO_CH, 0);
+#endif
   setupRearLed();
 
   char suffix[7];
@@ -4012,6 +4063,9 @@ void setup() {
   registerRoutes();
   beginStation();
   draw();
+#ifdef GLOWDECK_WAVESHARE_S3
+  tft.present();
+#endif
   Serial.printf("AP: %s | Password: %s | Browse: http://192.168.4.1\n",
                 apSsid.c_str(), apPassword.c_str());
   Serial.printf("Web admin username: admin | password: %s (unless changed)\n",
@@ -4141,20 +4195,36 @@ void loop() {
       fetchDetailStats(games[currentIndex].id);
     }
   }
+#ifdef GLOWDECK_WAVESHARE_S3
+  bool displayChanged = false;
+#endif
   if (needsDraw) {
     partialLiveUpdate = false;
     draw();
+#ifdef GLOWDECK_WAVESHARE_S3
+    displayChanged = true;
+#endif
   } else if (overlayController.active()) {
     const uint32_t frameNow = millis();
     const uint32_t period = EventOverlay::isFlash(overlayController.current().kind)
                             ? 140UL : 240UL;
-    if (uint32_t(frameNow - overlayLastFrame) >= period)
+    if (uint32_t(frameNow - overlayLastFrame) >= period) {
       drawOverlayAnimation(frameNow);
+#ifdef GLOWDECK_WAVESHARE_S3
+      displayChanged = true;
+#endif
+    }
   } else if (partialLiveUpdate && screen == Screen::LIVE &&
              showingGamePage() && gameCount > 0) {
     partialLiveUpdate = false;
     drawLiveReadout(games[featuredIndex % gameCount]);
+#ifdef GLOWDECK_WAVESHARE_S3
+    displayChanged = true;
+#endif
   }
+#ifdef GLOWDECK_WAVESHARE_S3
+  if (displayChanged) tft.present();
+#endif
   // Update one optional pregame conference record after the current frame
   // is painted. This keeps the first season/standings view responsive.
   if (!overlayController.active()) tickPregameConferenceRecords();
