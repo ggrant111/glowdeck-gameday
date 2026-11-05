@@ -1911,14 +1911,16 @@ void fetchFollowedPowerPlays() {
     if(g.intermission)continue;
     const bool shown=screen==Screen::LIVE &&
         visible.kind==LiveCarousel::Kind::GAME && visible.index==i;
-    if(!rearFollows(g.id) && !shown)continue;
+    if(!rearFollows(g.id) && !shown && !cfg.displayAllLiveEvents)continue;
     NhlPenaltyLedger::Book *candidate=penaltyLedger(g.id);
     if(!candidate)continue;
     if(candidate->loaded &&
        uint32_t(millis()-candidate->checkedAt)<30000UL)continue;
     // The game visible on the CYD is highest priority for timely PP badges,
     // followed by the armed game and any additional followed games.
-    const uint8_t priority=shown?3:(g.id==selectedGameId?2:1);
+    const uint8_t priority=DisplayEventPolicy::favoriteMatch(
+        cfg.favoriteTeams,g.away.c_str(),g.home.c_str()) ? 5
+        : shown ? 4 : g.id==selectedGameId ? 3 : rearFollows(g.id) ? 2 : 1;
     if(priority>best) {
       best=priority;target=&g;book=candidate;
     }
@@ -2279,6 +2281,40 @@ void pollNhl() {
   // each observed score increment is recorded exactly once.
   detectRearGoalChanges();
   observePowerPlayEvents();
+  // League-wide display-only puck drop and final observations, keyed by NHL ID.
+  // An armed matchup retains its existing independent WLED transition engine.
+  // Never fabricate an event from the first snapshot after boot or rollover.
+  for (uint8_t i=0; i<gameCount; ++i) {
+    const Game &observed = games[i];
+    StateWatch &watch = stateWatch[i];
+    if (watch.id != observed.id) {
+      watch = StateWatch();
+      watch.id = observed.id;
+    }
+    if (observed.id && observed.id != selectedGameId &&
+        (cfg.displayAllLiveEvents || rearFollows(observed.id)) &&
+        watch.baseline) {
+      const bool ended = CelebrationEngine::isLive(watch.state) &&
+          CelebrationEngine::isFinal(observed.state.c_str());
+      const bool started = CelebrationEngine::isPregame(watch.state) &&
+          CelebrationEngine::isLive(observed.state.c_str());
+      if (started || ended) {
+        const String representative = ended
+          ? (observed.homeScore > observed.awayScore ? observed.home : observed.away)
+          : DisplayEventPolicy::isFavorite(cfg.favoriteTeams, observed.away.c_str())
+            ? observed.away : observed.home;
+        const GameEventLog::Type type = started
+          ? GameEventLog::Type::GAME_START : GameEventLog::Type::FINAL_WIN;
+        const EventOverlay::Kind kind = started
+          ? EventOverlay::Kind::GAME_START : EventOverlay::Kind::FINAL_WIN;
+        GameEventLog::Entry &log=addGameEvent(observed,type,representative,0);
+        log.rear=GameEventLog::Rear::NOT_SELECTED;
+        queueGameOverlay(&observed,kind,representative,log.sequence,true);
+      }
+    }
+    EventOverlay::copy(watch.state,observed.state.c_str(),sizeof(watch.state));
+    watch.baseline=observed.id!=0;
+  }
   Game *g = selectedGame();
   if (g) {
     // Trigger game-start and final outcomes only when a previously observed
