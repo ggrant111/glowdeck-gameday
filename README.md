@@ -1,4 +1,10 @@
-# GlowDeck GameDay — ESP32 CYD edition
+# GlowDeck GameDay — ESP32 CYD + Waveshare ESP32-S3
+
+**Hardware targets:** The original ESP32-2432S028R CYD and the new Waveshare **ESP32-S3-Touch-LCD-3.5** (ST7796 SPI / FT6336 capacitive touch, 320×480 native panel). Both compile from the same NHL/WLED engine using separate PlatformIO environments. Default remains `cyd`.
+
+**New Waveshare S3 first-install beta:** Select `s3_waveshare_35` in PlatformIO to build/upload. The S3 uses a 480×320 scaled landscape interface and retains web controls, NHL live events, follow stars, game carousel and WLED celebrations. Its built-in audio codec and external LED connections are **not enabled** yet; never connect a CYD rear LED to the S3 using the CYD pin map. **Do not use this on the `3.5B` QSPI variant.** See [Waveshare ESP32-S3 first-flash guide](docs/WAVESHARE_ESP32_S3_3P5.md).
+
+## Original ESP32-2432S028R CYD firmware
 
 **A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
 
