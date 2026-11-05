@@ -2475,12 +2475,14 @@ void drawTeamGradientBackground(const Game &g) {
       TeamGradient::colorAt(away, home, 304)));
 }
 
-void drawFollowStar(const Game &g) {
-  if (!gameIsLive(g)) return;
+// Consistent on-device star for scoreboard, detail page and game list.
+// Gold = followed (rear RGB + display); teal = armed WLED matchup.
+void drawFollowStar(const Game &g, int16_t x=148, int16_t y=15,
+                    uint16_t background=ARENA_PLATE) {
   const bool followed=rearFollows(g.id);
-  // Large 46x30 hit area in header; ten-point star, drawn without fonts/assets.
-  tft.fillRoundRect(125, 1, 47, 29, 6, followed ? 0x4220 : ARENA_PLATE);
-  const int16_t x=148, y=15;
+  const bool armed=g.id==selectedGameId;
+  const uint16_t plate=armed ? TEAL : followed ? 0x4220 : background;
+  tft.fillRoundRect(x-22,y-15,44,30,6,plate);
   const int8_t px[10]={0,3,10,5,6,0,-6,-5,-10,-3};
   const int8_t py[10]={-11,-3,-3,2,10,6,10,2,-3,-3};
   const uint16_t color=followed ? 0xFE60 : 0xCE79;
@@ -2489,6 +2491,12 @@ void drawFollowStar(const Game &g) {
     if (followed) tft.fillTriangle(x,y,x+px[i],y+py[i],
                                   x+px[j],y+py[j],color);
     tft.drawLine(x+px[i],y+py[i],x+px[j],y+py[j],color);
+  }
+  if (armed) {
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(WHITE,plate);
+    tft.drawString("A",x+15,y-9,1);
+    tft.setTextDatum(TL_DATUM);
   }
 }
 void drawScoreboardHeader(const Game &g) {
@@ -2951,7 +2959,12 @@ void draw() {
   tft.fillScreen(BG);
   tft.fillRect(0, 0, 320, 33, PANEL);
   tft.setTextColor(WHITE, PANEL);
-  tft.drawString("GLOWDECK / NHL", 8, 8, 2);
+  tft.drawString(screen == Screen::STATS ? "GAME STATS" : "GLOWDECK / NHL",
+                 8, 8, 2);
+  if (screen == Screen::STATS) {
+    const Game *g=detailGame();
+    if (g) drawFollowStar(*g,148,15,PANEL);
+  }
   tft.setTextDatum(TR_DATUM);
   tft.drawString(WiFi.status() == WL_CONNECTED ? "ONLINE" : "SETUP AP", 310, 9, 2);
   tft.setTextDatum(TL_DATUM);
@@ -3009,11 +3022,13 @@ void draw() {
       uint8_t i = gamePage * 3 + n;
       if (i >= gameCount) break;
       Game &g = games[i];
-      button(8, 66 + n * 40, 304, 36,
-             g.away + " " + String(g.awayScore) + "  @  " +
-             g.home + " " + String(g.homeScore) + "  " +
-             (g.id == selectedGameId ? "* ARMED" : g.state),
+      const int16_t y=66+n*40;
+      button(8,y,254,36,
+             g.away+" "+String(g.awayScore)+" @ "+
+             g.home+" "+String(g.homeScore)+" "+
+             (g.id == selectedGameId ? "ARM" : g.state),
              g.id == selectedGameId);
+      drawFollowStar(g,290,y+18,BG);
     }
     if (gameCount > 3) {
       tft.setTextDatum(TR_DATUM);
@@ -3112,11 +3127,10 @@ void handleTouch() {
       if (carouselPageCount() > 1 && abs(dx) > 48 && abs(dy) < 90) {
         advanceCarousel(dx < 0 ? 1 : -1);
       } else if (showingGamePage() && gameCount &&
-                 gestureStartY <= 34 && gestureStartX >= 124 &&
-                 gestureStartX <= 175) {
+                 GameFollowPolicy::headerStarTap(
+                     gestureStartX,gestureStartY,gestureEndX,gestureEndY)) {
         const Game &g=games[currentCarouselPage().index];
-        if (gameIsLive(g))
-          setGameFollow(g.id, !rearFollows(g.id));
+        setGameFollow(g.id,!rearFollows(g.id));
       } else if (gestureStartY <= 35 && gestureStartX >= 263) {
         screen = Screen::GAMES; // Menu is available on every slide.
       } else if (!showingSummaryPage() && carouselPageCount() > 1 &&
@@ -3173,7 +3187,11 @@ void handleTouch() {
   }
   const int x = constrain((int)map(p.x, cfg.touchX0, cfg.touchX1, 0, 319), 0, 319);
   const int y = constrain((int)map(p.y, cfg.touchY0, cfg.touchY1, 0, 239), 0, 239);
-  if (y >= 198) {
+  // Star in stats view follows without arming or changing the WLED matchup.
+  if (screen == Screen::STATS && GameFollowPolicy::headerStarTap(x,y,x,y)) {
+    const Game *g=detailGame();
+    if (g) setGameFollow(g->id,!rearFollows(g->id));
+  } else if (y >= 198) {
     if (screen == Screen::STATS) {
       if (x < 107) screen = Screen::LIVE;
       else if (x < 214) selectGame(detailGameId);
@@ -3189,7 +3207,12 @@ void handleTouch() {
       else if (x <= 170 && gamePage) --gamePage;
     } else if (y >= 66 && y < 186) {
       uint8_t index = gamePage * 3 + (y - 66) / 40;
-      if (index < gameCount) selectGame(games[index].id);
+      if (index < gameCount) {
+        const uint32_t id=games[index].id;
+        if (GameFollowPolicy::listStarTap(x))
+          setGameFollow(id,!rearFollows(id));
+        else selectGame(id);
+      }
     }
   } else if (screen == Screen::SETUP && y >= 160 && y < 193) {
     if (x < 107) {
