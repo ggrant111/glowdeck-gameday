@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string>
 #include "LiveCarousel.h"
-struct Game {uint32_t id; std::string state; std::string away="DAL",home="ANA";};
+struct Game {uint32_t id; std::string state,away,home; Game(uint32_t x,const char* st):id(x),state(st),away("DAL"),home("ANA"){} };
 using namespace LiveCarousel;
 int main(){
   Game g[] = {
