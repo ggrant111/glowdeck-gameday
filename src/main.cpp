@@ -3552,44 +3552,78 @@ void registerRoutes() {
   });
   server.on("/api/rear/test", HTTP_POST, []() {
     if (!authorized()) return;
-    StaticJsonDocument<160> doc;
+    StaticJsonDocument<192> doc;
     if (deserializeJson(doc, server.arg("plain"))) return errorResponse("Invalid JSON");
     const String mode = doc["mode"] | String("goal");
     const String side = doc["side"] | String("home");
-    if (side != "home" && side != "away") return errorResponse("Invalid team side");
-    if (mode != "goal" && mode != "powerplay" && mode != "off")
+    const String channel = doc["channel"] | String("");
+    const String requestedTeam = doc["team"] | String("");
+    if (mode != "goal" && mode != "powerplay" && mode != "off" && mode != "channel")
       return errorResponse("Invalid effect");
+    if (side != "home" && side != "away") return errorResponse("Invalid team side");
     if (mode != "off" && !cfg.rearLedEnabled)
       return errorResponse("Enable the rear LED and save settings first");
-    Game *g = selectedGame();
-    if (!g && gameCount) g = &games[featuredIndex % gameCount];
-    const uint32_t color = teamRgb(g ? (side == "home" ? g->home : g->away)
-                                      : String("UTA"));
-    const String selectedTeam = g ? (side == "home" ? g->home : g->away) : String("UTA");
+    if (mode == "off") {
+      stopRearLed();
+      GameEventLog::Entry &stopRow = addPreviewEvent(
+          nullptr, GameEventLog::Type::REAR_TEST, "");
+      stopRow.rear = GameEventLog::Rear::NA;
+      StaticJsonDocument<96> response;
+      response["ok"] = true;
+      response["mode"] = "off";
+      sendJson(response);
+      return;
+    }
+    uint32_t color = 0;
+    String team;
+    Game *g = nullptr;
+    if (mode == "channel") {
+      if (!TeamPalette::diagnosticRgb(channel.c_str(), color))
+        return errorResponse("Choose red, green, or blue for RGB diagnostics");
+      team = channel == "red" ? "RED" : channel == "green" ? "GRN" : "BLU";
+    } else {
+      g = testMatchup();
+      if (requestedTeam.length()) {
+        if (!TeamPalette::find(requestedTeam.c_str(), color))
+          return errorResponse("Unknown NHL team. Choose a team from the palette");
+        team = requestedTeam;
+      } else {
+        if (!g) return errorResponse("No game available; select an NHL team instead", 409);
+        team = side == "home" ? g->home : g->away;
+        if (!TeamPalette::find(team.c_str(), color))
+          return errorResponse("Matchup team is not in the NHL color palette");
+      }
+      if (mode == "goal" && !cfg.rearGoal)
+        return errorResponse("Enable rear goal flashes in CYD LED settings");
+    }
     GameEventLog::Entry &testRow = addPreviewEvent(
-        g, GameEventLog::Type::REAR_TEST, selectedTeam);
-    if (mode == "off") stopRearLed();
-    else if (mode == "goal") {
+        g, GameEventLog::Type::REAR_TEST, team);
+    testRow.rear = GameEventLog::Rear::ACTIVE;
+    if (mode == "channel") {
+      rearGoalDuration = 0;
       rearTestPpUntil = 0;
-      rearGoalColor = color;
-      rearGoalAt = millis();
-      rearGoalDuration = uint32_t(cfg.rearGoalSeconds) * 1000UL;
-      rearEvent = RearEvent::GOAL;
+      rearDiagnosticColor = color;
+      rearDiagnosticUntil = millis() + 3000UL;
+      rearEvent = RearEvent::DIAGNOSTIC;
+    } else if (mode == "goal") {
+      triggerRearGoal(color);
+      queueGameOverlay(requestedTeam.length() ? nullptr : g,
+                       EventOverlay::Kind::GOAL, team, testRow.sequence);
     } else {
       rearGoalDuration = 0;
+      rearDiagnosticUntil = 0;
       rearTestPpColor = color;
       rearTestPpUntil = millis() + 9000UL;
       rearEvent = RearEvent::IDLE;
+      queueGameOverlay(requestedTeam.length() ? nullptr : g,
+                       EventOverlay::Kind::POWER_PLAY_START, team, testRow.sequence);
     }
-    testRow.rear = mode == "off" ? GameEventLog::Rear::NA
-                               : GameEventLog::Rear::ACTIVE;
-    if (mode == "goal")
-      queueGameOverlay(g, EventOverlay::Kind::GOAL,
-                       selectedTeam, testRow.sequence);
-    else if (mode == "powerplay")
-      queueGameOverlay(g, EventOverlay::Kind::POWER_PLAY_START,
-                       selectedTeam, testRow.sequence);
-    StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
+    StaticJsonDocument<160> response;
+    response["ok"] = true;
+    response["mode"] = mode;
+    response["team"] = team;
+    response["hex"] = rgbHex(color);
+    sendJson(response);
   });
   server.on("/api/wled/preview", HTTP_POST, []() {
     if (!authorized()) return;
