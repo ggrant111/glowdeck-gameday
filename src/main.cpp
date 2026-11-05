@@ -28,6 +28,7 @@
 #include "NhlOnIce.h"
 #include "EventOverlay.h"
 #include "RearLedPattern.h"
+#include "TeamPalette.h"
 #include <time.h>
 
 // GlowDeck GameDay — ESP32-2432S028R (2.8" resistive CYD).
@@ -116,7 +117,7 @@ struct PowerPlaySnapshot {
 PowerPlaySnapshot ppCache[MAX_GAMES];
 NhlPenaltyLedger::Book penaltyLedgers[MAX_GAMES];
 uint32_t lastPenaltyLedgerAttempt = 0;
-enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY };
+enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY, DIAGNOSTIC };
 RearEvent rearEvent = RearEvent::IDLE;
 uint32_t rearGoalAt = 0, rearGoalColor = 0, rearGoalDuration = 0;
 uint32_t rearPulseStart = 0;
@@ -124,6 +125,7 @@ uint32_t rearLastTick = 0;
 uint8_t rearLastDuty[3] = {255, 255, 255};
 uint32_t lastPpFallback = 0;
 uint32_t rearTestPpUntil = 0, rearTestPpColor = 0;
+uint32_t rearDiagnosticUntil = 0, rearDiagnosticColor = 0;
 uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
 uint8_t carouselSlide = 0; // Independent of armed game and detail index.
 LiveCarousel::Plan carouselPlan; // 28 fixed entries, no heap or sprite buffer.
@@ -298,23 +300,13 @@ const char *modeName(uint8_t m) {
   return names[constrain(m, 0, 3)];
 }
 
-struct TeamColor { const char *abbr; uint32_t rgb; };
-const TeamColor teamColors[] = {
-  {"ANA", 0xF47A38}, {"BOS", 0xFFB81C}, {"BUF", 0x003087},
-  {"CGY", 0xC8102E}, {"CAR", 0xCC0000}, {"CHI", 0xCF0A2C},
-  {"COL", 0x6F263D}, {"CBJ", 0x002654}, {"DAL", 0x006847},
-  {"DET", 0xCE1126}, {"EDM", 0xFF4C00}, {"FLA", 0xC8102E},
-  {"LAK", 0xA2AAAD}, {"MIN", 0x154734}, {"MTL", 0xAF1E2D},
-  {"NJD", 0xCE1126}, {"NSH", 0xFFB81C}, {"NYI", 0x00539B},
-  {"NYR", 0x0038A8}, {"OTT", 0xC52032}, {"PHI", 0xF74902},
-  {"PIT", 0xFCB514}, {"SEA", 0x99D9D9}, {"SJS", 0x006D75},
-  {"STL", 0x002F87}, {"TBL", 0x002868}, {"TOR", 0x00205B},
-  {"UTA", 0x73B7D3}, {"VAN", 0x00843D}, {"VGK", 0xB4975A},
-  {"WSH", 0xC8102E}, {"WPG", 0x041E42}
-};
 uint32_t teamRgb(const String &code) {
-  for (const auto &t : teamColors) if (code == t.abbr) return t.rgb;
-  return 0x31837A;
+  return TeamPalette::rgb(code.c_str());
+}
+String rgbHex(uint32_t color) {
+  char hex[8];
+  snprintf(hex, sizeof(hex), "#%06lX", (unsigned long)(color & 0xFFFFFFUL));
+  return String(hex);
 }
 
 bool rearFollows(uint32_t gameId) {
@@ -375,6 +367,8 @@ void writeRearLed(uint32_t rgb, uint8_t intensity) {
 
 void triggerRearGoal(uint32_t rgb) {
   if (!cfg.rearLedEnabled || !cfg.rearGoal) return;
+  rearDiagnosticUntil = 0;
+  rearTestPpUntil = 0;
   rearGoalColor = rgb;
   rearGoalAt = millis();
   rearGoalDuration = uint32_t(cfg.rearGoalSeconds) * 1000UL;
@@ -385,6 +379,7 @@ void stopRearLed() {
   rearEvent = RearEvent::IDLE;
   rearGoalDuration = 0;
   rearTestPpUntil = 0;
+  rearDiagnosticUntil = 0;
   writeRearLed(0, 0);
 }
 
@@ -487,6 +482,13 @@ void tickRearLed() {
     return;
   }
   rearGoalDuration = 0;
+  // Solid diagnostics expose wiring/PWM channel swaps independently of teams.
+  if (rearDiagnosticUntil && int32_t(rearDiagnosticUntil - now) > 0) {
+    rearEvent = RearEvent::DIAGNOSTIC;
+    writeRearLed(rearDiagnosticColor, 255);
+    return;
+  }
+  rearDiagnosticUntil = 0;
   uint32_t ppColor = 0;
   const bool testPulse = rearTestPpUntil &&
       int32_t(rearTestPpUntil - now) > 0;
@@ -705,6 +707,11 @@ Game *selectedGame() {
   for (uint8_t i = 0; i < gameCount; ++i)
     if (games[i].id == selectedGameId) return &games[i];
   return nullptr;
+}
+// Same fallback for the preview API and web UI; never default both sides to UTA.
+Game *testMatchup() {
+  Game *g = selectedGame();
+  return g ? g : (gameCount ? &games[featuredIndex % gameCount] : nullptr);
 }
 
 // Timezone follows the user's chosen local zone, including daylight saving
@@ -3155,7 +3162,8 @@ void registerRoutes() {
     doc["overlayCount"] = overlayCount;
     doc["rearEnabled"] = cfg.rearLedEnabled;
     doc["rearEvent"] = rearEvent == RearEvent::GOAL ? "GOAL" :
-                       rearEvent == RearEvent::POWER_PLAY ? "POWER_PLAY" : "IDLE";
+                       rearEvent == RearEvent::POWER_PLAY ? "POWER_PLAY" :
+                       rearEvent == RearEvent::DIAGNOSTIC ? "RGB_DIAGNOSTIC" : "IDLE";
     JsonArray followed = doc.createNestedArray("followed");
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
       if (cfg.followIds[i]) followed.add(cfg.followIds[i]);
@@ -3528,6 +3536,19 @@ void registerRoutes() {
     response["active"] = overlayController.active();
     response["pending"] = overlayController.pending();
     sendJson(response);
+  });
+  // UI reads the same palette used for actual observed NHL goal colors.
+  server.on("/api/rear/palette", HTTP_GET, []() {
+    if (!authorized()) return;
+    DynamicJsonDocument doc(4096);
+    if (doc.capacity() < 4096) return errorResponse("Palette memory unavailable", 503);
+    JsonArray teams = doc.createNestedArray("teams");
+    for (uint8_t i = 0; i < TeamPalette::kCount; ++i) {
+      JsonObject t = teams.createNestedObject();
+      t["abbr"] = TeamPalette::kTeams[i].abbr;
+      t["hex"] = rgbHex(TeamPalette::kTeams[i].rgb);
+    }
+    sendJson(doc);
   });
   server.on("/api/rear/test", HTTP_POST, []() {
     if (!authorized()) return;
