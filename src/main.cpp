@@ -686,9 +686,9 @@ void detectRearGoalChanges() {
         }
         // Only followed/armed games interrupt the screen. Goal overlays
         // appear even when the WLED slots are empty or disabled.
-        if (followed)
+        if (followed || cfg.displayAllLiveEvents)
           queueGameOverlay(&g, EventOverlay::Kind::GOAL,
-                           scorer, entry.sequence);
+                           scorer, entry.sequence, true);
       }
     }
     watch.home = g.homeScore;
@@ -717,8 +717,9 @@ PowerPlayLogPolicy::Watch *getPowerPlayLogWatch(uint32_t id) {
 void observePowerPlayEvents() {
   for (uint8_t i = 0; i < gameCount; ++i) {
     const Game &g = games[i];
-    if (!rearFollows(g.id) ||
-        (g.state != "LIVE" && g.state != "CRIT")) continue;
+    const bool followed = rearFollows(g.id);
+    if (!followed && !cfg.displayAllLiveEvents) continue;
+    if (g.state != "LIVE" && g.state != "CRIT") continue;
     PowerPlayLogPolicy::Watch *watch = getPowerPlayLogWatch(g.id);
     if (!watch) continue;
     const bool reliable = g.ppDataKnown &&
@@ -729,19 +730,20 @@ void observePowerPlayEvents() {
       const String &team = change.ended == 1 ? g.home : g.away;
       const uint32_t seq = addGameEvent(
           g, GameEventLog::Type::POWER_PLAY_END, team, 0).sequence;
-      queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_END, team, seq);
+      queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_END, team, seq, true);
       if (g.id == selectedGameId) armedPpLogSeq = 0;
     }
     if (change.started) {
       const String &team = change.started == 1 ? g.home : g.away;
       GameEventLog::Entry &entry = addGameEvent(
           g, GameEventLog::Type::POWER_PLAY_START, team, 0);
-      entry.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
-          ? GameEventLog::Rear::NOT_ENABLED
-          : GameEventLog::Rear::SCHEDULED;
+      entry.rear = !followed ? GameEventLog::Rear::NOT_SELECTED
+          : (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
+            ? GameEventLog::Rear::NOT_ENABLED
+            : GameEventLog::Rear::SCHEDULED;
       if (g.id == selectedGameId) armedPpLogSeq = entry.sequence;
       queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_START,
-                       team, entry.sequence);
+                       team, entry.sequence, true);
     }
   }
 }
@@ -2271,7 +2273,7 @@ void pollNhl() {
           : transition == CelebrationEngine::Event::FINAL_WIN
             ? EventOverlay::Kind::FINAL_WIN
             : EventOverlay::Kind::FINAL_LOSS;
-      queueGameOverlay(g, kind, fav, logged.sequence);
+      queueGameOverlay(g, kind, fav, logged.sequence, true);
       const bool enabled = transition == CelebrationEngine::Event::GAME_START
                            ? cfg.wledGameStart : cfg.wledFinal;
       if (enabled) {
