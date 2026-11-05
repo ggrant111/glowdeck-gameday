@@ -326,12 +326,41 @@ String rgbHex(uint32_t color) {
   return String(hex);
 }
 
+void saveSettings(); // Star toggle persists game follows.
 bool rearFollows(uint32_t gameId) {
   if (!gameId) return false;
   if (gameId == selectedGameId) return true; // Armed WLED game also drives rear RGB.
   for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
     if (cfg.followIds[i] == gameId) return true;
   return false;
+}
+bool isScheduledGame(uint32_t id) {
+  if (!id) return false;
+  for (uint8_t i=0; i<gameCount; ++i)
+    if (games[i].id==id) return true;
+  return false;
+}
+// One policy serves the CYD's star button and the web dashboard.
+// The armed game remains followed automatically; at most four extras.
+enum class FollowResult : uint8_t { OK, INVALID, LIMIT, ARMED };
+FollowResult setGameFollow(uint32_t id, bool follow) {
+  if (!isScheduledGame(id)) return FollowResult::INVALID;
+  if (id == selectedGameId) return FollowResult::ARMED;
+  uint8_t existing = MAX_FOLLOWED_GAMES, empty = MAX_FOLLOWED_GAMES;
+  for (uint8_t i=0; i<MAX_FOLLOWED_GAMES; ++i) {
+    if (cfg.followIds[i]==id) existing=i;
+    if (cfg.followIds[i]==0 && empty==MAX_FOLLOWED_GAMES) empty=i;
+  }
+  if (follow) {
+    if (existing==MAX_FOLLOWED_GAMES) {
+      if (empty==MAX_FOLLOWED_GAMES) return FollowResult::LIMIT;
+      cfg.followIds[empty]=id;
+    }
+  } else if (existing!=MAX_FOLLOWED_GAMES) cfg.followIds[existing]=0;
+  saveSettings();
+  needsDraw = true;
+  partialLiveUpdate = false;
+  return FollowResult::OK;
 }
 
 // All games share the official date-scoped NHL scoreboard request. Prioritize
@@ -3526,30 +3555,22 @@ void registerRoutes() {
   server.on("/api/rear/follow", HTTP_POST, []() {
     if (!authorized()) return;
     StaticJsonDocument<160> doc;
-    if (deserializeJson(doc, server.arg("plain"))) return errorResponse("Invalid JSON");
+    if (deserializeJson(doc, server.arg("plain")))
+      return errorResponse("Invalid JSON");
     const uint32_t id = doc["id"] | 0U;
-    bool exists = false;
-    for (uint8_t i = 0; i < gameCount; ++i)
-      if (games[i].id == id) exists = true;
-    if (!id || !exists) return errorResponse("Choose a game on today's schedule", 404);
-    const bool followed = doc["follow"] | false;
-    if (followed) {
-      bool present = false;
-      for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
-        if (cfg.followIds[i] == id) present = true;
-      if (!present) {
-        bool added = false;
-        for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) {
-          if (cfg.followIds[i] == 0) { cfg.followIds[i] = id; added = true; break; }
-        }
-        if (!added) return errorResponse("Up to 4 additional followed games", 409);
-      }
-    } else {
-      for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
-        if (cfg.followIds[i] == id) cfg.followIds[i] = 0;
-    }
-    saveSettings();
-    StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
+    const bool follow = doc["follow"] | false;
+    const FollowResult status=setGameFollow(id,follow);
+    if (status==FollowResult::INVALID)
+      return errorResponse("Choose a game on today's schedule",404);
+    if (status==FollowResult::LIMIT)
+      return errorResponse("Maximum 4 additional followed games",409);
+    if (status==FollowResult::ARMED && !follow)
+      return errorResponse("Armed game is always followed",409);
+    StaticJsonDocument<128> result;
+    result["ok"]=true;
+    result["followed"]=rearFollows(id);
+    result["armed"]=id==selectedGameId;
+    sendJson(result);
   });
   // On-device visual test: intentionally does not trigger WLED or rear LED,
   // so it remains usable even before adding external LED controllers.
