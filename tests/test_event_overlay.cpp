@@ -36,5 +36,34 @@ int main() {
   for(int i=1;i<=4;i++) { Item x=final;x.eventSequence=30+i;x.gameId=100+i;c.push(x,100); }
   assert(c.pending()<=kQueueSize);
   c.clear();assert(!c.active()&&!c.pending());
-  puts("PASS: overlays priority, preemption, queue bounds, timing, dedupe and return");
+  // Favorite PP beats ordinary goal; ordinary notifications do not pause/replay.
+  Item ordinary=goal;ordinary.tier=0;ordinary.duration=3000;ordinary.gameId=800;
+  assert(c.push(ordinary,0));
+  Item favorite=pp;favorite.tier=2;favorite.gameId=900;
+  assert(rank(favorite)>rank(ordinary));
+  assert(c.push(favorite,200) && c.current().gameId==900);
+  assert(c.pending()==0); // No stale ordinary event replay.
+  // Keep at most four pending entries; evict low-tier PP for favorite goals.
+  c.clear();
+  favorite.kind=Kind::POWER_PLAY_START;favorite.duration=3500;
+  assert(c.push(favorite,1000));
+  for(int i=0;i<kQueueSize;i++){
+    Item x=ordinary;x.gameId=300+i;x.eventSequence=20+i;
+    assert(c.push(x,1100+i));
+  }
+  assert(c.pending()==kQueueSize);
+  Item priorityGoal=goal;priorityGoal.tier=2;priorityGoal.gameId=999;
+  assert(c.push(priorityGoal,1300));
+  assert(c.current().gameId==999);
+  // Stale nonfavorite goals expire from the queue after 15 seconds.
+  c.clear();
+  assert(c.push(favorite,100));
+  assert(c.push(ordinary,200));
+  assert(c.tick(4000)); assert(!c.active());
+  // A newly queued stale event should never appear.
+  c.clear();
+  assert(c.push(favorite,2000));
+  assert(c.push(ordinary,2001));
+  assert(c.tick(40000) && !c.active());
+  puts("PASS: overlay favorites, stale suppression, queue bounds, timing and dedupe");
 }
