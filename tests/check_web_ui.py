@@ -69,4 +69,18 @@ for method in (
     assert method in source, f"Missing dashboard/favorite interaction: {method}"
 assert 'class="section-intro"' in source, "Missing section hierarchy"
 assert 'aria-label="GameDay navigation"' in source, "Missing accessible nav"
+# CYD touch interactions on scoreboard, stats screen and game list must
+# all use the same policy as the web star, without changing WLED arming.
+firmware = Path("src/main.cpp").read_text(encoding="utf-8")
+for code in (
+    "constexpr uint8_t MAX_FOLLOWED_GAMES = MAX_GAMES",
+    "GameFollowPolicy::headerStarTap(",
+    "GameFollowPolicy::listStarTap(x)",
+    "drawFollowStar(*g,148,15,PANEL)",
+    "drawFollowStar(g,290,y+18,BG)",
+    "prefs.putUInt((\"follow\" + String(changedSlot)).c_str()",
+    "doc[\"followCapacity\"] = MAX_FOLLOWED_GAMES",
+):
+    assert code in firmware, f"Missing CYD follow integration: {code}"
+assert "four more games" not in source.lower()
 print("PASS: WLED celebration dashboard JavaScript and control bindings")

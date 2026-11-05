@@ -183,7 +183,7 @@ header{padding:19px 17px}
 </div>
 </section>
 <section id="games" class="panel">
-<div class="section-intro"><div class="eyebrow">NHL LIVE BOARD</div><h2>Every matchup, one place</h2><p>Tap the star to follow a game for rear RGB and screen celebrations. Use Arm to choose the one matchup that also controls WLED.</p></div>
+<div class="section-intro"><div class="eyebrow">NHL LIVE BOARD</div><h2>Every matchup, one place</h2><p>Tap ☆ to follow any game for rear RGB and screen alerts, even before puck drop. Follow the entire daily schedule if you like. Arm chooses which single game controls WLED.</p></div>
 <div class="card"><div class="row">
 <div><h2>Today's games</h2><p class="small">Favorite-team games rise to the top of the live carousel.</p></div>
 <div><label for="gameSearch">Search teams</label><input id="gameSearch" type="search" placeholder="Search DAL, Utah, Boston…" autocomplete="off"></div>
@@ -336,10 +336,10 @@ header{padding:19px 17px}
 <input id="rearGoalSeconds" type="number" min="2" max="12" step="1" value="6"></div>
 </div>
 <div class="actions"><button id="saveRear" class="primary">Save rear LED settings</button></div>
-<div class="hint">The armed matchup always drives the rear LED while enabled. Follow up to four more games below. The rear LED is completely independent from WLED segment control.</div>
+<div class="hint">The armed game is automatically followed. You can also star every other game on today's NHL schedule (up to 20 total games). Follow settings reset when the NHL date changes. Starring does not arm WLED.</div>
 </div>
-<div class="card"><h2>Follow games for rear LED</h2>
-<p>Check games to monitor even while the screen carousel displays a different matchup. This selection lasts for today's schedule.</p>
+<div class="card"><h2>Follow today's NHL games</h2>
+<p>Tap ★ on the CYD scoreboard, game details, or the device's game list—or select games below. Followed matchups trigger their rear RGB and priority screen celebrations independently of WLED.</p>
 <div id="rearFollowedList"></div>
 </div>
 <div class="card"><h2>Verify matchup colors</h2>
@@ -543,11 +543,12 @@ function renderStatus(){
     .map((v,i)=>v?"WLED "+(i+1)+": "+v:"").filter(Boolean).join(" · ")
     ||"No recent WLED celebration activity";
   $("rearEvent").textContent=(s.rearEvent||"IDLE").replaceAll("_"," ");
-  $("rearFollowCount").textContent=(s.followed||[]).length+
-    (s.selectedId?" additional + armed":" additional");
+  $("rearFollowCount").textContent=((s.followed||[]).filter(id=>id!==s.selectedId).length+
+    (s.selectedId?1:0))+" / "+(s.followCapacity||20)+" daily games";
   $("dashLiveCount").textContent=String(s.liveGameCount??0);
   $("dashFavoriteCount").textContent=String(popcount(s.favoriteTeams??0));
-  $("dashFollowCount").textContent=String((s.followed||[]).length+(s.selectedId?1:0));
+  $("dashFollowCount").textContent=String(
+    (s.followed||[]).filter(id=>id!==s.selectedId).length+(s.selectedId?1:0));
   $("dashDisplayMode").textContent=s.displayAllLiveEvents?"League-wide":"Followed only";
   $("backgroundSkipped").textContent=String(s.backgroundEventsSkipped??0);
   $("overlayDropped").textContent=String(s.overlayEventsDropped??0);

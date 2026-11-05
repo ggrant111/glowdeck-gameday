@@ -28,6 +28,7 @@
 #include "NhlOnIce.h"
 #include "EventOverlay.h"
 #include "DisplayEventPolicy.h"
+#include "GameFollowPolicy.h"
 #include "RearLedPattern.h"
 #include "TeamPalette.h"
 #include <time.h>
@@ -46,8 +47,8 @@ constexpr uint8_t PIN_RGB_R = RearLedPattern::kRedPin,
                   PIN_RGB_G = RearLedPattern::kGreenPin,
                   PIN_RGB_B = RearLedPattern::kBluePin;
 constexpr uint8_t RGB_CH_R = 2, RGB_CH_G = 3, RGB_CH_B = 4;
-constexpr uint8_t MAX_FOLLOWED_GAMES = 4;
-constexpr uint8_t MAX_GAMES = 20, MAX_WLED = 4;
+constexpr uint8_t MAX_GAMES = GameFollowPolicy::kMaxDailyGames, MAX_WLED = 4;
+constexpr uint8_t MAX_FOLLOWED_GAMES = MAX_GAMES; // Can follow every game.
 constexpr uint16_t BG = 0x0841, PANEL = 0x10A2, WHITE = 0xFFFF;
 constexpr uint16_t MUTED = 0x9CF3, TEAL = 0x340F, ORANGE = 0xFD20;
 
@@ -83,7 +84,7 @@ struct Settings {
   bool rearPowerPlay = true;
   uint8_t rearBrightness = 128;
   uint8_t rearGoalSeconds = 6;
-  uint32_t followIds[MAX_FOLLOWED_GAMES] = {0, 0, 0, 0};
+  uint32_t followIds[MAX_FOLLOWED_GAMES] = {};
   bool invertScreen = true; // This CYD panel needs INVON to render dark colors correctly.
   bool cycleGames = true;
   bool showStandings = true; // Add 4 conference + 4 division table slides.
@@ -340,27 +341,26 @@ bool isScheduledGame(uint32_t id) {
     if (games[i].id==id) return true;
   return false;
 }
-// One policy serves the CYD's star button and the web dashboard.
-// The armed game remains followed automatically; at most four extras.
-enum class FollowResult : uint8_t { OK, INVALID, LIMIT, ARMED };
+// One follow policy serves CYD game carousel, detail view, game list and web.
+// All 20 daily games may be followed; only the armed game controls WLED.
+using FollowResult = GameFollowPolicy::Result;
 FollowResult setGameFollow(uint32_t id, bool follow) {
-  if (!isScheduledGame(id)) return FollowResult::INVALID;
-  if (id == selectedGameId) return FollowResult::ARMED;
-  uint8_t existing = MAX_FOLLOWED_GAMES, empty = MAX_FOLLOWED_GAMES;
-  for (uint8_t i=0; i<MAX_FOLLOWED_GAMES; ++i) {
-    if (cfg.followIds[i]==id) existing=i;
-    if (cfg.followIds[i]==0 && empty==MAX_FOLLOWED_GAMES) empty=i;
+  uint8_t changedSlot = 255;
+  const FollowResult result = GameFollowPolicy::change(
+      cfg.followIds, MAX_FOLLOWED_GAMES, id, isScheduledGame(id),
+      selectedGameId, follow, changedSlot);
+  if (result == FollowResult::ADDED || result == FollowResult::REMOVED) {
+    // Only write the changed NVS slot to avoid re-saving all preferences
+    // on every touchscreen star tap.
+    prefs.putUInt(("follow" + String(changedSlot)).c_str(),
+                  cfg.followIds[changedSlot]);
+    Serial.printf("[FOLLOW] game=%lu %s (%u max)\n",
+                  (unsigned long)id, follow ? "added" : "removed",
+                  MAX_FOLLOWED_GAMES);
+    needsDraw = true;
+    partialLiveUpdate = false;
   }
-  if (follow) {
-    if (existing==MAX_FOLLOWED_GAMES) {
-      if (empty==MAX_FOLLOWED_GAMES) return FollowResult::LIMIT;
-      cfg.followIds[empty]=id;
-    }
-  } else if (existing!=MAX_FOLLOWED_GAMES) cfg.followIds[existing]=0;
-  saveSettings();
-  needsDraw = true;
-  partialLiveUpdate = false;
-  return FollowResult::OK;
+  return result;
 }
 
 // All games share the official date-scoped NHL scoreboard request. Prioritize
@@ -2475,12 +2475,14 @@ void drawTeamGradientBackground(const Game &g) {
       TeamGradient::colorAt(away, home, 304)));
 }
 
-void drawFollowStar(const Game &g) {
-  if (!gameIsLive(g)) return;
+// Consistent on-device star for scoreboard, detail page and game list.
+// Gold = followed (rear RGB + display); teal = armed WLED matchup.
+void drawFollowStar(const Game &g, int16_t x=148, int16_t y=15,
+                    uint16_t background=ARENA_PLATE) {
   const bool followed=rearFollows(g.id);
-  // Large 46x30 hit area in header; ten-point star, drawn without fonts/assets.
-  tft.fillRoundRect(125, 1, 47, 29, 6, followed ? 0x4220 : ARENA_PLATE);
-  const int16_t x=148, y=15;
+  const bool armed=g.id==selectedGameId;
+  const uint16_t plate=armed ? TEAL : followed ? 0x4220 : background;
+  tft.fillRoundRect(x-22,y-15,44,30,6,plate);
   const int8_t px[10]={0,3,10,5,6,0,-6,-5,-10,-3};
   const int8_t py[10]={-11,-3,-3,2,10,6,10,2,-3,-3};
   const uint16_t color=followed ? 0xFE60 : 0xCE79;
@@ -2489,6 +2491,12 @@ void drawFollowStar(const Game &g) {
     if (followed) tft.fillTriangle(x,y,x+px[i],y+py[i],
                                   x+px[j],y+py[j],color);
     tft.drawLine(x+px[i],y+py[i],x+px[j],y+py[j],color);
+  }
+  if (armed) {
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(WHITE,plate);
+    tft.drawString("A",x+15,y-9,1);
+    tft.setTextDatum(TL_DATUM);
   }
 }
 void drawScoreboardHeader(const Game &g) {
@@ -2951,7 +2959,12 @@ void draw() {
   tft.fillScreen(BG);
   tft.fillRect(0, 0, 320, 33, PANEL);
   tft.setTextColor(WHITE, PANEL);
-  tft.drawString("GLOWDECK / NHL", 8, 8, 2);
+  tft.drawString(screen == Screen::STATS ? "GAME STATS" : "GLOWDECK / NHL",
+                 8, 8, 2);
+  if (screen == Screen::STATS) {
+    const Game *g=detailGame();
+    if (g) drawFollowStar(*g,148,15,PANEL);
+  }
   tft.setTextDatum(TR_DATUM);
   tft.drawString(WiFi.status() == WL_CONNECTED ? "ONLINE" : "SETUP AP", 310, 9, 2);
   tft.setTextDatum(TL_DATUM);
@@ -3009,11 +3022,13 @@ void draw() {
       uint8_t i = gamePage * 3 + n;
       if (i >= gameCount) break;
       Game &g = games[i];
-      button(8, 66 + n * 40, 304, 36,
-             g.away + " " + String(g.awayScore) + "  @  " +
-             g.home + " " + String(g.homeScore) + "  " +
-             (g.id == selectedGameId ? "* ARMED" : g.state),
+      const int16_t y=66+n*40;
+      button(8,y,254,36,
+             g.away+" "+String(g.awayScore)+" @ "+
+             g.home+" "+String(g.homeScore)+" "+
+             (g.id == selectedGameId ? "ARM" : g.state),
              g.id == selectedGameId);
+      drawFollowStar(g,290,y+18,BG);
     }
     if (gameCount > 3) {
       tft.setTextDatum(TR_DATUM);
@@ -3112,11 +3127,10 @@ void handleTouch() {
       if (carouselPageCount() > 1 && abs(dx) > 48 && abs(dy) < 90) {
         advanceCarousel(dx < 0 ? 1 : -1);
       } else if (showingGamePage() && gameCount &&
-                 gestureStartY <= 34 && gestureStartX >= 124 &&
-                 gestureStartX <= 175) {
+                 GameFollowPolicy::headerStarTap(
+                     gestureStartX,gestureStartY,gestureEndX,gestureEndY)) {
         const Game &g=games[currentCarouselPage().index];
-        if (gameIsLive(g))
-          setGameFollow(g.id, !rearFollows(g.id));
+        setGameFollow(g.id,!rearFollows(g.id));
       } else if (gestureStartY <= 35 && gestureStartX >= 263) {
         screen = Screen::GAMES; // Menu is available on every slide.
       } else if (!showingSummaryPage() && carouselPageCount() > 1 &&
@@ -3173,7 +3187,11 @@ void handleTouch() {
   }
   const int x = constrain((int)map(p.x, cfg.touchX0, cfg.touchX1, 0, 319), 0, 319);
   const int y = constrain((int)map(p.y, cfg.touchY0, cfg.touchY1, 0, 239), 0, 239);
-  if (y >= 198) {
+  // Star in stats view follows without arming or changing the WLED matchup.
+  if (screen == Screen::STATS && GameFollowPolicy::headerStarTap(x,y,x,y)) {
+    const Game *g=detailGame();
+    if (g) setGameFollow(g->id,!rearFollows(g->id));
+  } else if (y >= 198) {
     if (screen == Screen::STATS) {
       if (x < 107) screen = Screen::LIVE;
       else if (x < 214) selectGame(detailGameId);
@@ -3189,7 +3207,12 @@ void handleTouch() {
       else if (x <= 170 && gamePage) --gamePage;
     } else if (y >= 66 && y < 186) {
       uint8_t index = gamePage * 3 + (y - 66) / 40;
-      if (index < gameCount) selectGame(games[index].id);
+      if (index < gameCount) {
+        const uint32_t id=games[index].id;
+        if (GameFollowPolicy::listStarTap(x))
+          setGameFollow(id,!rearFollows(id));
+        else selectGame(id);
+      }
     }
   } else if (screen == Screen::SETUP && y >= 160 && y < 193) {
     if (x < 107) {
@@ -3277,9 +3300,9 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     // New slide/standings metadata should not enlarge the loopTask stack.
-    DynamicJsonDocument doc(3584);
-    if (doc.capacity() < 3584) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.4.0";
+    DynamicJsonDocument doc(4096);
+    if (doc.capacity() < 4096) return errorResponse("Status memory unavailable", 503);
+    doc["version"] = "0.4.1";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -3309,6 +3332,7 @@ void registerRoutes() {
     JsonArray followed = doc.createNestedArray("followed");
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
       if (cfg.followIds[i]) followed.add(cfg.followIds[i]);
+    doc["followCapacity"] = MAX_FOLLOWED_GAMES;
     doc["scoreDate"] = scoreboardDate;
     doc["today"] = targetScoreboardDate;
     doc["clockSynced"] = deviceLocalDate().length() == 10;
@@ -3356,6 +3380,7 @@ void registerRoutes() {
     doc["freeHeap"] = ESP.getFreeHeap();
     doc["stackLowWater"] = uxTaskGetStackHighWaterMark(nullptr);
     doc["uptimeSeconds"] = millis() / 1000UL;
+    if (doc.overflowed()) return errorResponse("Status response too large", 503);
     sendJson(doc);
   });
   server.on("/api/games", HTTP_GET, []() {
@@ -3649,8 +3674,8 @@ void registerRoutes() {
     const FollowResult status=setGameFollow(id,follow);
     if (status==FollowResult::INVALID)
       return errorResponse("Choose a game on today's schedule",404);
-    if (status==FollowResult::LIMIT)
-      return errorResponse("Maximum 4 additional followed games",409);
+    if (status==FollowResult::FULL)
+      return errorResponse("Daily follow list is full (20 games)",409);
     if (status==FollowResult::ARMED && !follow)
       return errorResponse("Armed game is always followed",409);
     StaticJsonDocument<128> result;

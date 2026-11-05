@@ -65,11 +65,13 @@ A successful PlatformIO build does not replace physical touchscreen and live NHL
   select any NHL teams, then click **Save favorite teams**. Favorites persist in
   NVS through overnight date rollover. Their live games lead the carousel and
   their overlays outrank other games, whether they are armed or not.
-- **Follow game (star):** On a live CYD game slide, tap the star in the top
-  header, or click the matching star in **Live games** on the web dashboard.
+- **Follow game (star):** On any CYD game slide, tap the star in the top
+  header, on a game-details screen or on the CYD game list; the web dashboard
+  offers the same star in **Live games**.
   A filled amber star means the game is followed. Followed games get stronger
   screen alerts and onboard rear RGB goal/PP behavior. This is limited to
-  **four additional** games plus the armed matchup; the follow list resets
+  **20 games total** across the daily NHL schedule, including the armed
+  matchup; the follow list resets
   daily. The selected/armed game always stays followed.
 - **WLED remains armed-only:** Merely starring a game or choosing a permanent
   favorite team **does not arm a new WLED game**. WLED celebrations and horn
@@ -129,3 +131,15 @@ remains the shared source for CYD and web star actions.
    display behavior. Restart and verify all persistent settings.
 6. Check actual RGB hardware colors and WLED restore behavior. CI cannot
    confirm physical lights or live API timing.
+
+## v0.4.1 — Unlimited within the daily NHL slate
+
+The follow selection is no longer limited to four extra games. Up to the
+full firmware capacity of 20 game IDs can be marked, and all 20 statuses
+fit in the `/api/status` followed array. The current armed game is
+automatically followed. Touch stars on the carousel's full-screen matchup,
+the game-details header, or right side of a row in the CYD game list.
+Tapping a row outside the star retains its existing stats/arm behavior.
+Starred games gain rear RGB and higher-priority screen alerts, but WLED
+celebrations still only come from the armed game. Native tests assert
+20-slot add/removal/deduplication and header/list star touch hit areas.
