@@ -3139,7 +3139,7 @@ void registerRoutes() {
     // New slide/standings metadata should not enlarge the loopTask stack.
     DynamicJsonDocument doc(3584);
     if (doc.capacity() < 3584) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.7";
+    doc["version"] = "0.3.8";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
