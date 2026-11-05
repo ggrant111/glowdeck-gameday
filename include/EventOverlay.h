@@ -52,6 +52,8 @@ struct Item {
   uint32_t color=0;
   uint32_t eventSequence=0;
   uint32_t duration=0;
+  uint32_t enqueuedAt=0;
+  uint8_t tier=1; // 0=other live, 1=followed, 2=favorite
   char team[4]={};
   char away[4]={};
   char home[4]={};
@@ -65,6 +67,9 @@ inline void copy(char* dst, const char* src, uint8_t n) {
   dst[i]=0;
 }
 constexpr uint8_t kQueueSize=4;
+inline uint8_t rank(const Item &item) {
+  return uint8_t(item.tier*8U + priority(item.kind));
+}
 class Controller {
  public:
   bool active() const { return current_.kind!=Kind::NONE; }
@@ -84,18 +89,23 @@ class Controller {
     if(active() && same(current_,item)) return false;
     for(uint8_t i=0;i<count_;++i)
       if(same(queue_[i],item)) return false;
-    if(!active() || priority(item.kind)>priority(current_.kind)) {
-      if(active() && count_<kQueueSize && remaining(now)>350) {
+    Item pending=item;
+    pending.enqueuedAt=now;
+    if(!active() || rank(item)>rank(current_)) {
+      // Don't replay low-priority background notices after an interruption.
+      if(active() && current_.tier>0 && count_<kQueueSize &&
+         remaining(now)>350) {
         Item paused=current_;
         paused.duration=remaining(now);
+        paused.enqueuedAt=now;
         insert(paused);
       }
-      current_=item;
+      current_=pending;
       startedAt_=now;
       dirty_=true;
       return true;
     }
-    return insert(item);
+    return insert(pending);
   }
   // Return true if the visible overlay changed. The caller should repaint
   // the current item or return to the exact underlying screen.
@@ -117,12 +127,12 @@ class Controller {
   bool insert(const Item& item) {
     if(count_>=kQueueSize) {
       // Never evict a goal or final for a lower priority PP event.
-      if(priority(item.kind)<=priority(queue_[count_-1].kind))
+      if(rank(item)<=rank(queue_[count_-1]))
         return false;
       --count_;
     }
     uint8_t at=count_;
-    while(at && priority(item.kind)>priority(queue_[at-1].kind)) {
+    while(at && rank(item)>rank(queue_[at-1])) {
       queue_[at]=queue_[at-1];--at;
     }
     queue_[at]=item;
@@ -130,12 +140,19 @@ class Controller {
     return true;
   }
   void next(uint32_t now) {
-    if(count_) {
-      current_=queue_[0];
+    current_=Item();
+    // Never show an unrelated game notification more than 15s after
+    // it was observed; favor timely scores over replaying a long backlog.
+    while(count_) {
+      Item candidate=queue_[0];
       for(uint8_t i=1;i<count_;++i) queue_[i-1]=queue_[i];
       --count_;
+      if(candidate.tier==0 && uint32_t(now-candidate.enqueuedAt)>15000UL)
+        continue;
+      current_=candidate;
       startedAt_=now;
-    } else current_=Item();
+      break;
+    }
     dirty_=true;
   }
   Item current_={};
