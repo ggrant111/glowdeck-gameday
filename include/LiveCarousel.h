@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <string.h>
+#include "DisplayEventPolicy.h"
 
 // Zero-heap NHL carousel policy for ESP32-2432S028R.
 // During an active NHL slate: detailed LIVE/CRIT games first, followed by
@@ -33,7 +34,8 @@ inline bool isLive(const char *state) {
   return state && (!strcmp(state,"LIVE") || !strcmp(state,"CRIT"));
 }
 template <typename Game>
-inline Plan build(const Game *games, uint8_t gameCount, bool showStandings) {
+inline Plan build(const Game *games, uint8_t gameCount, bool showStandings,
+                  uint32_t favoriteTeams=0) {
   Plan plan;
   if (gameCount > kMaxGames) gameCount = kMaxGames;
   for (uint8_t i=0; i<gameCount; ++i)
@@ -53,11 +55,18 @@ inline Plan build(const Game *games, uint8_t gameCount, bool showStandings) {
       }
     return plan;
   }
-  for (uint8_t i=0; i<gameCount; ++i) {
-    if (!isLive(games[i].state.c_str())) continue;
-    Page &p = plan.pages[plan.count++];
-    p.kind = Kind::GAME;
-    p.index = i;
+  // Favorite live matchups appear first but other live games continue rotating.
+  // Favorites are visual-only: they never arm WLED or rear RGB outputs.
+  for (uint8_t tier=0; tier<2; ++tier) {
+    for (uint8_t i=0; i<gameCount; ++i) {
+      if (!isLive(games[i].state.c_str())) continue;
+      const bool fav=DisplayEventPolicy::favoriteMatch(
+          favoriteTeams,games[i].away.c_str(),games[i].home.c_str());
+      if (fav != (tier==0)) continue;
+      Page &p=plan.pages[plan.count++];
+      p.kind=Kind::GAME;
+      p.index=i;
+    }
   }
   // Append one (or more) 4-game summaries. All remaining FUT/PRE/OFF/FINAL
   // games are displayed, retaining the NHL's date-feed game order.
