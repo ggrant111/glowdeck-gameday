@@ -3632,6 +3632,8 @@ void registerRoutes() {
       return errorResponse("Invalid preview JSON");
     const String type = request["event"] | String("goal");
     const String side = request["side"] | String("home");
+    const String requestedTeam = request["team"] | String("");
+    const bool combined = request["combined"] | false;
     if (side != "home" && side != "away")
       return errorResponse("Invalid team side");
     CelebrationEngine::Event event = CelebrationEngine::Event::NONE;
@@ -3641,11 +3643,18 @@ void registerRoutes() {
     else if (type == "win") event = CelebrationEngine::Event::FINAL_WIN;
     else if (type == "loss") event = CelebrationEngine::Event::FINAL_LOSS;
     else if (type != "stop") return errorResponse("Invalid celebration type");
-    Game *previewGame = selectedGame();
-    if (!previewGame && gameCount) previewGame = &games[featuredIndex % gameCount];
-    const String previewTeam = previewGame
+    Game *previewGame = testMatchup();
+    String previewTeam = previewGame
         ? (side == "home" ? previewGame->home : previewGame->away)
         : String("UTA");
+    uint32_t color = teamRgb(previewTeam);
+    if (event != CelebrationEngine::Event::NONE && requestedTeam.length()) {
+      if (!TeamPalette::find(requestedTeam.c_str(), color))
+        return errorResponse("Unknown NHL team. Choose a team from the palette");
+      previewTeam = requestedTeam;
+    } else if (combined && event != CelebrationEngine::Event::NONE && !previewGame) {
+      return errorResponse("No game available; choose a team for full preview", 409);
+    }
     const GameEventLog::Type previewType =
         type == "goal" ? GameEventLog::Type::PREVIEW_GOAL :
         type == "pp" ? GameEventLog::Type::PREVIEW_POWER_PLAY :
@@ -3654,23 +3663,45 @@ void registerRoutes() {
         type == "loss" ? GameEventLog::Type::PREVIEW_LOSS :
                          GameEventLog::Type::PREVIEW_STOP;
     GameEventLog::Entry &previewRow =
-        addPreviewEvent(previewGame, previewType, previewTeam);
+        addPreviewEvent(requestedTeam.length() ? nullptr : previewGame,
+                        previewType, previewTeam);
+    bool wledStarted = false, rearStarted = false, overlayStarted = false;
     if (event == CelebrationEngine::Event::NONE) {
       wledSuppressPpUntil = millis() + 30000UL;
       scheduleWledRestoreAll();
       tickRestores();
+      if (combined) {
+        stopRearLed();
+        overlayController.clear();
+        overlayLastFrame = 0;
+        needsDraw = true;
+      }
     } else {
-      const uint32_t color = teamRgb(previewTeam);
       wledSuppressPpUntil = 0;
-      if (startWledEvent(event, color, previewRow.sequence)) {
-        if (event == CelebrationEngine::Event::POWER_PLAY)
-          wledPpTestUntil = millis() + 9000UL;
-        else
-          wledPpTestUntil = 0;
+      wledStarted = startWledEvent(event, color, previewRow.sequence);
+      if (wledStarted && event == CelebrationEngine::Event::POWER_PLAY)
+        wledPpTestUntil = millis() + 9000UL;
+      else
+        wledPpTestUntil = 0;
+      // Start the rear flash after potentially slow WLED snapshots/POSTs.
+      if (combined && cfg.rearLedEnabled) {
+        if (event == CelebrationEngine::Event::GOAL && cfg.rearGoal) {
+          triggerRearGoal(color);
+          rearStarted = true;
+        } else if (event == CelebrationEngine::Event::POWER_PLAY && cfg.rearPowerPlay) {
+          rearGoalDuration = 0;
+          rearDiagnosticUntil = 0;
+          rearTestPpColor = color;
+          rearTestPpUntil = millis() + 9000UL;
+          rearEvent = RearEvent::IDLE;
+          rearStarted = true;
+        }
+        previewRow.rear = rearStarted ? GameEventLog::Rear::ACTIVE
+                                    : GameEventLog::Rear::NOT_ENABLED;
+      } else if (combined) {
+        previewRow.rear = GameEventLog::Rear::NOT_ENABLED;
       }
     }
-    // Existing WLED preview controls now demonstrate the matching overlay,
-    // regardless of whether any WLED controllers are currently configured.
     const EventOverlay::Kind overlayKind =
         event == CelebrationEngine::Event::GOAL ? EventOverlay::Kind::GOAL :
         event == CelebrationEngine::Event::POWER_PLAY ? EventOverlay::Kind::POWER_PLAY_START :
@@ -3679,13 +3710,20 @@ void registerRoutes() {
         event == CelebrationEngine::Event::FINAL_LOSS ? EventOverlay::Kind::FINAL_LOSS :
         EventOverlay::Kind::NONE;
     if (overlayKind != EventOverlay::Kind::NONE)
-      queueGameOverlay(previewGame, overlayKind, previewTeam, previewRow.sequence);
+      overlayStarted = queueGameOverlay(requestedTeam.length() ? nullptr : previewGame,
+                                       overlayKind, previewTeam, previewRow.sequence);
     StaticJsonDocument<256> response;
     response["event"] = CelebrationEngine::label(wledActiveEvent);
     response["devices"] = wledEligibleCount(event == CelebrationEngine::Event::NONE
         ? CelebrationEngine::Event::GOAL : event);
+    response["wledStarted"] = wledStarted;
+    response["rearStarted"] = rearStarted;
+    response["overlayStarted"] = overlayStarted;
+    response["team"] = previewTeam;
+    response["hex"] = rgbHex(color);
     response["ok"] = event == CelebrationEngine::Event::NONE ||
-                      wledActiveEvent == event;
+        (combined ? (wledStarted || rearStarted || overlayStarted)
+                  : wledActiveEvent == event);
     sendJson(response);
   });
   server.on("/api/test", HTTP_POST, []() {
