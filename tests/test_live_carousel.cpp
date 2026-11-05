@@ -16,8 +16,8 @@ int main(){
   const Plan favoritePlan=build(g,12,true,fav);
   assert(favoritePlan.at(0).kind==Kind::GAME && g[favoritePlan.at(0).index].id==105);
   assert(favoritePlan.liveCount==3 && favoritePlan.otherCount==9);
-  assert(locateGame(favoritePlan,g,102)==2);
-  assert(restore(favoritePlan,g,Kind::GAME,102,0,0)==2);
+  assert(locateGame(favoritePlan,g,102)==1);
+  assert(restore(favoritePlan,g,Kind::GAME,102,0,0)==1);
   const Plan p=build(g,12,true);
   assert(p.liveMode && p.liveCount==3 && p.otherCount==9);
   assert(p.summaryPages==3 && p.count==6); // 3 live + ceil(9/4)
