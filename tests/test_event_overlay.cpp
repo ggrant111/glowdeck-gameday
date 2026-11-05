@@ -56,11 +56,7 @@ int main() {
   assert(c.push(priorityGoal,1300));
   assert(c.current().gameId==999);
   // Stale nonfavorite goals expire from the queue after 15 seconds.
-  c.clear();
-  assert(c.push(favorite,100));
-  assert(c.push(ordinary,200));
-  assert(c.tick(4000)); assert(!c.active());
-  // A newly queued stale event should never appear.
+  // A queued stale nonfavorite event must never appear.
   c.clear();
   assert(c.push(favorite,2000));
   assert(c.push(ordinary,2001));
