@@ -52,3 +52,80 @@ On the physical CYD:
 7. Restart to check NVS preferences and monitor free heap / stack headroom. The ring buffer contains no new flash-write traffic and the LED behavior should remain unchanged.
 
 A successful PlatformIO build does not replace physical touchscreen and live NHL verification.
+## v0.4.0 — All live NHL events, favorite teams and one-tap follow
+
+### Display and light policies are intentionally separate
+
+- **All live event display (default):** Goal-score deltas, confirmed power-play
+  start/end transitions, newly observed puck drops and final transitions across
+  the NHL daily slate can generate CYD screen overlays. A game is eligible even
+  when no WLED hardware is configured. Each game has its own score and state
+  baseline, keyed by NHL game ID; booting into a game does not replay history.
+- **Favorite teams:** On **Favorites & alerts** in the redesigned web companion,
+  select any NHL teams, then click **Save favorite teams**. Favorites persist in
+  NVS through overnight date rollover. Their live games lead the carousel and
+  their overlays outrank other games, whether they are armed or not.
+- **Follow game (star):** On a live CYD game slide, tap the star in the top
+  header, or click the matching star in **Live games** on the web dashboard.
+  A filled amber star means the game is followed. Followed games get stronger
+  screen alerts and onboard rear RGB goal/PP behavior. This is limited to
+  **four additional** games plus the armed matchup; the follow list resets
+  daily. The selected/armed game always stays followed.
+- **WLED remains armed-only:** Merely starring a game or choosing a permanent
+  favorite team **does not arm a new WLED game**. WLED celebrations and horn
+  triggers keep the existing armed-game, side and per-controller event settings.
+  The current rear RGB mapping (R=4, G=17, B=16) is unchanged.
+
+### Flood protection and fairness
+
+The screen overlay controller holds one active event and four queued entries.
+Priority is favorite matchups, then followed, then other live games; within a
+tier, goals outrank final results, starts and verified power plays.
+
+Other-live-game goals show for 3s; favorite goals show 5.5s; followed game
+goals retain the configured 3–12s period. Ordinary PP/start/final notices
+last 1.6–2.4s and are admitted no more than once every 12s. Ordinary
+notifications older than 15s are discarded from the queue, rather than
+replaying stale plays after the score has already moved forward.
+
+Power plays are never inferred from an unverified 6-on-5. Because the
+firmware verifies official penalty/PP-goal evidence via **one extra**
+gamecenter request per 20s, league-wide PP events are best effort and
+may arrive later or be missed during crowded slates. Goals are observed
+from the one daily NHL score request; there is no extra goal polling
+endpoint per game. No additional heap framebuffer was introduced.
+
+### Redesigned embedded companion dashboard
+
+The self-hosted, no-cloud interface has desktop side navigation and a
+horizontal mobile navigation rail with improved focus targets. The new
+sections are **Overview**, **Live games**, **Favorites & alerts**,
+**WLED celebrations**, **Rear RGB LED**, **Activity**, **Device settings** and
+**Firmware update**. Live games support search and filters (all/live/
+favorite-team/followed), one-tap stars, explicit arm controls, and team stats.
+Favorite-team selections use the same 32-color palette as actual celebrations.
+System status distinguishes league-wide screen notifications from the armed
+WLED matchup and rear RGB follows.
+
+The new authenticated endpoint `POST /api/display/favorites` accepts an
+unsigned 32-bit palette mask and saves only that preference, preserving other
+unsaved settings. `GET /api/status` and `GET /api/config` expose
+`favoriteTeams` and `displayAllLiveEvents`. `/api/rear/follow`
+remains the shared source for CYD and web star actions.
+
+### Device test after OTA
+
+1. Select two favorite NHL teams and save. Confirm that they appear first
+   among live carousel slides and stay selected after reboot.
+2. In **Live games**, star a live matchup without arming it; the star should
+   appear filled on the CYD and its rear RGB goal alerts should be enabled.
+   Confirm WLED does **not** change armed matchup.
+3. Set **All live NHL games** as the screen alert source. Verify a scored goal
+   in another live matchup shows a short screen-only notification. A favorite
+   goal should preempt a nonfavorite notification.
+4. Test simultaneous goals/PPs with a busy schedule. Confirm the scoreboard
+   returns promptly and the overlay queue remains bounded.
+5. Disable league-wide mode to confirm the previous armed/followed-only
+   display behavior. Restart and verify all persistent settings.
+6. Check actual RGB hardware colors and WLED restore behavior. CI cannot
+   confirm physical lights or live API timing.

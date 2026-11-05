@@ -53,4 +53,20 @@ for method in (
     "loadRearPalette(", "fullPreview(", "combined:true", "mode,side,team,channel",
 ):
     assert method in script, f"Missing rear RGB preview binding: {method}"
+# New GameDay 0.4.0 IA: accessible navigation, favorites, game follow and alerts.
+for control in (
+    "dashLiveCount", "dashFavoriteCount", "dashFollowCount",
+    "dashDisplayMode", "gameSearch", "favoriteTeamGrid",
+    "favoriteTeamCount", "saveFavorites", "displayAllLiveEvents",
+    "backgroundSkipped", "overlayDropped",
+):
+    assert f'id="{control}"' in source, f"Missing redesigned dashboard control: {control}"
+for method in (
+    "/api/display/favorites", "/api/rear/follow", "renderFavoriteTeams(",
+    "favoriteTeamDraftMask", "renderGames(", "isFavoriteGame(",
+    "data-game-filter", 'aria-pressed', "showGame(",
+):
+    assert method in source, f"Missing dashboard/favorite interaction: {method}"
+assert 'class="section-intro"' in source, "Missing section hierarchy"
+assert 'aria-label="GameDay navigation"' in source, "Missing accessible nav"
 print("PASS: WLED celebration dashboard JavaScript and control bindings")

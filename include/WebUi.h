@@ -11,50 +11,130 @@ static const char WEB_UI[] PROGMEM = R"GLOWDECK(
 <meta name="theme-color" content="#0a141c">
 <title>GlowDeck GameDay | CYD</title>
 <style>
-:root{color-scheme:dark;--bg:#0a141c;--panel:#111f29;--edge:#29414b;--primary:#31837a;--text:#f4f9fa;--muted:#9ab0b6;--amber:#f4a64e}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-header{padding:22px max(20px,calc((100vw - 940px)/2));background:linear-gradient(155deg,#112a32,#0a141c);border-bottom:1px solid var(--edge)}
-.eyebrow{color:#89e0d0;font-weight:800;letter-spacing:.16em;font-size:11px}.top{display:flex;justify-content:space-between;gap:12px;align-items:center}h1{font-size:clamp(23px,4vw,32px);line-height:1.15;margin:4px 0}p{color:var(--muted);margin:4px 0}
-main{max-width:940px;margin:auto;padding:16px 16px 90px}.tabs{position:sticky;top:0;display:flex;gap:6px;overflow:auto;padding:10px 0 16px;background:var(--bg);z-index:5}
-.tab{white-space:nowrap;flex:1;min-width:80px}.panel{display:none}.panel.active{display:block}.card{background:var(--panel);border:1px solid var(--edge);border-radius:16px;padding:18px;margin-bottom:14px}
-h2{font-size:18px;margin:0 0 12px}h3{font-size:15px;margin:0 0 8px}.muted{color:var(--muted)}.small{font-size:12px}
-.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.stat{background:#0d1b25;border-radius:11px;padding:12px}.stat b{display:block;font-size:16px;overflow-wrap:anywhere}.stat span{font-size:12px;color:var(--muted)}
-button{font:inherit;color:var(--text);background:#1d343c;border:1px solid #315059;border-radius:10px;padding:10px 13px;cursor:pointer;min-height:42px;font-weight:650}
-button:hover{border-color:#68b5a8}button.primary,button.selected{background:var(--primary);border-color:var(--primary);color:white}
-button:disabled{opacity:.45;cursor:not-allowed}button.ghost{background:transparent}.actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
-label{display:block;font-size:13px;color:#c4d5d8;margin:11px 0 5px;font-weight:650}input,select{color:var(--text);background:#08141b;border:1px solid #36505a;border-radius:10px;padding:11px 12px;font:inherit;width:100%;min-height:43px}
-input:focus,select:focus{outline:2px solid var(--primary);outline-offset:1px}.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:11px}.toggle{display:flex;align-items:center;gap:8px}
-.toggle input{width:20px;height:20px;min-height:auto;accent-color:#31837a}.toggle label{margin:0}
-.game{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--edge)}
-.game:last-child{border-bottom:0}.game .score{font-size:19px;font-weight:800}.badge{background:#1a4847;border-radius:100px;padding:3px 8px;font-size:11px;color:#c0f1e8}
-.item{border:1px solid var(--edge);border-radius:12px;padding:13px;margin:10px 0;background:#0d1b25}
-.status{display:inline-flex;border-radius:20px;padding:5px 10px;font-size:12px;background:#26363d;color:#d3e1e4}
-.status.good{background:#17483f;color:#b5f1df}.status.warn{background:#523821;color:#ffe0af}
-#notice{position:fixed;bottom:18px;right:16px;left:16px;max-width:440px;margin:auto;z-index:11;background:#1e4246;color:white;border:1px solid #55948e;border-radius:12px;padding:13px;box-shadow:0 9px 28px #0009;display:none}
-code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--primary);padding-left:12px;margin:10px 0;color:var(--muted)}
-@media(min-width:700px){.twocol{display:grid;grid-template-columns:1fr 1fr;gap:15px}.twocol .card{margin-bottom:0}}
+:root{color-scheme:dark;--bg:#071117;--panel:#11232b;--panel2:#172e36;--edge:#2a4751;--primary:#31837a;--active:#66d6c0;--text:#f2f7f8;--muted:#aec2c8;--amber:#ffcc72;--danger:#f39c91;--shadow:0 15px 45px #0003}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;color:var(--text);background:radial-gradient(ellipse 1150px 600px at 80% -200px,#164840 0%,transparent 66%),var(--bg);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+header{padding:28px clamp(17px,4vw,48px);border-bottom:1px solid var(--edge);background:linear-gradient(105deg,#0b2930e8,#0a141bc7)}
+.eyebrow{color:#88e2cf;text-transform:uppercase;font-weight:750;letter-spacing:.16em;font-size:11px}
+.top{display:flex;align-items:center;justify-content:space-between;gap:16px;max-width:1200px;margin:auto}
+h1{font-weight:800;font-size:clamp(24px,4vw,36px);line-height:1.2;margin:3px 0}
+h2{font-size:19px;line-height:1.3;letter-spacing:-.02em;margin:0 0 11px}
+h3{font-size:15px;margin:0 0 8px}
+p{color:var(--muted);margin:6px 0 12px}
+main{max-width:1260px;margin:0 auto;padding:20px clamp(12px,3vw,28px) 96px;display:grid;grid-template-columns:220px minmax(0,1fr);gap:23px;align-items:start}
+.tabs{position:sticky;top:16px;display:flex;flex-direction:column;gap:7px;background:#101f27;border:1px solid var(--edge);border-radius:18px;padding:10px;box-shadow:var(--shadow)}
+.tab{display:flex;align-items:center;text-align:left;font-size:14px;width:100%;white-space:nowrap;padding:12px 15px;min-height:47px;background:transparent;border:1px solid transparent;border-radius:11px;color:var(--muted)}
+.tab.selected{background:#285f5b;border-color:#3c9388;color:white;box-shadow:inset 3px 0 var(--active)}
+.panel{display:none;min-width:0}.panel.active{display:block}
+.section-intro{margin:0 0 22px;padding:7px 2px}.section-intro h2{font-size:clamp(25px,3vw,31px);margin:6px 0}.section-intro p{max-width:670px}
+.card{background:linear-gradient(160deg,#142a32,#102029);border:1px solid var(--edge);border-radius:18px;padding:clamp(16px,2vw,23px);margin:0 0 16px;box-shadow:0 7px 28px #0002;min-width:0}
+.card.hero{border-color:#386d66;background:linear-gradient(125deg,#1a4b47 0%,#15343a 52%,#11242d 100%)}
+.card.hero h2{font-size:clamp(19px,2vw,25px)}
+.card .card-lead{margin-bottom:18px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(146px,1fr));gap:10px}
+.stat{background:#0d1b24aa;border:1px solid #28444f;border-radius:12px;padding:13px;min-width:0}
+.stat b{display:block;font-size:17px;line-height:1.5;overflow-wrap:anywhere}
+.stat span{display:block;color:var(--muted);font-size:12px;margin-bottom:3px}
+button{font:inherit;color:var(--text);background:#223b44;border:1px solid #40616b;border-radius:11px;padding:10px 14px;cursor:pointer;min-height:44px;font-weight:670;transition:background .15s,border-color .15s,transform .15s}
+button:hover{background:#2b4c55;border-color:#76beb0}
+button:active{transform:scale(.985)}
+button.primary,button.selected{background:var(--primary);border-color:#5ab2a4;color:#fff}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.ghost{background:transparent}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--active);outline-offset:2px}
+.actions{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin:15px 0}
+.actions>*{max-width:100%}
+label{display:block;font-size:13px;color:#d3e1e5;margin:13px 0 6px;font-weight:650}
+input,select{color:var(--text);background:#091922;border:1px solid #40606b;border-radius:11px;padding:11px 13px;font:inherit;width:100%;min-height:45px}
+input[type=file]{max-width:100%}
+input:focus,select:focus{outline:2px solid var(--active);outline-offset:1px}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(198px,1fr));gap:13px}
+.toggle{display:flex;align-items:center;gap:10px;min-height:33px}
+.toggle input{width:21px;height:21px;min-height:auto;accent-color:#45a89b;flex-shrink:0}
+.toggle label{margin:0}
+.game{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--edge)}
+.game:last-child{border-bottom:0}
+.game .score{font-size:18px;font-weight:800;letter-spacing:-.03em}
+.game-row{background:#0e2028;border:1px solid var(--edge);border-radius:14px;margin:10px 0;padding:14px;gap:14px}
+.game-row:last-child{border-bottom:1px solid var(--edge)}
+.game-row .actions{margin:0}
+.game-row .game-details{min-width:0;flex:1}
+.game-status{font-size:11px;font-weight:800;letter-spacing:.06em;color:#8de4d2;text-transform:uppercase}
+.badge{background:#214942;border:1px solid #376e62;border-radius:100px;padding:4px 9px;font-size:11px;font-weight:700;color:#cefff2}
+.item{border:1px solid var(--edge);border-radius:13px;padding:14px;margin:10px 0;background:#0c1b24}
+.status{display:inline-flex;align-items:center;gap:7px;border-radius:100px;padding:7px 13px;font-size:12px;font-weight:730;background:#26363d;color:#e6f0f2;white-space:nowrap}
+.status:before{content:"";width:7px;height:7px;border-radius:50%;background:#a4b4b8}
+.status.good{background:#194c42;color:#caffeb}.status.good:before{background:#73eac3}
+.status.warn{background:#523821;color:#ffe0af}.status.warn:before{background:#ffba63}
+.muted{color:var(--muted)}.small{font-size:12px}
+.filterbar{display:flex;flex-wrap:wrap;gap:8px;margin:15px 0}
+.filterbar button{min-height:39px;padding:7px 13px;font-size:13px}
+.team-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(101px,1fr));gap:8px;margin:16px 0}
+.team-choice{display:flex;align-items:center;justify-content:center;gap:8px;border-color:#3b5864;background:#10222b;min-height:46px}
+.team-choice[aria-pressed="true"]{background:#2d6960;border-color:#8de0d0;color:#fff}
+.team-dot{height:12px;width:12px;display:inline-block;border-radius:50%;flex:none;border:1px solid #ffffff55}
+.star-button{min-width:44px;font-size:22px;padding:6px 10px;color:#bac5c8}
+.star-button[aria-pressed="true"]{color:#ffd479;background:#493c29;border-color:#79633c}
+#notice{position:fixed;bottom:max(16px,env(safe-area-inset-bottom));right:16px;left:16px;max-width:520px;margin:auto;z-index:11;background:#1b4245;color:white;border:1px solid #65b2a5;border-radius:13px;padding:14px 17px;box-shadow:0 9px 32px #0009;display:none}
+code{color:#a0ecdd;overflow-wrap:anywhere}
+.hint{border-left:3px solid var(--primary);padding:5px 0 5px 13px;margin:13px 0;color:var(--muted)}
+.twocol{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}
+.twocol .card{margin-bottom:0}
+.rail-note{font-size:12px;color:var(--muted);padding:8px 12px}
+.kicker{color:#88ddcb;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}
+[hidden]{display:none!important}
+@media(max-width:850px){
+main{display:block;padding:0 14px 94px}
+.tabs{top:0;z-index:5;display:flex;flex-direction:row;overflow-x:auto;gap:7px;border:none;border-bottom:1px solid var(--edge);border-radius:0;padding:10px 0 12px;background:#071117f7;box-shadow:none;scrollbar-width:thin;scroll-snap-type:x proximity}
+.tab{width:auto;min-width:max-content;padding:10px 14px;scroll-snap-align:start}
+.tab.selected{box-shadow:inset 0 -3px var(--active)}
+.rail-note{display:none}
+.section-intro{padding:22px 3px 2px}
+}
+@media(max-width:650px){
+header{padding:19px 17px}
+.card{padding:16px}
+.twocol{display:block}.twocol .card{margin-bottom:15px}
+.stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+.game-row{flex-wrap:wrap}
+.game-row .actions{width:100%;justify-content:flex-start}
+.row{grid-template-columns:1fr}
+}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}button{transition:none}}
 </style>
 </head>
 <body>
 <header>
 <div class="top">
-<div><div class="eyebrow">GLOWDECK / ESP32 CYD</div><h1>GameDay Control</h1><p>Your standalone NHL-to-WLED game companion</p></div>
+<div><div class="eyebrow">GLOWDECK · GAME CENTER</div><h1>GameDay</h1><p>Every game. Your favorite moments. Your lights.</p></div>
 <div id="connection" class="status">Connecting</div>
 </div>
 </header>
 <main>
-<nav class="tabs" aria-label="Sections">
-<button class="tab selected" data-tab="dashboard">Dashboard</button>
-<button class="tab" data-tab="games">Games</button>
-<button class="tab" data-tab="events">Event Log</button>
-<button class="tab" data-tab="display">Display</button>
-<button class="tab" data-tab="devices">Lights</button>
-<button class="tab" data-tab="rear">CYD LED</button>
-<button class="tab" data-tab="settings">Setup</button>
-<button class="tab" data-tab="firmware">Update</button>
+<nav class="tabs" aria-label="GameDay navigation">
+<div class="rail-note"><span class="kicker">CONTROL CENTER</span><p class="small">This device · your local network</p></div>
+<button class="tab selected" data-tab="dashboard" aria-current="page">Overview</button>
+<button class="tab" data-tab="games">Live games</button>
+<button class="tab" data-tab="display">Favorites &amp; alerts</button>
+<button class="tab" data-tab="devices">WLED celebrations</button>
+<button class="tab" data-tab="rear">Rear RGB LED</button>
+<button class="tab" data-tab="events">Activity</button>
+<button class="tab" data-tab="settings">Device settings</button>
+<button class="tab" data-tab="firmware">Firmware update</button>
 </nav>
 <section id="dashboard" class="panel active">
-<div class="card"><h2>Game-day status</h2>
+<div class="section-intro"><div class="eyebrow">LIVE CONTROL CENTER</div><h2>Your game day at a glance</h2><p>Scores, favorites and celebrations—without changing what your lights are following.</p></div>
+<div class="card hero"><div class="kicker">Today's NHL</div><h2>You're connected to the action</h2>
+<div class="stats">
+<div class="stat"><span>Games live</span><b id="dashLiveCount">—</b></div>
+<div class="stat"><span>Favorite teams</span><b id="dashFavoriteCount">—</b></div>
+<div class="stat"><span>Games followed</span><b id="dashFollowCount">—</b></div>
+<div class="stat"><span>On-screen alerts</span><b id="dashDisplayMode">—</b></div>
+</div>
+<div class="actions"><button class="primary" data-tab="games">Browse games</button><button data-tab="display">Manage favorite teams</button><button data-tab="devices">Control WLED</button></div>
+</div>
+<div class="card"><h2>Device &amp; network health</h2>
 <div class="stats">
 <div class="stat"><span>Selected game</span><b id="currentGame">None</b></div>
 <div class="stat"><span>Goal celebrations</span><b id="currentMode">Both teams</b></div>
@@ -67,14 +147,14 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <div class="stat"><span>NHL connection</span><b id="nhlFeedState">—</b></div>
 <div class="stat"><span>Last successful NHL update</span><b id="nhlLastSuccess">—</b></div>
 </div>
-<div class="actions"><button class="primary" data-tab="games">Choose game</button><button data-tab="devices">Manage lights</button></div>
+<div class="actions"><button data-tab="settings">Network settings</button><button data-tab="firmware">Firmware update</button></div>
 <div class="small muted" id="lastError"></div></div>
-<div class="card"><h2>Recent game events</h2>
+<div class="card"><h2>Latest league events</h2>
 <p class="small muted">What the NHL feed reported and which lights GameDay commanded.</p>
 <div id="recentGameEvents"><p class="muted">No events recorded yet.</p></div>
 <button data-tab="events">View complete event log</button></div>
-<div class="card"><h2>Celebration controls</h2>
-<p>Choose which team can trigger lights when the NHL score changes. The device saves this automatically.</p>
+<div class="card"><h2>Armed game · WLED goal triggers</h2>
+<p>Choose which side of the <strong>armed matchup</strong> triggers WLED. Starring a different live game follows it for rear RGB alerts and screen celebrations, without re-arming WLED.</p>
 <div class="actions" id="modeButtons">
 <button data-mode="0">Off</button><button data-mode="1">Home</button><button data-mode="2">Away</button><button data-mode="3">Both</button>
 </div>
@@ -82,6 +162,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <p class="small">A test saves the current WLED state, shows the celebration color, then restores the previous state.</p></div>
 </section>
 <section id="events" class="panel">
+<div class="section-intro"><div class="eyebrow">ACTIVITY LOG</div><h2>What happened, and what fired</h2><p>League observations and the exact commands sent to your physical lights.</p></div>
 <div class="card"><h2>Game events & light activity</h2>
 <p>See NHL goals, power plays, puck drop and finals, plus whether the <b>CYD's built-in LED</b> and each selected <b>WLED LED strip/controller</b> received a celebration command.</p>
 <p class="small muted">WLED “Command accepted” means the controller acknowledged the HTTP request. It does not independently confirm visible light output. The latest 64 events are retained in memory <b>until the device reboots</b>. No historical events are backfilled.</p>
@@ -102,13 +183,29 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 </div>
 </section>
 <section id="games" class="panel">
-<div class="card"><h2>Today's NHL games</h2><p>Tap a matchup to arm it on your CYD. The first poll records current scores without replaying earlier goals.</p>
+<div class="section-intro"><div class="eyebrow">NHL LIVE BOARD</div><h2>Every matchup, one place</h2><p>Tap the star to follow a game for rear RGB and screen celebrations. Use Arm to choose the one matchup that also controls WLED.</p></div>
+<div class="card"><div class="row">
+<div><h2>Today's games</h2><p class="small">Favorite-team games rise to the top of the live carousel.</p></div>
+<div><label for="gameSearch">Search teams</label><input id="gameSearch" type="search" placeholder="Search DAL, Utah, Boston…" autocomplete="off"></div>
+</div>
+<div class="filterbar" role="group" aria-label="Filter today's games">
+<button class="selected" data-game-filter="all" aria-pressed="true">All</button>
+<button data-game-filter="live" aria-pressed="false">Live</button>
+<button data-game-filter="favorites" aria-pressed="false">Favorite teams</button>
+<button data-game-filter="following" aria-pressed="false">Following</button>
+</div>
 <div id="gameList"><p>No games loaded yet.</p></div>
 <div id="gameDetail" class="item" hidden></div>
 <button id="refreshGames">Refresh list</button>
 <p class="small muted">Score checks run on the CYD every 20 seconds when a game is selected. NHL reporting can be delayed.</p></div>
 </section>
 <section id="display" class="panel">
+<div class="section-intro"><div class="eyebrow">PERSONALIZE YOUR FEED</div><h2>Favorite teams &amp; screen alerts</h2><p>Follow the whole NHL, while giving the games you care about priority. Screen preferences do not change physical lighting targets.</p></div>
+<div class="card"><h2>Permanent favorite teams</h2>
+<p>Select any teams. Their live games appear first in the carousel, and their events get priority over other NHL alerts. These favorites persist across dates and do not automatically arm WLED or rear LEDs.</p>
+<div id="favoriteTeamGrid" class="team-grid" role="group" aria-label="Choose favorite NHL teams"><p class="muted">Loading teams…</p></div>
+<p class="small muted" id="favoriteTeamCount">No favorite teams selected.</p>
+<div class="actions"><button class="primary" id="saveFavorites">Save favorite teams</button></div></div>
 <div class="card"><h2>Today's game carousel</h2>
 <p>During live NHL games, the CYD automatically focuses on full-screen live scoreboards and groups other upcoming or finished matches into readable four-game summary slides. When no games are live, it returns to the complete game-and-standings carousel. Swipe to browse or tap a summary row for its matchup details.</p>
 <div class="stats">
@@ -131,9 +228,19 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <option value="2">Mountain (MT)</option><option value="3">Pacific (PT)</option>
 <option value="4">Arizona (AZ)</option>
 </select>
-<div class="actions"><button id="saveDisplay" class="primary">Save display settings</button></div><div class="card" style="margin-top:18px">
-<h2>Live event overlays</h2>
-<p>Temporarily show the scoring team's official logo, color, score and event description on the CYD during NHL celebrations. Animated borders coordinate with the internal RGB LED and opted-in WLED controllers. No WLED is required.</p>
+</div><div class="card">
+<h2>On-screen NHL event notifications</h2>
+<p>Choose how widely the CYD reports live action. The screen can show events for every game while the rear LED and WLED continue following their independently selected matchups.</p>
+<label for="displayAllLiveEvents">Show screen alerts for</label>
+<select id="displayAllLiveEvents">
+<option value="true">All live NHL games · recommended</option>
+<option value="false">Armed and followed games only</option>
+</select>
+<p class="small muted">Priority: favorite-team alerts first, followed games second, all other live games third. Other-game notifications are short, low-priority events are throttled, and stale queued alerts are discarded.</p>
+<div class="stats">
+<div class="stat"><span>Background alerts throttled</span><b id="backgroundSkipped">0</b></div>
+<div class="stat"><span>Overflow / duplicate suppression</span><b id="overlayDropped">0</b></div>
+</div>
 <div class="stats">
 <div class="stat"><span>On-screen event</span><b id="overlayStatus">Idle</b></div>
 <div class="stat"><span>Queued events</span><b id="overlayQueued">0</b></div>
@@ -164,11 +271,12 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <button id="overlayTestLoss">Preview final loss</button>
 <button id="overlayStop">Dismiss overlay</button></div>
 <p class="small muted">These previews affect the CYD screen only. Test them with your WLED devices disconnected if desired.</p>
+<div class="actions"><button id="saveDisplay" class="primary">Save carousel &amp; alert settings</button></div>
 </div>
-
-<div class="hint">Browsing rotating games does not change which matchup triggers goal celebrations. Use ARM GOALS on the CYD or ARM in the Games tab.</div>
-</div></section>
+<div class="hint">Carousel browsing does not arm WLED. Use the stars to follow rear RGB alerts, or Arm in Live games for WLED triggers.</div>
+</section>
 <section id="devices" class="panel">
+<div class="section-intro"><div class="eyebrow">PHYSICAL CELEBRATIONS</div><h2>Your WLED light show</h2><p>Choose which controllers participate, test their effects, and restore their previous lighting afterward.</p></div>
 <div class="card"><h2>WLED celebration engine</h2>
 <p>Run matching event effects on the WLED controllers you choose. Each controller can participate in goals, power plays, game starts and final results independently.</p>
 <div class="stats">
@@ -210,6 +318,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 </div>
 </section>
 <section id="rear" class="panel">
+<div class="section-intro"><div class="eyebrow">CYD LIGHTING</div><h2>Rear RGB &amp; followed games</h2><p>These onboard LED effects operate independently of your external WLED devices.</p></div>
 <div class="card"><h2>Rear RGB LED</h2>
 <p>Make the CYD's own rear light react to NHL events. No WLED controller or extra wiring is required.</p>
 <div class="stats">
@@ -275,6 +384,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <p id="rearFullResult" class="small muted">No full celebration test has run yet.</p>
 </div></section>
 <section id="settings" class="panel">
+<div class="section-intro"><div class="eyebrow">DEVICE SETTINGS</div><h2>Network &amp; preferences</h2><p>Connectivity, local device options, horn sounds and security settings.</p></div>
 <div class="twocol">
 <div class="card"><h2>Wi-Fi</h2><p>Connect the CYD to the network used by your WLED controllers.</p>
 <label for="ssid">Network name (SSID)</label><input id="ssid" autocomplete="off" maxlength="32" placeholder="Home Wi-Fi">
@@ -303,6 +413,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <p class="small muted">GameDay automatically changes to the next day's NHL schedule without restarting. If the clock cannot synchronize, verify internet/NTP access.</p></div>
 </section>
 <section id="firmware" class="panel">
+<div class="section-intro"><div class="eyebrow">FIRMWARE</div><h2>Keep GameDay current</h2><p>Install a verified firmware.bin without losing saved Wi-Fi, favorites or event settings.</p></div>
 <div class="card"><h2>Firmware update</h2>
 <p>Upload a compiled PlatformIO <code>firmware.bin</code> from this project. Keep the CYD powered until it reboots.</p>
 <form id="uploadForm"><label for="bin">Compiled firmware (.bin)</label><input id="bin" name="firmware" type="file" accept=".bin" required>
@@ -318,6 +429,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 const $ = id => document.getElementById(id);
 let currentConfig = null, currentStatus = null, currentGames = [], noticeTimeout;
 let rearPalette = [];
+let gameFilter="all", favoriteTeamDraftMask=0;
 let detailPreviewToken = 0;
 const modes = ["Off","Home only","Away only","Both teams"];
 function message(text){
@@ -335,7 +447,12 @@ const post = (url,body) => api(url,{method:"POST",headers:{"Content-Type":"appli
 async function perform(fn){try{await fn()}catch(err){message("Error: "+err.message)}}
 function tab(id){
   document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===id));
-  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("selected",x.dataset.tab===id));
+  document.querySelectorAll(".tab").forEach(x=>{
+    const selected=x.dataset.tab===id;
+    x.classList.toggle("selected",selected);
+    if(selected)x.setAttribute("aria-current","page");
+    else x.removeAttribute("aria-current");
+  });
   scrollTo({top:0,behavior:"smooth"});
 }
 document.querySelectorAll("[data-tab]").forEach(x=>x.addEventListener("click",()=>tab(x.dataset.tab)));
@@ -428,6 +545,12 @@ function renderStatus(){
   $("rearEvent").textContent=(s.rearEvent||"IDLE").replaceAll("_"," ");
   $("rearFollowCount").textContent=(s.followed||[]).length+
     (s.selectedId?" additional + armed":" additional");
+  $("dashLiveCount").textContent=String(s.liveGameCount??0);
+  $("dashFavoriteCount").textContent=String(popcount(s.favoriteTeams??0));
+  $("dashFollowCount").textContent=String((s.followed||[]).length+(s.selectedId?1:0));
+  $("dashDisplayMode").textContent=s.displayAllLiveEvents?"League-wide":"Followed only";
+  $("backgroundSkipped").textContent=String(s.backgroundEventsSkipped??0);
+  $("overlayDropped").textContent=String(s.overlayEventsDropped??0);
   renderRearTestControls();
   const showing=currentGames[s.featuredIndex]||null;
   $("showingGame").textContent=showing?showing.away+" @ "+showing.home:"No games";
@@ -467,6 +590,27 @@ function renderStatus(){
   $("uptime").textContent=Math.floor(s.uptimeSeconds/60)+" minutes";
   document.querySelectorAll("[data-mode]").forEach(b=>b.classList.toggle("selected",Number(b.dataset.mode)===s.mode));
 }
+function popcount(mask){
+  mask=Number(mask)>>>0;
+  let count=0;
+  while(mask){mask&=mask-1;++count;}
+  return count;
+}
+function isFavoriteGame(g){
+  return !!(currentStatus && rearPalette.some((t,i)=>
+    ((Number(currentStatus.favoriteTeams)>>>i)&1) &&
+    (t.abbr===g.away || t.abbr===g.home)));
+}
+function showGame(g){
+  const live=g.state==="LIVE"||g.state==="CRIT";
+  const following=g.followed || g.id===currentStatus?.selectedId;
+  const query=$("gameSearch").value.toLowerCase().trim();
+  const text=[g.away,g.home,g.awayName,g.homeName].join(" ").toLowerCase();
+  return (!query||text.includes(query))&&
+    (gameFilter==="all"||gameFilter==="live"&&live||
+     gameFilter==="favorites"&&isFavoriteGame(g)||
+     gameFilter==="following"&&following);
+}
 function renderGames(){
   const list=$("gameList");list.replaceChildren();
   if(!currentGames.length){
@@ -476,9 +620,19 @@ function renderGames(){
       : "Loading today's NHL games. "+(currentStatus&&currentStatus.error||"Check Wi-Fi and time synchronization.");
     list.append(p);return;
   }
-  currentGames.forEach(g=>{
-    const line=document.createElement("div");line.className="game";
-    const detail=document.createElement("div");detail.style.flex="1";
+  const visible=currentGames.filter(showGame).sort((a,b)=>{
+    const rank=g=>((g.state==="LIVE"||g.state==="CRIT")?4:0)+
+      (isFavoriteGame(g)?2:0)+(g.followed?1:0);
+    return rank(b)-rank(a);
+  });
+  if(!visible.length){
+    const p=document.createElement("p");p.className="muted";
+    p.textContent="No games match this filter.";
+    list.append(p);return;
+  }
+  visible.forEach(g=>{
+    const line=document.createElement("div");line.className="game game-row";
+    const detail=document.createElement("div");detail.className="game-details";
     const matchup=document.createElement("div");
     matchup.style.display="flex";matchup.style.alignItems="center";matchup.style.gap="6px";
     function teamLogo(code){
@@ -497,7 +651,13 @@ function renderGames(){
       g.away+" "+g.awayScore+" - "+g.homeScore+" "+g.home;
     matchup.append(teamLogo(g.away),score,teamLogo(g.home));
     const subtitle=document.createElement("div");
-    subtitle.className="muted small";subtitle.textContent=g.status||g.state;
+    subtitle.className="muted small";
+    const flags=[];
+    if(isFavoriteGame(g))flags.push("FAVORITE TEAM");
+    if(g.followed)flags.push("FOLLOWED");
+    if(g.id===currentStatus?.selectedId)flags.push("ARMED");
+    subtitle.textContent=(g.status||g.state)+
+      (flags.length?" · "+flags.join(" · "):"");
     detail.append(matchup,subtitle);
     const actions=document.createElement("div");actions.className="actions";
     actions.style.justifyContent="flex-end";
@@ -509,6 +669,22 @@ function renderGames(){
       await post("/api/select",{id:g.id});
       message("Goal alerts armed: "+g.away+" @ "+g.home);
       await refresh();
+    });
+    const star=document.createElement("button");
+    const isFollowing=!!g.followed||selected;
+    star.className="star-button";
+    star.textContent=isFollowing?"★":"☆";
+    star.setAttribute("aria-label",(isFollowing?"Unfollow ":"Follow ")+g.away+" at "+g.home);
+    star.setAttribute("aria-pressed",String(isFollowing));
+    star.title=selected?"Armed game automatically follows rear LED and screen alerts":
+      "Follow this game for screen celebrations and rear RGB LED";
+    star.disabled=selected;
+    star.onclick=()=>perform(async()=>{
+      star.disabled=true;
+      await post("/api/rear/follow",{id:g.id,follow:!isFollowing});
+      await refresh();
+      message((isFollowing?"Unfollowed ":"Following ")+g.away+" @ "+g.home+
+        " · screen and rear RGB");
     });
     const stats=document.createElement("button");
     const isFuture=g.state==="FUT"||g.state==="PRE";
@@ -563,10 +739,22 @@ function renderGames(){
       if(token===detailPreviewToken)
         box.scrollIntoView({behavior:"smooth",block:"nearest"});
     });
-    actions.append(stats,arm);
+    actions.append(star,stats,arm);
     line.append(detail,actions);list.append(line);
   });
 }
+document.querySelectorAll("[data-game-filter]").forEach(button=>{
+  button.onclick=()=>{
+    gameFilter=button.dataset.gameFilter;
+    document.querySelectorAll("[data-game-filter]").forEach(el=>{
+      const selected=el.dataset.gameFilter===gameFilter;
+      el.classList.toggle("selected",selected);
+      el.setAttribute("aria-pressed",String(selected));
+    });
+    renderGames();
+  };
+});
+$("gameSearch").oninput=renderGames;
 async function refresh(){
   const [s,g]=await Promise.all([api("/api/status"),api("/api/games")]);
   currentStatus=s;currentGames=g.games||[];
@@ -692,7 +880,37 @@ async function loadRearPalette(){
   select.value=rearPalette.some(item=>item.abbr===old)?old:"UTA";
   renderRearSelected();
   renderRearTestControls();
+  renderFavoriteTeams();
 }
+function renderFavoriteTeams(){
+  const grid=$("favoriteTeamGrid");grid.replaceChildren();
+  rearPalette.forEach((team,index)=>{
+    const checked=!!((favoriteTeamDraftMask>>>index)&1);
+    const button=document.createElement("button");
+    button.type="button";button.className="team-choice";
+    button.setAttribute("aria-pressed",String(checked));
+    button.setAttribute("aria-label",(checked?"Remove ":"Add ")+team.abbr+" as favorite team");
+    const dot=document.createElement("span");
+    dot.className="team-dot";dot.style.backgroundColor=team.hex;
+    const title=document.createElement("span");title.textContent=team.abbr;
+    button.append(dot,title);
+    button.onclick=()=>{
+      favoriteTeamDraftMask=(favoriteTeamDraftMask^(1<<index))>>>0;
+      renderFavoriteTeams();
+    };
+    grid.append(button);
+  });
+  const count=popcount(favoriteTeamDraftMask);
+  $("favoriteTeamCount").textContent=count?count+
+    " favorite team"+(count===1?"":"s")+" selected · Save to apply across game days."
+    :"No favorites selected. Every live game will have equal screen priority.";
+}
+$("saveFavorites").onclick=()=>perform(async()=>{
+  const data=await post("/api/display/favorites",{mask:favoriteTeamDraftMask});
+  currentConfig.favoriteTeams=data.favoriteTeams;
+  await refresh();
+  message(popcount(data.favoriteTeams)+" favorite teams saved");
+});
 function deviceSettings(){
   return Array.from({length:4},(_,i)=>{
     const choices=[["goal",1],["pp",2],["start",4],["final",8]];
@@ -722,6 +940,7 @@ function formConfig(){
     overlayFinal:$("overlayFinal").checked,
     overlayFlash:$("overlayFlash").checked,
     overlayLogos:$("overlayLogos").checked,
+    displayAllLiveEvents:$("displayAllLiveEvents").value==="true",
     overlayGoalSeconds:Number($("overlayGoalSeconds").value),
     overlayFinalSeconds:Number($("overlayFinalSeconds").value),
     cycleGames:$("cycleGames").checked,showStandings:$("showStandings").checked,
@@ -762,6 +981,8 @@ async function loadConfig(){
   $("overlayFinal").checked=currentConfig.overlayFinal!==false;
   $("overlayFlash").checked=currentConfig.overlayFlash!==false;
   $("overlayLogos").checked=currentConfig.overlayLogos!==false;
+  $("displayAllLiveEvents").value=currentConfig.displayAllLiveEvents===false?"false":"true";
+  favoriteTeamDraftMask=Number(currentConfig.favoriteTeams??0)>>>0;
   $("overlayGoalSeconds").value=currentConfig.overlayGoalSeconds||8;
   $("overlayFinalSeconds").value=currentConfig.overlayFinalSeconds||7;
   $("cycleGames").checked=!!currentConfig.cycleGames;

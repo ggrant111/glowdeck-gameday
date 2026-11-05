@@ -70,6 +70,10 @@ jobs:
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_power_play_log_policy.cpp -o /tmp/glowdeck-pp-event-test
           /tmp/glowdeck-pp-event-test
+      - name: Test all-live event admission, favorite teams and notification throttling
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_display_event_policy.cpp -o /tmp/glowdeck-display-policy
+          /tmp/glowdeck-display-policy
       - name: Test nonblocking NHL event overlay queue and priority
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_event_overlay.cpp -o /tmp/glowdeck-overlay-test

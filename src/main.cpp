@@ -27,6 +27,7 @@
 #include "NhlPenaltyLedger.h"
 #include "NhlOnIce.h"
 #include "EventOverlay.h"
+#include "DisplayEventPolicy.h"
 #include "RearLedPattern.h"
 #include "TeamPalette.h"
 #include <time.h>
@@ -89,6 +90,8 @@ struct Settings {
   bool overlayEnabled = true, overlayGoals = true, overlayPowerPlays = true;
   bool overlayStart = true, overlayFinal = true, overlayFlash = true;
   bool overlayLogos = true;
+  bool displayAllLiveEvents = true;
+  uint32_t favoriteTeams = 0;
   uint8_t overlayGoalSeconds = 8, overlayFinalSeconds = 7;
   uint8_t cycleSeconds = 9;
   uint8_t timezone = 1; // 0=ET, 1=CT, 2=MT, 3=PT, 4=AZ
@@ -107,6 +110,12 @@ struct GoalWatch {
   bool baseline = false;
 };
 GoalWatch goalWatch[MAX_GAMES];
+struct StateWatch {
+  uint32_t id = 0;
+  char state[8] = {};
+  bool baseline = false;
+};
+StateWatch stateWatch[MAX_GAMES];
 // Session-only ring buffer, 64 entries; no flash wear or framebuffer use.
 GameEventLog::Buffer gameEventHistory;
 uint32_t wledEventOwner[MAX_WLED] = {0, 0, 0, 0};
@@ -134,6 +143,9 @@ uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
 uint8_t carouselSlide = 0; // Independent of armed game and detail index.
 LiveCarousel::Plan carouselPlan; // 28 fixed entries, no heap or sprite buffer.
 uint32_t lastCarouselAdvance = 0;
+uint32_t lastBackgroundOverlayAt = 0;
+bool hasBackgroundOverlay = false;
+uint32_t backgroundEventsSkipped = 0, overlayEventsDropped = 0;
 String scoreboardDate;
 String targetScoreboardDate;
 bool scoreboardLoaded = false;
@@ -224,7 +236,8 @@ bool showingGamePage() {
   return currentCarouselPage().kind == LiveCarousel::Kind::GAME;
 }
 void rebuildCarouselPlan() {
-  carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings);
+  carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings,
+                                     cfg.favoriteTeams);
   if (carouselSlide >= carouselPageCount()) carouselSlide = 0;
   const LiveCarousel::Page page = currentCarouselPage();
   if (page.kind == LiveCarousel::Kind::GAME)
@@ -313,12 +326,41 @@ String rgbHex(uint32_t color) {
   return String(hex);
 }
 
+void saveSettings(); // Star toggle persists game follows.
 bool rearFollows(uint32_t gameId) {
   if (!gameId) return false;
   if (gameId == selectedGameId) return true; // Armed WLED game also drives rear RGB.
   for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
     if (cfg.followIds[i] == gameId) return true;
   return false;
+}
+bool isScheduledGame(uint32_t id) {
+  if (!id) return false;
+  for (uint8_t i=0; i<gameCount; ++i)
+    if (games[i].id==id) return true;
+  return false;
+}
+// One policy serves the CYD's star button and the web dashboard.
+// The armed game remains followed automatically; at most four extras.
+enum class FollowResult : uint8_t { OK, INVALID, LIMIT, ARMED };
+FollowResult setGameFollow(uint32_t id, bool follow) {
+  if (!isScheduledGame(id)) return FollowResult::INVALID;
+  if (id == selectedGameId) return FollowResult::ARMED;
+  uint8_t existing = MAX_FOLLOWED_GAMES, empty = MAX_FOLLOWED_GAMES;
+  for (uint8_t i=0; i<MAX_FOLLOWED_GAMES; ++i) {
+    if (cfg.followIds[i]==id) existing=i;
+    if (cfg.followIds[i]==0 && empty==MAX_FOLLOWED_GAMES) empty=i;
+  }
+  if (follow) {
+    if (existing==MAX_FOLLOWED_GAMES) {
+      if (empty==MAX_FOLLOWED_GAMES) return FollowResult::LIMIT;
+      cfg.followIds[empty]=id;
+    }
+  } else if (existing!=MAX_FOLLOWED_GAMES) cfg.followIds[existing]=0;
+  saveSettings();
+  needsDraw = true;
+  partialLiveUpdate = false;
+  return FollowResult::OK;
 }
 
 // All games share the official date-scoped NHL scoreboard request. Prioritize
@@ -332,7 +374,10 @@ uint32_t currentScoreboardPollIntervalMs() {
     const bool live = g.state == "LIVE" || g.state == "CRIT";
     if (live) {
       anyLive = true;
-      if (rearFollows(g.id)) priorityLive = true;
+      if (rearFollows(g.id) ||
+          DisplayEventPolicy::favoriteMatch(
+              cfg.favoriteTeams, g.away.c_str(), g.home.c_str()))
+        priorityLive = true;
     }
     if (g.id == selectedGameId &&
         (g.state == "FUT" || g.state == "PRE")) armedPregame = true;
@@ -581,16 +626,33 @@ bool overlayAllowed(EventOverlay::Kind kind) {
     default: return false;
   }
 }
+// NHL display alerts are independent of the armed/rear LED selection.
+// Manual visual previews bypass the NHL game-admission policy.
 bool queueGameOverlay(const Game *g, EventOverlay::Kind kind,
-                      const String &team, uint32_t sequence) {
+                      const String &team, uint32_t sequence,
+                      bool observed = false) {
   if (!overlayAllowed(kind)) return false;
+  const bool followed = g && rearFollows(g->id);
+  if (observed && (!g || (!cfg.displayAllLiveEvents && !followed)))
+    return false;
+  const uint8_t tier = observed ? DisplayEventPolicy::tier(
+      cfg.favoriteTeams, g->away.c_str(), g->home.c_str(), followed) : 2;
+  const uint32_t now = millis();
+  if (observed && !DisplayEventPolicy::backgroundAllowed(
+          kind, tier, now, lastBackgroundOverlayAt, hasBackgroundOverlay)) {
+    ++backgroundEventsSkipped;
+    return false;
+  }
   EventOverlay::Item item;
   item.kind = kind;
   item.gameId = g ? g->id : 0;
   item.eventSequence = sequence;
   item.color = teamRgb(team);
-  item.duration = EventOverlay::durationMs(kind, cfg.overlayGoalSeconds,
-                                           cfg.overlayFinalSeconds);
+  item.tier = tier;
+  item.duration = observed ? DisplayEventPolicy::duration(
+      kind, tier, cfg.overlayGoalSeconds, cfg.overlayFinalSeconds)
+      : EventOverlay::durationMs(kind, cfg.overlayGoalSeconds,
+                                cfg.overlayFinalSeconds);
   EventOverlay::copy(item.team, team.c_str(), sizeof(item.team));
   if (g) {
     EventOverlay::copy(item.home, g->home.c_str(), sizeof(item.home));
@@ -600,12 +662,18 @@ bool queueGameOverlay(const Game *g, EventOverlay::Kind kind,
     item.awayScore = (uint8_t)constrain(g->awayScore, 0, 255);
     item.homeScore = (uint8_t)constrain(g->homeScore, 0, 255);
   }
-  const bool admitted = overlayController.push(item, millis());
+  const bool admitted = overlayController.push(item, now);
   if (admitted) {
+    if (observed && tier == 0 && kind != EventOverlay::Kind::GOAL) {
+      lastBackgroundOverlayAt = now;
+      hasBackgroundOverlay = true;
+    }
     ++overlayCount;
     needsDraw = true;
     partialLiveUpdate = false;
     overlayLastFrame = 0;
+  } else if (observed) {
+    ++overlayEventsDropped;
   }
   return admitted;
 }
@@ -647,9 +715,9 @@ void detectRearGoalChanges() {
         }
         // Only followed/armed games interrupt the screen. Goal overlays
         // appear even when the WLED slots are empty or disabled.
-        if (followed)
+        if (followed || cfg.displayAllLiveEvents)
           queueGameOverlay(&g, EventOverlay::Kind::GOAL,
-                           scorer, entry.sequence);
+                           scorer, entry.sequence, true);
       }
     }
     watch.home = g.homeScore;
@@ -678,8 +746,9 @@ PowerPlayLogPolicy::Watch *getPowerPlayLogWatch(uint32_t id) {
 void observePowerPlayEvents() {
   for (uint8_t i = 0; i < gameCount; ++i) {
     const Game &g = games[i];
-    if (!rearFollows(g.id) ||
-        (g.state != "LIVE" && g.state != "CRIT")) continue;
+    const bool followed = rearFollows(g.id);
+    if (!followed && !cfg.displayAllLiveEvents) continue;
+    if (g.state != "LIVE" && g.state != "CRIT") continue;
     PowerPlayLogPolicy::Watch *watch = getPowerPlayLogWatch(g.id);
     if (!watch) continue;
     const bool reliable = g.ppDataKnown &&
@@ -690,19 +759,20 @@ void observePowerPlayEvents() {
       const String &team = change.ended == 1 ? g.home : g.away;
       const uint32_t seq = addGameEvent(
           g, GameEventLog::Type::POWER_PLAY_END, team, 0).sequence;
-      queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_END, team, seq);
+      queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_END, team, seq, true);
       if (g.id == selectedGameId) armedPpLogSeq = 0;
     }
     if (change.started) {
       const String &team = change.started == 1 ? g.home : g.away;
       GameEventLog::Entry &entry = addGameEvent(
           g, GameEventLog::Type::POWER_PLAY_START, team, 0);
-      entry.rear = (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
-          ? GameEventLog::Rear::NOT_ENABLED
-          : GameEventLog::Rear::SCHEDULED;
+      entry.rear = !followed ? GameEventLog::Rear::NOT_SELECTED
+          : (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
+            ? GameEventLog::Rear::NOT_ENABLED
+            : GameEventLog::Rear::SCHEDULED;
       if (g.id == selectedGameId) armedPpLogSeq = entry.sequence;
       queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_START,
-                       team, entry.sequence);
+                       team, entry.sequence, true);
     }
   }
 }
@@ -783,6 +853,8 @@ void prepareNewScoreboardDate(const String &today) {
     overlayLastFrame = 0;
     lastArmedGameState = "";
     for (auto &entry : goalWatch) entry = GoalWatch();
+    for (auto &entry : stateWatch) entry = StateWatch();
+    hasBackgroundOverlay = false;
     for (auto &entry : ppEventWatch) entry = PowerPlayLogPolicy::Watch();
     armedPpLogSeq = 0;
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
@@ -1321,6 +1393,8 @@ void loadSettings() {
   cfg.overlayFinal = prefs.getBool("ovFinal", true);
   cfg.overlayFlash = prefs.getBool("ovFlash", true);
   cfg.overlayLogos = prefs.getBool("ovLogos", true);
+  cfg.displayAllLiveEvents = prefs.getBool("ovAllLive", true);
+  cfg.favoriteTeams = prefs.getUInt("favTeams", 0);
   cfg.overlayGoalSeconds = constrain(prefs.getUChar("ovGoalSec", 8), 3, 12);
   cfg.overlayFinalSeconds = constrain(prefs.getUChar("ovFinalSec", 7), 3, 12);
   cfg.cycleSeconds = constrain(prefs.getUChar("cycleSec", 9), 5, 30);
@@ -1368,6 +1442,8 @@ void saveSettings() {
   prefs.putBool("ovFinal", cfg.overlayFinal);
   prefs.putBool("ovFlash", cfg.overlayFlash);
   prefs.putBool("ovLogos", cfg.overlayLogos);
+  prefs.putBool("ovAllLive", cfg.displayAllLiveEvents);
+  prefs.putUInt("favTeams", cfg.favoriteTeams);
   prefs.putUChar("ovGoalSec", cfg.overlayGoalSeconds);
   prefs.putUChar("ovFinalSec", cfg.overlayFinalSeconds);
   prefs.putUChar("cycleSec", cfg.cycleSeconds);
@@ -1835,14 +1911,16 @@ void fetchFollowedPowerPlays() {
     if(g.intermission)continue;
     const bool shown=screen==Screen::LIVE &&
         visible.kind==LiveCarousel::Kind::GAME && visible.index==i;
-    if(!rearFollows(g.id) && !shown)continue;
+    if(!rearFollows(g.id) && !shown && !cfg.displayAllLiveEvents)continue;
     NhlPenaltyLedger::Book *candidate=penaltyLedger(g.id);
     if(!candidate)continue;
     if(candidate->loaded &&
        uint32_t(millis()-candidate->checkedAt)<30000UL)continue;
     // The game visible on the CYD is highest priority for timely PP badges,
     // followed by the armed game and any additional followed games.
-    const uint8_t priority=shown?3:(g.id==selectedGameId?2:1);
+    const uint8_t priority=DisplayEventPolicy::favoriteMatch(
+        cfg.favoriteTeams,g.away.c_str(),g.home.c_str()) ? 5
+        : shown ? 4 : g.id==selectedGameId ? 3 : rearFollows(g.id) ? 2 : 1;
     if(priority>best) {
       best=priority;target=&g;book=candidate;
     }
@@ -2161,7 +2239,8 @@ void pollNhl() {
   // and when games transition from FUT -> LIVE -> FINAL. A former full
   // game page can become a 4-up summary, or vice versa, without resetting
   // the armed game. A live slate intentionally hides standings slides.
-  carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings);
+  carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings,
+                                     cfg.favoriteTeams);
   carouselSlide = newDay ? 0 : LiveCarousel::restore(
       carouselPlan, games, oldSlideKind, previouslyShownGameId,
       previousStandingsIndex, featuredIndex);
@@ -2202,6 +2281,40 @@ void pollNhl() {
   // each observed score increment is recorded exactly once.
   detectRearGoalChanges();
   observePowerPlayEvents();
+  // League-wide display-only puck drop and final observations, keyed by NHL ID.
+  // An armed matchup retains its existing independent WLED transition engine.
+  // Never fabricate an event from the first snapshot after boot or rollover.
+  for (uint8_t i=0; i<gameCount; ++i) {
+    const Game &observed = games[i];
+    StateWatch &watch = stateWatch[i];
+    if (watch.id != observed.id) {
+      watch = StateWatch();
+      watch.id = observed.id;
+    }
+    if (observed.id && observed.id != selectedGameId &&
+        (cfg.displayAllLiveEvents || rearFollows(observed.id)) &&
+        watch.baseline) {
+      const bool ended = CelebrationEngine::isLive(watch.state) &&
+          CelebrationEngine::isFinal(observed.state.c_str());
+      const bool started = CelebrationEngine::isPregame(watch.state) &&
+          CelebrationEngine::isLive(observed.state.c_str());
+      if (started || ended) {
+        const String representative = ended
+          ? (observed.homeScore > observed.awayScore ? observed.home : observed.away)
+          : DisplayEventPolicy::isFavorite(cfg.favoriteTeams, observed.away.c_str())
+            ? observed.away : observed.home;
+        const GameEventLog::Type type = started
+          ? GameEventLog::Type::GAME_START : GameEventLog::Type::FINAL_WIN;
+        const EventOverlay::Kind kind = started
+          ? EventOverlay::Kind::GAME_START : EventOverlay::Kind::FINAL_WIN;
+        GameEventLog::Entry &log=addGameEvent(observed,type,representative,0);
+        log.rear=GameEventLog::Rear::NOT_SELECTED;
+        queueGameOverlay(&observed,kind,representative,log.sequence,true);
+      }
+    }
+    EventOverlay::copy(watch.state,observed.state.c_str(),sizeof(watch.state));
+    watch.baseline=observed.id!=0;
+  }
   Game *g = selectedGame();
   if (g) {
     // Trigger game-start and final outcomes only when a previously observed
@@ -2225,7 +2338,7 @@ void pollNhl() {
           : transition == CelebrationEngine::Event::FINAL_WIN
             ? EventOverlay::Kind::FINAL_WIN
             : EventOverlay::Kind::FINAL_LOSS;
-      queueGameOverlay(g, kind, fav, logged.sequence);
+      queueGameOverlay(g, kind, fav, logged.sequence, true);
       const bool enabled = transition == CelebrationEngine::Event::GAME_START
                            ? cfg.wledGameStart : cfg.wledFinal;
       if (enabled) {
@@ -2362,6 +2475,22 @@ void drawTeamGradientBackground(const Game &g) {
       TeamGradient::colorAt(away, home, 304)));
 }
 
+void drawFollowStar(const Game &g) {
+  if (!gameIsLive(g)) return;
+  const bool followed=rearFollows(g.id);
+  // Large 46x30 hit area in header; ten-point star, drawn without fonts/assets.
+  tft.fillRoundRect(125, 1, 47, 29, 6, followed ? 0x4220 : ARENA_PLATE);
+  const int16_t x=148, y=15;
+  const int8_t px[10]={0,3,10,5,6,0,-6,-5,-10,-3};
+  const int8_t py[10]={-11,-3,-3,2,10,6,10,2,-3,-3};
+  const uint16_t color=followed ? 0xFE60 : 0xCE79;
+  for (uint8_t i=0;i<10;++i) {
+    const uint8_t j=(i+1)%10;
+    if (followed) tft.fillTriangle(x,y,x+px[i],y+py[i],
+                                  x+px[j],y+py[j],color);
+    tft.drawLine(x+px[i],y+py[i],x+px[j],y+py[j],color);
+  }
+}
 void drawScoreboardHeader(const Game &g) {
   tft.fillRect(0, 0, 320, 31, ARENA_BLACK);
   // Small NHL-like shield outline without using a heavyweight background image.
@@ -2380,6 +2509,7 @@ void drawScoreboardHeader(const Game &g) {
   tft.drawString(gameIsLive(g) ? "LIVE" :
                  gameIsFuture(g) ? "NEXT" : "FINAL", 81, 16, 2);
   if (gameIsLive(g)) tft.fillCircle(56, 16, 2, WHITE);
+  drawFollowStar(g);
   tft.setTextColor(ICE_TEXT, ARENA_BLACK);
   tft.drawString(String(carouselSlide + 1) + "/" + String(carouselPageCount()), 228, 16, 2);
   tft.setTextColor(WiFi.status() == WL_CONNECTED ? ICE_BLUE : ORANGE, ARENA_BLACK);
@@ -2981,6 +3111,12 @@ void handleTouch() {
       const int dy = gestureEndY - gestureStartY;
       if (carouselPageCount() > 1 && abs(dx) > 48 && abs(dy) < 90) {
         advanceCarousel(dx < 0 ? 1 : -1);
+      } else if (showingGamePage() && gameCount &&
+                 gestureStartY <= 34 && gestureStartX >= 124 &&
+                 gestureStartX <= 175) {
+        const Game &g=games[currentCarouselPage().index];
+        if (gameIsLive(g))
+          setGameFollow(g.id, !rearFollows(g.id));
       } else if (gestureStartY <= 35 && gestureStartX >= 263) {
         screen = Screen::GAMES; // Menu is available on every slide.
       } else if (!showingSummaryPage() && carouselPageCount() > 1 &&
@@ -3143,7 +3279,7 @@ void registerRoutes() {
     // New slide/standings metadata should not enlarge the loopTask stack.
     DynamicJsonDocument doc(3584);
     if (doc.capacity() < 3584) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.9";
+    doc["version"] = "0.4.0";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -3164,6 +3300,8 @@ void registerRoutes() {
     doc["overlayQueue"] = overlayController.pending();
     doc["overlayRemainingMs"] = overlayController.remaining(millis());
     doc["overlayCount"] = overlayCount;
+    doc["backgroundEventsSkipped"] = backgroundEventsSkipped;
+    doc["overlayEventsDropped"] = overlayEventsDropped;
     doc["rearEnabled"] = cfg.rearLedEnabled;
     doc["rearEvent"] = rearEvent == RearEvent::GOAL ? "GOAL" :
                        rearEvent == RearEvent::POWER_PLAY ? "POWER_PLAY" :
@@ -3200,6 +3338,8 @@ void registerRoutes() {
     doc["overlayFinal"] = cfg.overlayFinal;
     doc["overlayFlash"] = cfg.overlayFlash;
     doc["overlayLogos"] = cfg.overlayLogos;
+    doc["displayAllLiveEvents"] = cfg.displayAllLiveEvents;
+    doc["favoriteTeams"] = cfg.favoriteTeams;
     doc["overlayGoalSeconds"] = cfg.overlayGoalSeconds;
     doc["overlayFinalSeconds"] = cfg.overlayFinalSeconds;
     doc["cycleGames"] = cfg.cycleGames;
@@ -3227,6 +3367,8 @@ void registerRoutes() {
       g["id"] = games[i].id;
       g["home"] = games[i].home;
       g["away"] = games[i].away;
+      g["homeName"] = games[i].homeName;
+      g["awayName"] = games[i].awayName;
       g["homeScore"] = games[i].homeScore;
       g["awayScore"] = games[i].awayScore;
       g["state"] = games[i].state;
@@ -3326,6 +3468,8 @@ void registerRoutes() {
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
     doc["timezone"] = cfg.timezone;
+    doc["displayAllLiveEvents"] = cfg.displayAllLiveEvents;
+    doc["favoriteTeams"] = cfg.favoriteTeams;
     JsonArray wled = doc.createNestedArray("wled");
     for (uint8_t i = 0; i < MAX_WLED; ++i) {
       JsonObject d = wled.createNestedObject();
@@ -3375,6 +3519,8 @@ void registerRoutes() {
     cfg.overlayFinal = doc["overlayFinal"] | cfg.overlayFinal;
     cfg.overlayFlash = doc["overlayFlash"] | cfg.overlayFlash;
     cfg.overlayLogos = doc["overlayLogos"] | cfg.overlayLogos;
+    cfg.displayAllLiveEvents = doc["displayAllLiveEvents"] | cfg.displayAllLiveEvents;
+    cfg.favoriteTeams = doc["favoriteTeams"] | cfg.favoriteTeams;
     cfg.overlayGoalSeconds = constrain(
         (int)(doc["overlayGoalSeconds"] | cfg.overlayGoalSeconds), 3, 12);
     cfg.overlayFinalSeconds = constrain(
@@ -3443,6 +3589,7 @@ void registerRoutes() {
     }
     if (wledActiveEvent == CelebrationEngine::Event::POWER_PLAY && !cfg.wledPP)
       scheduleWledRestoreAll();
+    rebuildCarouselPlan();
     saveSettings();
     if (wifiChanged) {
       WiFi.disconnect();
@@ -3452,6 +3599,32 @@ void registerRoutes() {
     StaticJsonDocument<96> ok;
     ok["ok"] = true;
     sendJson(ok);
+  });
+  server.on("/api/display/favorites", HTTP_POST, []() {
+    if (!authorized()) return;
+    StaticJsonDocument<128> request;
+    if (deserializeJson(request, server.arg("plain")))
+      return errorResponse("Invalid favorite teams JSON");
+    if (!request.containsKey("mask") || !request["mask"].is<uint32_t>())
+      return errorResponse("Favorite teams mask must be an unsigned integer");
+    const uint32_t mask = request["mask"].as<uint32_t>();
+    if (mask != cfg.favoriteTeams) {
+      const LiveCarousel::Page old=currentCarouselPage();
+      const uint32_t oldGame=old.kind==LiveCarousel::Kind::GAME &&
+          old.index<gameCount ? games[old.index].id : 0;
+      cfg.favoriteTeams=mask;
+      rebuildCarouselPlan();
+      carouselSlide=LiveCarousel::restore(carouselPlan,games,
+          old.kind,oldGame,old.index,featuredIndex);
+      lastCarouselAdvance=millis();
+      partialLiveUpdate=false;
+      needsDraw=true;
+      saveSettings();
+    }
+    StaticJsonDocument<96> response;
+    response["ok"]=true;
+    response["favoriteTeams"]=cfg.favoriteTeams;
+    sendJson(response);
   });
   server.on("/api/wifi/scan", HTTP_GET, []() {
     if (!authorized()) return;
@@ -3469,30 +3642,22 @@ void registerRoutes() {
   server.on("/api/rear/follow", HTTP_POST, []() {
     if (!authorized()) return;
     StaticJsonDocument<160> doc;
-    if (deserializeJson(doc, server.arg("plain"))) return errorResponse("Invalid JSON");
+    if (deserializeJson(doc, server.arg("plain")))
+      return errorResponse("Invalid JSON");
     const uint32_t id = doc["id"] | 0U;
-    bool exists = false;
-    for (uint8_t i = 0; i < gameCount; ++i)
-      if (games[i].id == id) exists = true;
-    if (!id || !exists) return errorResponse("Choose a game on today's schedule", 404);
-    const bool followed = doc["follow"] | false;
-    if (followed) {
-      bool present = false;
-      for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
-        if (cfg.followIds[i] == id) present = true;
-      if (!present) {
-        bool added = false;
-        for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) {
-          if (cfg.followIds[i] == 0) { cfg.followIds[i] = id; added = true; break; }
-        }
-        if (!added) return errorResponse("Up to 4 additional followed games", 409);
-      }
-    } else {
-      for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
-        if (cfg.followIds[i] == id) cfg.followIds[i] = 0;
-    }
-    saveSettings();
-    StaticJsonDocument<96> result; result["ok"] = true; sendJson(result);
+    const bool follow = doc["follow"] | false;
+    const FollowResult status=setGameFollow(id,follow);
+    if (status==FollowResult::INVALID)
+      return errorResponse("Choose a game on today's schedule",404);
+    if (status==FollowResult::LIMIT)
+      return errorResponse("Maximum 4 additional followed games",409);
+    if (status==FollowResult::ARMED && !follow)
+      return errorResponse("Armed game is always followed",409);
+    StaticJsonDocument<128> result;
+    result["ok"]=true;
+    result["followed"]=rearFollows(id);
+    result["armed"]=id==selectedGameId;
+    sendJson(result);
   });
   // On-device visual test: intentionally does not trigger WLED or rear LED,
   // so it remains usable even before adding external LED controllers.
