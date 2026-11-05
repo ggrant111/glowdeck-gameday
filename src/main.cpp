@@ -27,6 +27,7 @@
 #include "NhlPenaltyLedger.h"
 #include "NhlOnIce.h"
 #include "EventOverlay.h"
+#include "DisplayEventPolicy.h"
 #include "RearLedPattern.h"
 #include "TeamPalette.h"
 #include <time.h>
@@ -89,6 +90,8 @@ struct Settings {
   bool overlayEnabled = true, overlayGoals = true, overlayPowerPlays = true;
   bool overlayStart = true, overlayFinal = true, overlayFlash = true;
   bool overlayLogos = true;
+  bool displayAllLiveEvents = true;
+  uint32_t favoriteTeams = 0;
   uint8_t overlayGoalSeconds = 8, overlayFinalSeconds = 7;
   uint8_t cycleSeconds = 9;
   uint8_t timezone = 1; // 0=ET, 1=CT, 2=MT, 3=PT, 4=AZ
@@ -107,6 +110,12 @@ struct GoalWatch {
   bool baseline = false;
 };
 GoalWatch goalWatch[MAX_GAMES];
+struct StateWatch {
+  uint32_t id = 0;
+  char state[8] = {};
+  bool baseline = false;
+};
+StateWatch stateWatch[MAX_GAMES];
 // Session-only ring buffer, 64 entries; no flash wear or framebuffer use.
 GameEventLog::Buffer gameEventHistory;
 uint32_t wledEventOwner[MAX_WLED] = {0, 0, 0, 0};
@@ -134,6 +143,9 @@ uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
 uint8_t carouselSlide = 0; // Independent of armed game and detail index.
 LiveCarousel::Plan carouselPlan; // 28 fixed entries, no heap or sprite buffer.
 uint32_t lastCarouselAdvance = 0;
+uint32_t lastBackgroundOverlayAt = 0;
+bool hasBackgroundOverlay = false;
+uint32_t backgroundEventsSkipped = 0, overlayEventsDropped = 0;
 String scoreboardDate;
 String targetScoreboardDate;
 bool scoreboardLoaded = false;
@@ -224,7 +236,8 @@ bool showingGamePage() {
   return currentCarouselPage().kind == LiveCarousel::Kind::GAME;
 }
 void rebuildCarouselPlan() {
-  carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings);
+  carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings,
+                                     cfg.favoriteTeams);
   if (carouselSlide >= carouselPageCount()) carouselSlide = 0;
   const LiveCarousel::Page page = currentCarouselPage();
   if (page.kind == LiveCarousel::Kind::GAME)
@@ -332,7 +345,10 @@ uint32_t currentScoreboardPollIntervalMs() {
     const bool live = g.state == "LIVE" || g.state == "CRIT";
     if (live) {
       anyLive = true;
-      if (rearFollows(g.id)) priorityLive = true;
+      if (rearFollows(g.id) ||
+          DisplayEventPolicy::favoriteMatch(
+              cfg.favoriteTeams, g.away.c_str(), g.home.c_str()))
+        priorityLive = true;
     }
     if (g.id == selectedGameId &&
         (g.state == "FUT" || g.state == "PRE")) armedPregame = true;
@@ -783,6 +799,8 @@ void prepareNewScoreboardDate(const String &today) {
     overlayLastFrame = 0;
     lastArmedGameState = "";
     for (auto &entry : goalWatch) entry = GoalWatch();
+    for (auto &entry : stateWatch) entry = StateWatch();
+    hasBackgroundOverlay = false;
     for (auto &entry : ppEventWatch) entry = PowerPlayLogPolicy::Watch();
     armedPpLogSeq = 0;
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
@@ -1321,6 +1339,8 @@ void loadSettings() {
   cfg.overlayFinal = prefs.getBool("ovFinal", true);
   cfg.overlayFlash = prefs.getBool("ovFlash", true);
   cfg.overlayLogos = prefs.getBool("ovLogos", true);
+  cfg.displayAllLiveEvents = prefs.getBool("ovAllLive", true);
+  cfg.favoriteTeams = prefs.getUInt("favTeams", 0);
   cfg.overlayGoalSeconds = constrain(prefs.getUChar("ovGoalSec", 8), 3, 12);
   cfg.overlayFinalSeconds = constrain(prefs.getUChar("ovFinalSec", 7), 3, 12);
   cfg.cycleSeconds = constrain(prefs.getUChar("cycleSec", 9), 5, 30);
@@ -1368,6 +1388,8 @@ void saveSettings() {
   prefs.putBool("ovFinal", cfg.overlayFinal);
   prefs.putBool("ovFlash", cfg.overlayFlash);
   prefs.putBool("ovLogos", cfg.overlayLogos);
+  prefs.putBool("ovAllLive", cfg.displayAllLiveEvents);
+  prefs.putUInt("favTeams", cfg.favoriteTeams);
   prefs.putUChar("ovGoalSec", cfg.overlayGoalSeconds);
   prefs.putUChar("ovFinalSec", cfg.overlayFinalSeconds);
   prefs.putUChar("cycleSec", cfg.cycleSeconds);
@@ -2161,7 +2183,8 @@ void pollNhl() {
   // and when games transition from FUT -> LIVE -> FINAL. A former full
   // game page can become a 4-up summary, or vice versa, without resetting
   // the armed game. A live slate intentionally hides standings slides.
-  carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings);
+  carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings,
+                                     cfg.favoriteTeams);
   carouselSlide = newDay ? 0 : LiveCarousel::restore(
       carouselPlan, games, oldSlideKind, previouslyShownGameId,
       previousStandingsIndex, featuredIndex);
@@ -3143,7 +3166,7 @@ void registerRoutes() {
     // New slide/standings metadata should not enlarge the loopTask stack.
     DynamicJsonDocument doc(3584);
     if (doc.capacity() < 3584) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.9";
+    doc["version"] = "0.4.0";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -3164,6 +3187,8 @@ void registerRoutes() {
     doc["overlayQueue"] = overlayController.pending();
     doc["overlayRemainingMs"] = overlayController.remaining(millis());
     doc["overlayCount"] = overlayCount;
+    doc["backgroundEventsSkipped"] = backgroundEventsSkipped;
+    doc["overlayEventsDropped"] = overlayEventsDropped;
     doc["rearEnabled"] = cfg.rearLedEnabled;
     doc["rearEvent"] = rearEvent == RearEvent::GOAL ? "GOAL" :
                        rearEvent == RearEvent::POWER_PLAY ? "POWER_PLAY" :
@@ -3200,6 +3225,8 @@ void registerRoutes() {
     doc["overlayFinal"] = cfg.overlayFinal;
     doc["overlayFlash"] = cfg.overlayFlash;
     doc["overlayLogos"] = cfg.overlayLogos;
+    doc["displayAllLiveEvents"] = cfg.displayAllLiveEvents;
+    doc["favoriteTeams"] = cfg.favoriteTeams;
     doc["overlayGoalSeconds"] = cfg.overlayGoalSeconds;
     doc["overlayFinalSeconds"] = cfg.overlayFinalSeconds;
     doc["cycleGames"] = cfg.cycleGames;
@@ -3326,6 +3353,8 @@ void registerRoutes() {
     doc["cycleGames"] = cfg.cycleGames;
     doc["cycleSeconds"] = cfg.cycleSeconds;
     doc["timezone"] = cfg.timezone;
+    doc["displayAllLiveEvents"] = cfg.displayAllLiveEvents;
+    doc["favoriteTeams"] = cfg.favoriteTeams;
     JsonArray wled = doc.createNestedArray("wled");
     for (uint8_t i = 0; i < MAX_WLED; ++i) {
       JsonObject d = wled.createNestedObject();
@@ -3375,6 +3404,8 @@ void registerRoutes() {
     cfg.overlayFinal = doc["overlayFinal"] | cfg.overlayFinal;
     cfg.overlayFlash = doc["overlayFlash"] | cfg.overlayFlash;
     cfg.overlayLogos = doc["overlayLogos"] | cfg.overlayLogos;
+    cfg.displayAllLiveEvents = doc["displayAllLiveEvents"] | cfg.displayAllLiveEvents;
+    cfg.favoriteTeams = doc["favoriteTeams"] | cfg.favoriteTeams;
     cfg.overlayGoalSeconds = constrain(
         (int)(doc["overlayGoalSeconds"] | cfg.overlayGoalSeconds), 3, 12);
     cfg.overlayFinalSeconds = constrain(
@@ -3443,6 +3474,7 @@ void registerRoutes() {
     }
     if (wledActiveEvent == CelebrationEngine::Event::POWER_PLAY && !cfg.wledPP)
       scheduleWledRestoreAll();
+    rebuildCarouselPlan();
     saveSettings();
     if (wifiChanged) {
       WiFi.disconnect();
