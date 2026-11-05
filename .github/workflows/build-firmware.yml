@@ -1,4 +1,4 @@
-name: Build CYD firmware
+name: Build GlowDeck firmware (CYD + ESP32-S3)
 
 on:
   push:
@@ -94,10 +94,19 @@ jobs:
         run: python scripts/generate_logos.py
       - name: Compile ESP32 CYD firmware
         run: pio run -e cyd
-      - name: Publish installable firmware
+      - name: Compile Waveshare ESP32-S3 3.5-inch firmware
+        run: pio run -e s3_waveshare_35
+      - name: Publish CYD installable firmware
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: glowdeck-gameday-cyd-firmware
           path: .pio/build/cyd/firmware.bin
+          if-no-files-found: error
+      - name: Publish ESP32-S3 installable firmware
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glowdeck-gameday-s3-waveshare-35-firmware
+          path: .pio/build/s3_waveshare_35/firmware.bin
           if-no-files-found: error
