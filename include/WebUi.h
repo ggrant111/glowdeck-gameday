@@ -107,23 +107,34 @@ header{padding:19px 17px}
 <body>
 <header>
 <div class="top">
-<div><div class="eyebrow">GLOWDECK / ESP32 CYD</div><h1>GameDay Control</h1><p>Your standalone NHL-to-WLED game companion</p></div>
+<div><div class="eyebrow">GLOWDECK · GAME CENTER</div><h1>GameDay</h1><p>Every game. Your favorite moments. Your lights.</p></div>
 <div id="connection" class="status">Connecting</div>
 </div>
 </header>
 <main>
-<nav class="tabs" aria-label="Sections">
-<button class="tab selected" data-tab="dashboard">Dashboard</button>
-<button class="tab" data-tab="games">Games</button>
-<button class="tab" data-tab="events">Event Log</button>
-<button class="tab" data-tab="display">Display</button>
-<button class="tab" data-tab="devices">Lights</button>
-<button class="tab" data-tab="rear">CYD LED</button>
-<button class="tab" data-tab="settings">Setup</button>
-<button class="tab" data-tab="firmware">Update</button>
+<nav class="tabs" aria-label="GameDay navigation">
+<div class="rail-note"><span class="kicker">CONTROL CENTER</span><p class="small">This device · your local network</p></div>
+<button class="tab selected" data-tab="dashboard" aria-current="page">Overview</button>
+<button class="tab" data-tab="games">Live games</button>
+<button class="tab" data-tab="display">Favorites &amp; alerts</button>
+<button class="tab" data-tab="devices">WLED celebrations</button>
+<button class="tab" data-tab="rear">Rear RGB LED</button>
+<button class="tab" data-tab="events">Activity</button>
+<button class="tab" data-tab="settings">Device settings</button>
+<button class="tab" data-tab="firmware">Firmware update</button>
 </nav>
 <section id="dashboard" class="panel active">
-<div class="card"><h2>Game-day status</h2>
+<div class="section-intro"><div class="eyebrow">LIVE CONTROL CENTER</div><h2>Your game day at a glance</h2><p>Scores, favorites and celebrations—without changing what your lights are following.</p></div>
+<div class="card hero"><div class="kicker">Today's NHL</div><h2>You're connected to the action</h2>
+<div class="stats">
+<div class="stat"><span>Games live</span><b id="dashLiveCount">—</b></div>
+<div class="stat"><span>Favorite teams</span><b id="dashFavoriteCount">—</b></div>
+<div class="stat"><span>Games followed</span><b id="dashFollowCount">—</b></div>
+<div class="stat"><span>On-screen alerts</span><b id="dashDisplayMode">—</b></div>
+</div>
+<div class="actions"><button class="primary" data-tab="games">Browse games</button><button data-tab="display">Manage favorite teams</button><button data-tab="devices">Control WLED</button></div>
+</div>
+<div class="card"><h2>Device &amp; network health</h2>
 <div class="stats">
 <div class="stat"><span>Selected game</span><b id="currentGame">None</b></div>
 <div class="stat"><span>Goal celebrations</span><b id="currentMode">Both teams</b></div>
@@ -136,14 +147,14 @@ header{padding:19px 17px}
 <div class="stat"><span>NHL connection</span><b id="nhlFeedState">—</b></div>
 <div class="stat"><span>Last successful NHL update</span><b id="nhlLastSuccess">—</b></div>
 </div>
-<div class="actions"><button class="primary" data-tab="games">Choose game</button><button data-tab="devices">Manage lights</button></div>
+<div class="actions"><button data-tab="settings">Network settings</button><button data-tab="firmware">Firmware update</button></div>
 <div class="small muted" id="lastError"></div></div>
-<div class="card"><h2>Recent game events</h2>
+<div class="card"><h2>Latest league events</h2>
 <p class="small muted">What the NHL feed reported and which lights GameDay commanded.</p>
 <div id="recentGameEvents"><p class="muted">No events recorded yet.</p></div>
 <button data-tab="events">View complete event log</button></div>
-<div class="card"><h2>Celebration controls</h2>
-<p>Choose which team can trigger lights when the NHL score changes. The device saves this automatically.</p>
+<div class="card"><h2>Armed game · WLED goal triggers</h2>
+<p>Choose which side of the <strong>armed matchup</strong> triggers WLED. Starring a different live game follows it for rear RGB alerts and screen celebrations, without re-arming WLED.</p>
 <div class="actions" id="modeButtons">
 <button data-mode="0">Off</button><button data-mode="1">Home</button><button data-mode="2">Away</button><button data-mode="3">Both</button>
 </div>
@@ -151,6 +162,7 @@ header{padding:19px 17px}
 <p class="small">A test saves the current WLED state, shows the celebration color, then restores the previous state.</p></div>
 </section>
 <section id="events" class="panel">
+<div class="section-intro"><div class="eyebrow">ACTIVITY LOG</div><h2>What happened, and what fired</h2><p>League observations and the exact commands sent to your physical lights.</p></div>
 <div class="card"><h2>Game events & light activity</h2>
 <p>See NHL goals, power plays, puck drop and finals, plus whether the <b>CYD's built-in LED</b> and each selected <b>WLED LED strip/controller</b> received a celebration command.</p>
 <p class="small muted">WLED “Command accepted” means the controller acknowledged the HTTP request. It does not independently confirm visible light output. The latest 64 events are retained in memory <b>until the device reboots</b>. No historical events are backfilled.</p>
@@ -171,13 +183,29 @@ header{padding:19px 17px}
 </div>
 </section>
 <section id="games" class="panel">
-<div class="card"><h2>Today's NHL games</h2><p>Tap a matchup to arm it on your CYD. The first poll records current scores without replaying earlier goals.</p>
+<div class="section-intro"><div class="eyebrow">NHL LIVE BOARD</div><h2>Every matchup, one place</h2><p>Tap the star to follow a game for rear RGB and screen celebrations. Use Arm to choose the one matchup that also controls WLED.</p></div>
+<div class="card"><div class="row">
+<div><h2>Today's games</h2><p class="small">Favorite-team games rise to the top of the live carousel.</p></div>
+<div><label for="gameSearch">Search teams</label><input id="gameSearch" type="search" placeholder="Search DAL, Utah, Boston…" autocomplete="off"></div>
+</div>
+<div class="filterbar" role="group" aria-label="Filter today's games">
+<button class="selected" data-game-filter="all" aria-pressed="true">All</button>
+<button data-game-filter="live" aria-pressed="false">Live</button>
+<button data-game-filter="favorites" aria-pressed="false">Favorite teams</button>
+<button data-game-filter="following" aria-pressed="false">Following</button>
+</div>
 <div id="gameList"><p>No games loaded yet.</p></div>
 <div id="gameDetail" class="item" hidden></div>
 <button id="refreshGames">Refresh list</button>
 <p class="small muted">Score checks run on the CYD every 20 seconds when a game is selected. NHL reporting can be delayed.</p></div>
 </section>
 <section id="display" class="panel">
+<div class="section-intro"><div class="eyebrow">PERSONALIZE YOUR FEED</div><h2>Favorite teams &amp; screen alerts</h2><p>Follow the whole NHL, while giving the games you care about priority. Screen preferences do not change physical lighting targets.</p></div>
+<div class="card"><h2>Permanent favorite teams</h2>
+<p>Select any teams. Their live games appear first in the carousel, and their events get priority over other NHL alerts. These favorites persist across dates and do not automatically arm WLED or rear LEDs.</p>
+<div id="favoriteTeamGrid" class="team-grid" role="group" aria-label="Choose favorite NHL teams"><p class="muted">Loading teams…</p></div>
+<p class="small muted" id="favoriteTeamCount">No favorite teams selected.</p>
+<div class="actions"><button class="primary" id="saveFavorites">Save favorite teams</button></div></div>
 <div class="card"><h2>Today's game carousel</h2>
 <p>During live NHL games, the CYD automatically focuses on full-screen live scoreboards and groups other upcoming or finished matches into readable four-game summary slides. When no games are live, it returns to the complete game-and-standings carousel. Swipe to browse or tap a summary row for its matchup details.</p>
 <div class="stats">
@@ -201,8 +229,18 @@ header{padding:19px 17px}
 <option value="4">Arizona (AZ)</option>
 </select>
 <div class="actions"><button id="saveDisplay" class="primary">Save display settings</button></div><div class="card" style="margin-top:18px">
-<h2>Live event overlays</h2>
-<p>Temporarily show the scoring team's official logo, color, score and event description on the CYD during NHL celebrations. Animated borders coordinate with the internal RGB LED and opted-in WLED controllers. No WLED is required.</p>
+<h2>On-screen NHL event notifications</h2>
+<p>Choose how widely the CYD reports live action. The screen can show events for every game while the rear LED and WLED continue following their independently selected matchups.</p>
+<label for="displayAllLiveEvents">Show screen alerts for</label>
+<select id="displayAllLiveEvents">
+<option value="true">All live NHL games · recommended</option>
+<option value="false">Armed and followed games only</option>
+</select>
+<p class="small muted">Priority: favorite-team alerts first, followed games second, all other live games third. Other-game notifications are short, low-priority events are throttled, and stale queued alerts are discarded.</p>
+<div class="stats">
+<div class="stat"><span>Background alerts throttled</span><b id="backgroundSkipped">0</b></div>
+<div class="stat"><span>Overflow / duplicate suppression</span><b id="overlayDropped">0</b></div>
+</div>
 <div class="stats">
 <div class="stat"><span>On-screen event</span><b id="overlayStatus">Idle</b></div>
 <div class="stat"><span>Queued events</span><b id="overlayQueued">0</b></div>
@@ -238,6 +276,7 @@ header{padding:19px 17px}
 <div class="hint">Browsing rotating games does not change which matchup triggers goal celebrations. Use ARM GOALS on the CYD or ARM in the Games tab.</div>
 </div></section>
 <section id="devices" class="panel">
+<div class="section-intro"><div class="eyebrow">PHYSICAL CELEBRATIONS</div><h2>Your WLED light show</h2><p>Choose which controllers participate, test their effects, and restore their previous lighting afterward.</p></div>
 <div class="card"><h2>WLED celebration engine</h2>
 <p>Run matching event effects on the WLED controllers you choose. Each controller can participate in goals, power plays, game starts and final results independently.</p>
 <div class="stats">
@@ -279,6 +318,7 @@ header{padding:19px 17px}
 </div>
 </section>
 <section id="rear" class="panel">
+<div class="section-intro"><div class="eyebrow">CYD LIGHTING</div><h2>Rear RGB &amp; followed games</h2><p>These onboard LED effects operate independently of your external WLED devices.</p></div>
 <div class="card"><h2>Rear RGB LED</h2>
 <p>Make the CYD's own rear light react to NHL events. No WLED controller or extra wiring is required.</p>
 <div class="stats">
@@ -344,6 +384,7 @@ header{padding:19px 17px}
 <p id="rearFullResult" class="small muted">No full celebration test has run yet.</p>
 </div></section>
 <section id="settings" class="panel">
+<div class="section-intro"><div class="eyebrow">DEVICE SETTINGS</div><h2>Network &amp; preferences</h2><p>Connectivity, local device options, horn sounds and security settings.</p></div>
 <div class="twocol">
 <div class="card"><h2>Wi-Fi</h2><p>Connect the CYD to the network used by your WLED controllers.</p>
 <label for="ssid">Network name (SSID)</label><input id="ssid" autocomplete="off" maxlength="32" placeholder="Home Wi-Fi">
@@ -372,6 +413,7 @@ header{padding:19px 17px}
 <p class="small muted">GameDay automatically changes to the next day's NHL schedule without restarting. If the clock cannot synchronize, verify internet/NTP access.</p></div>
 </section>
 <section id="firmware" class="panel">
+<div class="section-intro"><div class="eyebrow">FIRMWARE</div><h2>Keep GameDay current</h2><p>Install a verified firmware.bin without losing saved Wi-Fi, favorites or event settings.</p></div>
 <div class="card"><h2>Firmware update</h2>
 <p>Upload a compiled PlatformIO <code>firmware.bin</code> from this project. Keep the CYD powered until it reboots.</p>
 <form id="uploadForm"><label for="bin">Compiled firmware (.bin)</label><input id="bin" name="firmware" type="file" accept=".bin" required>
