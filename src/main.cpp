@@ -3367,6 +3367,8 @@ void registerRoutes() {
       g["id"] = games[i].id;
       g["home"] = games[i].home;
       g["away"] = games[i].away;
+      g["homeName"] = games[i].homeName;
+      g["awayName"] = games[i].awayName;
       g["homeScore"] = games[i].homeScore;
       g["awayScore"] = games[i].awayScore;
       g["state"] = games[i].state;
@@ -3597,6 +3599,32 @@ void registerRoutes() {
     StaticJsonDocument<96> ok;
     ok["ok"] = true;
     sendJson(ok);
+  });
+  server.on("/api/display/favorites", HTTP_POST, []() {
+    if (!authorized()) return;
+    StaticJsonDocument<128> request;
+    if (deserializeJson(request, server.arg("plain")))
+      return errorResponse("Invalid favorite teams JSON");
+    if (!request.containsKey("mask") || !request["mask"].is<uint32_t>())
+      return errorResponse("Favorite teams mask must be an unsigned integer");
+    const uint32_t mask = request["mask"].as<uint32_t>();
+    if (mask != cfg.favoriteTeams) {
+      const LiveCarousel::Page old=currentCarouselPage();
+      const uint32_t oldGame=old.kind==LiveCarousel::Kind::GAME &&
+          old.index<gameCount ? games[old.index].id : 0;
+      cfg.favoriteTeams=mask;
+      rebuildCarouselPlan();
+      carouselSlide=LiveCarousel::restore(carouselPlan,games,
+          old.kind,oldGame,old.index,featuredIndex);
+      lastCarouselAdvance=millis();
+      partialLiveUpdate=false;
+      needsDraw=true;
+      saveSettings();
+    }
+    StaticJsonDocument<96> response;
+    response["ok"]=true;
+    response["favoriteTeams"]=cfg.favoriteTeams;
+    sendJson(response);
   });
   server.on("/api/wifi/scan", HTTP_GET, []() {
     if (!authorized()) return;
