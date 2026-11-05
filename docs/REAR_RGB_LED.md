@@ -1,6 +1,6 @@
 # CYD rear RGB LED events (v0.2.5)
 
-The original ESP32-2432S028R includes a rear RGB LED: GPIO4 red, GPIO16 green, GPIO17 blue. **Active LOW**: PWM duty 255 = OFF, duty 0 = maximum brightness. On stock boards these are separate from the TFT/backlight, XPT2046 touch and speaker pins. PSRAM-modified boards may reuse GPIO16/17.
+The original ESP32-2432S028R includes a rear RGB LED: GPIO4 red, GPIO17 green, GPIO16 blue. **Active LOW**: PWM duty 255 = OFF, duty 0 = maximum brightness. On stock boards these are separate from the TFT/backlight, XPT2046 touch and speaker pins. PSRAM-modified boards may reuse GPIO16/17.
 
 ## Behaviors
 
@@ -27,7 +27,7 @@ Power-play events depend on the timeliness/completeness of the NHL's unofficial 
 
 CI tests `tests/test_rear_led.cpp` for PWM active-low math, blinking and pulsing timing; final behavior still requires a physical CYD test.
 
-## Team-color verification and channel diagnostics (v0.3.8)
+## Team-color verification and channel diagnostics (v0.3.8+)
 
 The CYD web dashboard **CYD LED** page now labels the selected/featured NHL
 home and away teams with their actual primary RGB hex values (from the same
@@ -39,7 +39,7 @@ home/away tests are disabled instead of **silently testing Utah twice**.
   This uses the same source-of-truth palette as live goal and WLED events.
 - **Red / Green / Blue diagnostics:** Hold one physical channel steady for
   three seconds each. If the wrong color lights, check the active-LOW channel
-  mapping (GPIO4 red, GPIO16 green, GPIO17 blue), board revision and PWM
+  mapping (GPIO4 red, GPIO17 green, GPIO16 blue), board revision and PWM
   brightness settings. These tests require no WLED controller.
 - **Full celebration preview:** Home, away or selected-team goal previews
   use one RGB color for the rear LED, opted-in WLED devices and the on-screen
@@ -58,3 +58,24 @@ for full preview; existing WLED-only requests keep their behavior.
 These are source/CI checks; only observing the physical device can confirm
 that RGB channels are soldered and wired correctly. The dashboard records
 an attempted rear LED activation, not optical measurement.
+
+## Corrected green/blue GPIO routing (v0.3.9)
+
+**Physical device testing found that the v0.3.8 green and blue diagnostic
+buttons lit opposite colors on this CYD.** v0.3.9 fixes the onboard
+rear LED channel-to-pin mapping only:
+
+| Rear LED channel | CYD GPIO |
+| --- | --- |
+| Red | 4 |
+| Green | 17 |
+| Blue | 16 |
+
+NHL primary colors, WLED JSON effects, screen overlays and the
+active-LOW PWM math are unchanged. A shared, unit-tested pin map prevents
+regression. No rewiring is required.
+
+**After installing v0.3.9 via OTA**, open CYD LED > Hardware RGB channel
+diagnostics and verify that Red only, Green only and Blue only show those
+colors independently. Then select Dallas (green, #006847) and Anaheim
+(orange, #F47A38) for goal previews. CYD board revisions may differ.

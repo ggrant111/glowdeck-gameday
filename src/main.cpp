@@ -39,7 +39,11 @@
 namespace {
 constexpr uint8_t PIN_BL = 21, PIN_AUDIO = 26, PIN_TOUCH_CS = 33, PIN_TOUCH_IRQ = 36;
 constexpr uint8_t AUDIO_CH = 6;
-constexpr uint8_t PIN_RGB_R = 4, PIN_RGB_G = 16, PIN_RGB_B = 17;
+// GPIO map is tested independently of the NHL color palette. A CYD
+// hardware test found green/blue were reversed in the earlier firmware.
+constexpr uint8_t PIN_RGB_R = RearLedPattern::kRedPin,
+                  PIN_RGB_G = RearLedPattern::kGreenPin,
+                  PIN_RGB_B = RearLedPattern::kBluePin;
 constexpr uint8_t RGB_CH_R = 2, RGB_CH_G = 3, RGB_CH_B = 4;
 constexpr uint8_t MAX_FOLLOWED_GAMES = 4;
 constexpr uint8_t MAX_GAMES = 20, MAX_WLED = 4;
@@ -3139,7 +3143,7 @@ void registerRoutes() {
     // New slide/standings metadata should not enlarge the loopTask stack.
     DynamicJsonDocument doc(3584);
     if (doc.capacity() < 3584) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.3.8";
+    doc["version"] = "0.3.9";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;

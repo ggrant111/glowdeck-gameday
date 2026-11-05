@@ -19,6 +19,11 @@ This is **not** a general ESP32 display firmware. Other variants with ST7789 scr
 | Touch CS | 33 | |
 | Touch IRQ | 36 | Input-only |
 | Speaker amplifier input | 26 | Requires a speaker connected to the CYD's speaker output |
+| Rear RGB red | 4 | Active LOW, PWM channel 2 |
+| Rear RGB green | 17 | Active LOW, PWM channel 3; corrected in v0.3.9 |
+| Rear RGB blue | 16 | Active LOW, PWM channel 4; corrected in v0.3.9 |
+
+**Rear RGB note:** v0.3.8 had the CYD rear green and blue GPIO assignments reversed. Physical diagnostics confirmed the correct mapping above for this board. Other CYD revisions can differ; use the independent RGB diagnostics in the dashboard to verify.
 
 **Pin conflicts:** Never assign GPIO25, 32, 33, 36 or 39 to general-purpose outputs while touch is in use. The speaker input is GPIO26; it does not conflict with the touch SPI bus. On some board revisions, display wiring or color order differ.
 
