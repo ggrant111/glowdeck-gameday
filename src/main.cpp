@@ -28,6 +28,7 @@
 #include "NhlOnIce.h"
 #include "EventOverlay.h"
 #include "DisplayEventPolicy.h"
+#include "GameFollowPolicy.h"
 #include "RearLedPattern.h"
 #include "TeamPalette.h"
 #include <time.h>
@@ -46,8 +47,8 @@ constexpr uint8_t PIN_RGB_R = RearLedPattern::kRedPin,
                   PIN_RGB_G = RearLedPattern::kGreenPin,
                   PIN_RGB_B = RearLedPattern::kBluePin;
 constexpr uint8_t RGB_CH_R = 2, RGB_CH_G = 3, RGB_CH_B = 4;
-constexpr uint8_t MAX_FOLLOWED_GAMES = 4;
-constexpr uint8_t MAX_GAMES = 20, MAX_WLED = 4;
+constexpr uint8_t MAX_GAMES = GameFollowPolicy::kMaxDailyGames, MAX_WLED = 4;
+constexpr uint8_t MAX_FOLLOWED_GAMES = MAX_GAMES; // Can follow every game.
 constexpr uint16_t BG = 0x0841, PANEL = 0x10A2, WHITE = 0xFFFF;
 constexpr uint16_t MUTED = 0x9CF3, TEAL = 0x340F, ORANGE = 0xFD20;
 
@@ -83,7 +84,7 @@ struct Settings {
   bool rearPowerPlay = true;
   uint8_t rearBrightness = 128;
   uint8_t rearGoalSeconds = 6;
-  uint32_t followIds[MAX_FOLLOWED_GAMES] = {0, 0, 0, 0};
+  uint32_t followIds[MAX_FOLLOWED_GAMES] = {};
   bool invertScreen = true; // This CYD panel needs INVON to render dark colors correctly.
   bool cycleGames = true;
   bool showStandings = true; // Add 4 conference + 4 division table slides.
@@ -340,27 +341,26 @@ bool isScheduledGame(uint32_t id) {
     if (games[i].id==id) return true;
   return false;
 }
-// One policy serves the CYD's star button and the web dashboard.
-// The armed game remains followed automatically; at most four extras.
-enum class FollowResult : uint8_t { OK, INVALID, LIMIT, ARMED };
+// One follow policy serves CYD game carousel, detail view, game list and web.
+// All 20 daily games may be followed; only the armed game controls WLED.
+using FollowResult = GameFollowPolicy::Result;
 FollowResult setGameFollow(uint32_t id, bool follow) {
-  if (!isScheduledGame(id)) return FollowResult::INVALID;
-  if (id == selectedGameId) return FollowResult::ARMED;
-  uint8_t existing = MAX_FOLLOWED_GAMES, empty = MAX_FOLLOWED_GAMES;
-  for (uint8_t i=0; i<MAX_FOLLOWED_GAMES; ++i) {
-    if (cfg.followIds[i]==id) existing=i;
-    if (cfg.followIds[i]==0 && empty==MAX_FOLLOWED_GAMES) empty=i;
+  uint8_t changedSlot = 255;
+  const FollowResult result = GameFollowPolicy::change(
+      cfg.followIds, MAX_FOLLOWED_GAMES, id, isScheduledGame(id),
+      selectedGameId, follow, changedSlot);
+  if (result == FollowResult::ADDED || result == FollowResult::REMOVED) {
+    // Only write the changed NVS slot to avoid re-saving all preferences
+    // on every touchscreen star tap.
+    prefs.putUInt(("follow" + String(changedSlot)).c_str(),
+                  cfg.followIds[changedSlot]);
+    Serial.printf("[FOLLOW] game=%lu %s (%u max)\n",
+                  (unsigned long)id, follow ? "added" : "removed",
+                  MAX_FOLLOWED_GAMES);
+    needsDraw = true;
+    partialLiveUpdate = false;
   }
-  if (follow) {
-    if (existing==MAX_FOLLOWED_GAMES) {
-      if (empty==MAX_FOLLOWED_GAMES) return FollowResult::LIMIT;
-      cfg.followIds[empty]=id;
-    }
-  } else if (existing!=MAX_FOLLOWED_GAMES) cfg.followIds[existing]=0;
-  saveSettings();
-  needsDraw = true;
-  partialLiveUpdate = false;
-  return FollowResult::OK;
+  return result;
 }
 
 // All games share the official date-scoped NHL scoreboard request. Prioritize
@@ -3277,9 +3277,9 @@ void registerRoutes() {
   server.on("/api/status", HTTP_GET, []() {
     if (!authorized()) return;
     // New slide/standings metadata should not enlarge the loopTask stack.
-    DynamicJsonDocument doc(3584);
-    if (doc.capacity() < 3584) return errorResponse("Status memory unavailable", 503);
-    doc["version"] = "0.4.0";
+    DynamicJsonDocument doc(4096);
+    if (doc.capacity() < 4096) return errorResponse("Status memory unavailable", 503);
+    doc["version"] = "0.4.1";
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -3309,6 +3309,8 @@ void registerRoutes() {
     JsonArray followed = doc.createNestedArray("followed");
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
       if (cfg.followIds[i]) followed.add(cfg.followIds[i]);
+    doc["followCapacity"] = MAX_FOLLOWED_GAMES;
+    if (doc.overflowed()) return errorResponse("Status response too large", 503);
     doc["scoreDate"] = scoreboardDate;
     doc["today"] = targetScoreboardDate;
     doc["clockSynced"] = deviceLocalDate().length() == 10;
@@ -3649,8 +3651,8 @@ void registerRoutes() {
     const FollowResult status=setGameFollow(id,follow);
     if (status==FollowResult::INVALID)
       return errorResponse("Choose a game on today's schedule",404);
-    if (status==FollowResult::LIMIT)
-      return errorResponse("Maximum 4 additional followed games",409);
+    if (status==FollowResult::FULL)
+      return errorResponse("Daily follow list is full (20 games)",409);
     if (status==FollowResult::ARMED && !follow)
       return errorResponse("Armed game is always followed",409);
     StaticJsonDocument<128> result;
