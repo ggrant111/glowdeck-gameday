@@ -39,4 +39,18 @@ overlay_controls = (
 for control in overlay_controls:
     assert f'id="{control}"' in source, f"Missing overlay control: {control}"
 assert "/api/overlay/preview" in script and "function previewOverlay(" in script
+# CYD rear LED color diagnostics and combined celebration controls.
+for control in (
+    "rearMatchup", "rearTestHome", "rearTestAway", "rearTestPP",
+    "rearTeam", "rearTeamSwatch", "rearSelectedHex", "rearTestTeam",
+    "rearTestTeamPP", "rearDiagRed", "rearDiagGreen", "rearDiagBlue",
+    "rearFullHome", "rearFullAway", "rearFullTeam", "rearFullStop",
+    "rearFullResult",
+):
+    assert f'id="{control}"' in source, f"Missing rear RGB control: {control}"
+for method in (
+    "/api/rear/palette", "/api/rear/test", "renderRearTestControls(",
+    "loadRearPalette(", "fullPreview(", "combined:true", "mode,side,team,channel",
+):
+    assert method in script, f"Missing rear RGB preview binding: {method}"
 print("PASS: WLED celebration dashboard JavaScript and control bindings")

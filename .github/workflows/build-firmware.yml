@@ -30,6 +30,10 @@ jobs:
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_rear_led.cpp -o /tmp/glowdeck-rear-test
           /tmp/glowdeck-rear-test
+      - name: Test NHL team palette and independent color diagnostic selection
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_team_palette.cpp -o /tmp/glowdeck-team-palette-test
+          /tmp/glowdeck-team-palette-test
       - name: Test NHL scoreboard priority polling cadence
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_poll_cadence.cpp -o /tmp/glowdeck-poll-test
