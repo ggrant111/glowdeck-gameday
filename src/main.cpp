@@ -2439,6 +2439,22 @@ void drawTeamGradientBackground(const Game &g) {
       TeamGradient::colorAt(away, home, 304)));
 }
 
+void drawFollowStar(const Game &g) {
+  if (!gameIsLive(g)) return;
+  const bool followed=rearFollows(g.id);
+  // Large 46x30 hit area in header; ten-point star, drawn without fonts/assets.
+  tft.fillRoundRect(125, 1, 47, 29, 6, followed ? 0x4220 : ARENA_PLATE);
+  const int16_t x=148, y=15;
+  const int8_t px[10]={0,3,10,5,6,0,-6,-5,-10,-3};
+  const int8_t py[10]={-11,-3,-3,2,10,6,10,2,-3,-3};
+  const uint16_t color=followed ? 0xFE60 : 0xCE79;
+  for (uint8_t i=0;i<10;++i) {
+    const uint8_t j=(i+1)%10;
+    if (followed) tft.fillTriangle(x,y,x+px[i],y+py[i],
+                                  x+px[j],y+py[j],color);
+    tft.drawLine(x+px[i],y+py[i],x+px[j],y+py[j],color);
+  }
+}
 void drawScoreboardHeader(const Game &g) {
   tft.fillRect(0, 0, 320, 31, ARENA_BLACK);
   // Small NHL-like shield outline without using a heavyweight background image.
@@ -2457,6 +2473,7 @@ void drawScoreboardHeader(const Game &g) {
   tft.drawString(gameIsLive(g) ? "LIVE" :
                  gameIsFuture(g) ? "NEXT" : "FINAL", 81, 16, 2);
   if (gameIsLive(g)) tft.fillCircle(56, 16, 2, WHITE);
+  drawFollowStar(g);
   tft.setTextColor(ICE_TEXT, ARENA_BLACK);
   tft.drawString(String(carouselSlide + 1) + "/" + String(carouselPageCount()), 228, 16, 2);
   tft.setTextColor(WiFi.status() == WL_CONNECTED ? ICE_BLUE : ORANGE, ARENA_BLACK);
@@ -3058,6 +3075,12 @@ void handleTouch() {
       const int dy = gestureEndY - gestureStartY;
       if (carouselPageCount() > 1 && abs(dx) > 48 && abs(dy) < 90) {
         advanceCarousel(dx < 0 ? 1 : -1);
+      } else if (showingGamePage() && gameCount &&
+                 gestureStartY <= 34 && gestureStartX >= 124 &&
+                 gestureStartX <= 175) {
+        const Game &g=games[currentCarouselPage().index];
+        if (gameIsLive(g))
+          setGameFollow(g.id, !rearFollows(g.id));
       } else if (gestureStartY <= 35 && gestureStartX >= 263) {
         screen = Screen::GAMES; // Menu is available on every slide.
       } else if (!showingSummaryPage() && carouselPageCount() > 1 &&
