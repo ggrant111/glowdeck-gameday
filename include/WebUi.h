@@ -233,14 +233,47 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 <p>Check games to monitor even while the screen carousel displays a different matchup. This selection lasts for today's schedule.</p>
 <div id="rearFollowedList"></div>
 </div>
-<div class="card"><h2>Test without waiting for a game</h2>
-<p>Test team colors and both patterns. Power-play preview ends automatically after nine seconds.</p>
+<div class="card"><h2>Verify matchup colors</h2>
+<p id="rearMatchup" class="small muted">Loading matchup…</p>
 <div class="actions">
 <button id="rearTestHome">Flash home goal</button>
 <button id="rearTestAway">Flash away goal</button>
-<button id="rearTestPP">Pulse power play</button>
-<button id="rearTestOff">Stop</button>
-</div></div></section>
+<button id="rearTestPP">Pulse home power play</button>
+<button id="rearTestOff">Stop rear LED</button>
+</div>
+<p class="small muted">Home and away buttons use the armed matchup (or the featured game). They are disabled if no NHL game is loaded, rather than silently using the same fallback color.</p>
+</div>
+<div class="card"><h2>Choose any NHL team's primary color</h2>
+<p class="small muted">Works without an armed or live game. All colors below come directly from the firmware team palette.</p>
+<label for="rearTeam">NHL team</label>
+<select id="rearTeam"><option value="">Loading team colors…</option></select>
+<div class="actions" style="align-items:center">
+<span id="rearTeamSwatch" style="width:24px;height:24px;display:inline-block;border-radius:6px;border:1px solid #86929b"></span>
+<span id="rearSelectedHex" class="small">Team and hex color loading…</span>
+</div>
+<div class="actions">
+<button id="rearTestTeam">Flash chosen team</button>
+<button id="rearTestTeamPP">Pulse chosen team PP</button>
+</div>
+</div>
+<div class="card"><h2>Hardware RGB channel diagnostics</h2>
+<p class="small muted">Each button lights only one physical channel at solid brightness for three seconds. Use these to detect swapped, stuck or missing channels. No game or WLED device required.</p>
+<div class="actions">
+<button id="rearDiagRed">Red only</button>
+<button id="rearDiagGreen">Green only</button>
+<button id="rearDiagBlue">Blue only</button>
+</div>
+</div>
+<div class="card"><h2>Full celebration preview</h2>
+<p class="small muted">Run the rear CYD RGB LED, opted-in WLED devices and the animated 320×240 overlay using the same NHL team color. Each enabled output runs independently.</p>
+<div class="actions">
+<button id="rearFullHome">Celebrate home goal</button>
+<button id="rearFullAway">Celebrate away goal</button>
+<button id="rearFullTeam" class="primary">Celebrate chosen team</button>
+<button id="rearFullStop">Stop / restore all</button>
+</div>
+<p id="rearFullResult" class="small muted">No full celebration test has run yet.</p>
+</div></section>
 <section id="settings" class="panel">
 <div class="twocol">
 <div class="card"><h2>Wi-Fi</h2><p>Connect the CYD to the network used by your WLED controllers.</p>
@@ -284,6 +317,7 @@ code{color:#93e2d5;word-break:break-word}.hint{border-left:3px solid var(--prima
 "use strict";
 const $ = id => document.getElementById(id);
 let currentConfig = null, currentStatus = null, currentGames = [], noticeTimeout;
+let rearPalette = [];
 let detailPreviewToken = 0;
 const modes = ["Off","Home only","Away only","Both teams"];
 function message(text){
@@ -394,6 +428,7 @@ function renderStatus(){
   $("rearEvent").textContent=(s.rearEvent||"IDLE").replaceAll("_"," ");
   $("rearFollowCount").textContent=(s.followed||[]).length+
     (s.selectedId?" additional + armed":" additional");
+  renderRearTestControls();
   const showing=currentGames[s.featuredIndex]||null;
   $("showingGame").textContent=showing?showing.away+" @ "+showing.home:"No games";
   $("rotationStatus").textContent=s.cycleGames?"Every "+s.cycleSeconds+" sec":"Paused";
@@ -620,6 +655,44 @@ function renderRearFollowed(){
     list.append(row);
   });
 }
+function rearColor(code){
+  const match=rearPalette.find(t=>t.abbr===code);
+  return match?match.hex:"Unknown";
+}
+function rearMatchupGame(){
+  if(!currentStatus)return null;
+  return currentGames.find(g=>g.id===currentStatus.selectedId)
+    ||currentGames[currentStatus.featuredIndex||0]||null;
+}
+function renderRearSelected(){
+  const code=$("rearTeam").value, hex=rearColor(code);
+  $("rearSelectedHex").textContent=code+" · "+hex;
+  $("rearTeamSwatch").style.backgroundColor=hex.startsWith("#")?hex:"transparent";
+}
+function renderRearTestControls(){
+  const g=rearMatchupGame(), armed=g&&g.id===currentStatus.selectedId;
+  const fmt=code=>code+" ("+rearColor(code)+")";
+  $("rearMatchup").textContent=g
+    ?(armed?"Armed matchup: ":"Featured matchup: ")+
+      "Away "+fmt(g.away)+" @ Home "+fmt(g.home)
+    :"No game available. Choose a team below for color tests.";
+  for(const id of ["rearTestHome","rearTestAway","rearTestPP","rearFullHome","rearFullAway"])
+    $(id).disabled=!g;
+  $("rearTestHome").textContent=g?"Flash home "+fmt(g.home):"No home team";
+  $("rearTestAway").textContent=g?"Flash away "+fmt(g.away):"No away team";
+  $("rearFullHome").textContent=g?"Celebrate home "+fmt(g.home):"No home team";
+  $("rearFullAway").textContent=g?"Celebrate away "+fmt(g.away):"No away team";
+}
+async function loadRearPalette(){
+  const response=await api("/api/rear/palette");
+  rearPalette=response.teams||[];
+  const select=$("rearTeam"), old=select.value||"UTA";
+  select.replaceChildren();
+  rearPalette.forEach(item=>select.add(new Option(item.abbr+" · "+item.hex,item.abbr)));
+  select.value=rearPalette.some(item=>item.abbr===old)?old:"UTA";
+  renderRearSelected();
+  renderRearTestControls();
+}
 function deviceSettings(){
   return Array.from({length:4},(_,i)=>{
     const choices=[["goal",1],["pp",2],["start",4],["final",8]];
@@ -696,6 +769,7 @@ async function loadConfig(){
   $("cycleSeconds").value=currentConfig.cycleSeconds||9;
   $("displayTimezone").value=String(currentConfig.timezone ?? 1);
   renderDevices();
+  await loadRearPalette();
 }
 document.querySelectorAll("[data-mode]").forEach(b=>b.addEventListener("click",()=>perform(async()=>{
   const mode=Number(b.dataset.mode);
@@ -750,17 +824,45 @@ $("wledTestLoss").onclick=()=>wledPreview("loss");
 $("wledStop").onclick=()=>wledPreview("stop");
 $("saveRear").onclick=()=>perform(saveConfig);
 $("rearBrightness").oninput=()=>$("rearBrightValue").textContent=$("rearBrightness").value+" / 255";
-function rearPreview(mode,side="home"){
+function rearPreview(mode,side="home",team="",channel=""){
   perform(async()=>{
-    await post("/api/rear/test",{mode,side});
-    message(mode==="off"?"Rear LED stopped":mode==="goal"?
-      "Rear LED goal flash started":"Power-play pulse preview started");
+    const result=await post("/api/rear/test",{mode,side,team,channel});
+    await refresh();
+    message(mode==="off"?"Rear LED stopped":
+      (mode==="channel"?"Hardware channel ":"Rear "+mode+" test: ")+
+      result.team+" "+result.hex);
   });
 }
+function selectedRearTeam(){return $("rearTeam").value}
+$("rearTeam").onchange=renderRearSelected;
 $("rearTestHome").onclick=()=>rearPreview("goal","home");
 $("rearTestAway").onclick=()=>rearPreview("goal","away");
 $("rearTestPP").onclick=()=>rearPreview("powerplay","home");
 $("rearTestOff").onclick=()=>rearPreview("off");
+$("rearTestTeam").onclick=()=>rearPreview("goal","home",selectedRearTeam());
+$("rearTestTeamPP").onclick=()=>rearPreview("powerplay","home",selectedRearTeam());
+$("rearDiagRed").onclick=()=>rearPreview("channel","home","","red");
+$("rearDiagGreen").onclick=()=>rearPreview("channel","home","","green");
+$("rearDiagBlue").onclick=()=>rearPreview("channel","home","","blue");
+function fullPreview(event,side="home",team=""){
+  perform(async()=>{
+    const result=await post("/api/wled/preview",{event,side,team,combined:true});
+    await refresh();
+    const parts=[
+      "Rear LED "+(result.rearStarted?"started":"not enabled"),
+      "WLED "+(result.wledStarted?"started":"no controller accepted"),
+      "Screen "+(result.overlayStarted?"started":"not enabled")
+    ];
+    const description=event==="stop"?"Stop / restore requested":
+      result.team+" "+result.hex+" · "+parts.join(" · ");
+    $("rearFullResult").textContent=description;
+    message(description);
+  });
+}
+$("rearFullHome").onclick=()=>fullPreview("goal","home");
+$("rearFullAway").onclick=()=>fullPreview("goal","away");
+$("rearFullTeam").onclick=()=>fullPreview("goal","home",selectedRearTeam());
+$("rearFullStop").onclick=()=>fullPreview("stop");
 $("testHome").onclick=()=>perform(async()=>{await post("/api/test",{side:"home"});message("Home color test started")});
 $("testAway").onclick=()=>perform(async()=>{await post("/api/test",{side:"away"});message("Away color test started")});
 
