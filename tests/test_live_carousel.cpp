@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string>
 #include "LiveCarousel.h"
-struct Game {uint32_t id; std::string state;};
+struct Game {uint32_t id; std::string state; std::string away="DAL",home="ANA";};
 using namespace LiveCarousel;
 int main(){
   Game g[] = {
@@ -10,6 +10,14 @@ int main(){
     {105,"CRIT"},{106,"FINAL"},{107,"PRE"},{108,"LIVE"},
     {109,"OFF"},{110,"FUT"},{111,"FINAL"},{112,"PRE"}
   };
+  // A favorite team should lead the LIVE carousel without removing games.
+  g[4].home="UTA";
+  const uint32_t fav=(1UL<<DisplayEventPolicy::teamIndex("UTA"));
+  const Plan favoritePlan=build(g,12,true,fav);
+  assert(favoritePlan.at(0).kind==Kind::GAME && g[favoritePlan.at(0).index].id==105);
+  assert(favoritePlan.liveCount==3 && favoritePlan.otherCount==9);
+  assert(locateGame(favoritePlan,g,102)==2);
+  assert(restore(favoritePlan,g,Kind::GAME,102,0,0)==2);
   const Plan p=build(g,12,true);
   assert(p.liveMode && p.liveCount==3 && p.otherCount==9);
   assert(p.summaryPages==3 && p.count==6); // 3 live + ceil(9/4)
