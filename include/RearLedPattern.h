@@ -4,6 +4,12 @@
 // Pure timing math, shared by the ESP32 CYD firmware and native CI tests.
 // No delay(), blocking network calls, or Arduino dependencies.
 namespace RearLedPattern {
+// Confirmed physical RGB channels on this project's CYD board revision.
+// The green/blue GPIO assignments were reversed in <= v0.3.8.
+// Keep these mappings separate from NHL 24-bit colors and WLED effects.
+constexpr uint8_t kRedPin = 4;
+constexpr uint8_t kGreenPin = 17;
+constexpr uint8_t kBluePin = 16;
 inline uint8_t flash(uint32_t elapsedMs, uint32_t durationMs) {
   if (elapsedMs >= durationMs || durationMs == 0) return 0;
   // Bright 150ms bursts alternating with 110ms gaps.
