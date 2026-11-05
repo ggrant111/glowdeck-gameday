@@ -228,7 +228,7 @@ header{padding:19px 17px}
 <option value="2">Mountain (MT)</option><option value="3">Pacific (PT)</option>
 <option value="4">Arizona (AZ)</option>
 </select>
-<div class="actions"><button id="saveDisplay" class="primary">Save display settings</button></div><div class="card" style="margin-top:18px">
+</div><div class="card">
 <h2>On-screen NHL event notifications</h2>
 <p>Choose how widely the CYD reports live action. The screen can show events for every game while the rear LED and WLED continue following their independently selected matchups.</p>
 <label for="displayAllLiveEvents">Show screen alerts for</label>
@@ -271,10 +271,10 @@ header{padding:19px 17px}
 <button id="overlayTestLoss">Preview final loss</button>
 <button id="overlayStop">Dismiss overlay</button></div>
 <p class="small muted">These previews affect the CYD screen only. Test them with your WLED devices disconnected if desired.</p>
+<div class="actions"><button id="saveDisplay" class="primary">Save carousel &amp; alert settings</button></div>
 </div>
-
-<div class="hint">Browsing rotating games does not change which matchup triggers goal celebrations. Use ARM GOALS on the CYD or ARM in the Games tab.</div>
-</div></section>
+<div class="hint">Carousel browsing does not arm WLED. Use the stars to follow rear RGB alerts, or Arm in Live games for WLED triggers.</div>
+</section>
 <section id="devices" class="panel">
 <div class="section-intro"><div class="eyebrow">PHYSICAL CELEBRATIONS</div><h2>Your WLED light show</h2><p>Choose which controllers participate, test their effects, and restore their previous lighting afterward.</p></div>
 <div class="card"><h2>WLED celebration engine</h2>
