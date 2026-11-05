@@ -7,7 +7,7 @@ The original ESP32-2432S028R includes a rear RGB LED: GPIO4 red, GPIO17 green, G
 - **Goals:** Flash the scoring team's team-color RGB LED for 2–12 seconds; goal flashes take priority.
 - **Power plays:** Gentle team-color pulse while a followed live game's NHL situation data identifies an attacking team, then off when the advantage ends or data goes stale.
 - **Idle:** Off. Animations use nonblocking ESP32 PWM and run independently of WLED and the screen.
-- **Following games:** The currently armed WLED game always drives the rear LED, plus up to four additional games selected under the web dashboard **CYD LED** tab. Extra followed game IDs expire when the NHL day changes.
+- **Following games:** The currently armed WLED game always drives the rear LED, plus any additional games from today's NHL schedule (up to 20 daily games total), selected by a star on the CYD scoreboard, stats or game-list screen, or in the web dashboard. Extra followed game IDs expire when the NHL day changes.
 - **Power-play detection:** The firmware reads the 'situation' field of the date-scoped NHL score feed, with a filtered fallback to `/v1/scoreboard/now` for live followed games. It does not mistake cumulative PP opportunities for a current man advantage. It stays off on missing/stale situations.
 
 ## Web controls
@@ -79,3 +79,24 @@ regression. No rewiring is required.
 diagnostics and verify that Red only, Green only and Blue only show those
 colors independently. Then select Dallas (green, #006847) and Anaheim
 (orange, #F47A38) for goal previews. CYD board revisions may differ.
+
+## v0.4.1 — Follow any game directly from the CYD
+
+Every single-game scoreboard slide now has a tappable star in its header
+(including upcoming games, so you can follow before puck drop). The same star
+appears in the game-details header and at the right of each row on the CYD's
+**GAMES** list. A hollow gray star means not followed; a gold filled star
+means followed. The teal star marked `A` identifies the armed matchup,
+which is automatically followed and cannot be removed until re-arming.
+
+Touching the star adds/removes that game from rear RGB and high-priority
+screen alerts. It does **not** change the WLED armed game. The firmware
+supports up to **20 daily matchups** (the full scoreboard capacity),
+rather than the previous four extra follows. All existing followed-game
+preferences remain compatible after OTA; each new follow action saves
+only the updated NVS slot. The daily follow list still resets on NHL date
+rollover, while permanent favorite *teams* continue across days.
+
+For busy slates, physical rear RGB still emits only one color/pattern
+at a time; concurrent NHL goals and power plays cannot be represented
+simultaneously by the single onboard RGB LED. WLED remains armed-game-only.
