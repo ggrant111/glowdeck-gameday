@@ -3333,7 +3333,6 @@ void registerRoutes() {
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
       if (cfg.followIds[i]) followed.add(cfg.followIds[i]);
     doc["followCapacity"] = MAX_FOLLOWED_GAMES;
-    if (doc.overflowed()) return errorResponse("Status response too large", 503);
     doc["scoreDate"] = scoreboardDate;
     doc["today"] = targetScoreboardDate;
     doc["clockSynced"] = deviceLocalDate().length() == 10;
@@ -3381,6 +3380,7 @@ void registerRoutes() {
     doc["freeHeap"] = ESP.getFreeHeap();
     doc["stackLowWater"] = uxTaskGetStackHighWaterMark(nullptr);
     doc["uptimeSeconds"] = millis() / 1000UL;
+    if (doc.overflowed()) return errorResponse("Status response too large", 503);
     sendJson(doc);
   });
   server.on("/api/games", HTTP_GET, []() {
