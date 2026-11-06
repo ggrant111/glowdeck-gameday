@@ -3152,40 +3152,61 @@ void drawS3Scoreboard(const Game &g) {
   drawS3Header(&g,String(carouselSlide+1)+"/"+String(carouselPageCount()));
   drawS3Nav("ALL GAMES");
 }
+void drawS3GameRow(const Game &g, uint8_t row) {
+  const S3NativeLayout::Rect r=S3NativeLayout::summaryRow(row);
+  const uint16_t surface=row%2?S3_DARK:S3_CARD;
+  tft.fillRoundRect(r.x,r.y,r.w,r.h,9,surface);
+  tft.fillRect(r.x+2,r.y+7,4,r.h-14,
+               g.id==selectedGameId?S3_AQUA:to565(teamRgb(g.away)));
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE,surface);
+  tft.drawString(g.away,70,r.y+17,4);
+  tft.drawString(g.home,340,r.y+17,4);
+  if(gameIsFuture(g)) {
+    tft.setTextColor(S3_AQUA,surface);
+    tft.drawString("VS",219,r.y+16,4);
+  } else {
+    tft.drawString(String(g.awayScore),171,r.y+14,4);
+    tft.setTextColor(S3_MUTED,surface);
+    tft.drawString("-",219,r.y+16,2);
+    tft.setTextColor(WHITE,surface);
+    tft.drawString(String(g.homeScore),268,r.y+14,4);
+  }
+  tft.setTextColor(S3_MUTED,surface);
+  String status=gameIsFuture(g)?formattedStart(g.startUTC):gameStatus(g);
+  if(g.id==selectedGameId)status="ARMED  /  "+status;
+  if(status.length()>34)status=status.substring(0,34);
+  tft.drawString(status,242,r.y+38,1);
+  drawFollowStar(g,444,r.y+24,surface);
+  tft.setTextDatum(TL_DATUM);
+}
 void drawS3Summary() {
   const LiveCarousel::Page slide=currentCarouselPage();
   tft.fillScreen(S3_BG);
   drawS3Header(nullptr,"OTHER GAMES");
-  tft.setTextDatum(MC_DATUM);
   for(uint8_t row=0;row<slide.count;++row) {
     const uint8_t index=slide.rows[row];
-    if(index>=gameCount)continue;
-    const Game &g=games[index];
-    const S3NativeLayout::Rect r=S3NativeLayout::summaryRow(row);
-    const uint16_t surface=row%2?S3_DARK:S3_CARD;
-    tft.fillRoundRect(r.x,r.y,r.w,r.h,9,surface);
-    tft.fillRect(r.x+2,r.y+7,4,r.h-14,to565(teamRgb(g.away)));
-    tft.setTextColor(WHITE,surface);
-    tft.drawString(g.away,70,r.y+17,4);
-    tft.drawString(g.home,340,r.y+17,4);
-    if(gameIsFuture(g)) {
-      tft.setTextColor(S3_AQUA,surface);
-      tft.drawString("VS",219,r.y+16,4);
-    } else {
-      tft.drawString(String(g.awayScore),171,r.y+14,4);
-      tft.setTextColor(S3_MUTED,surface);
-      tft.drawString("-",219,r.y+16,2);
-      tft.setTextColor(WHITE,surface);
-      tft.drawString(String(g.homeScore),268,r.y+14,4);
-    }
-    tft.setTextColor(S3_MUTED,surface);
-    String status=gameIsFuture(g)?formattedStart(g.startUTC):gameStatus(g);
-    if(status.length()>30)status=status.substring(0,30);
-    tft.drawString(status,242,r.y+38,1);
-    drawFollowStar(g,444,r.y+24,surface);
+    if(index<gameCount)drawS3GameRow(games[index],row);
   }
-  tft.setTextDatum(TL_DATUM);
   drawS3Nav("ALL GAMES");
+}
+void drawS3GamePicker() {
+  if(gameCount && uint16_t(gamePage)*4>=gameCount)gamePage=0;
+  tft.fillScreen(S3_BG);
+  const uint8_t pages=(gameCount+3)/4;
+  drawS3Header(nullptr,"GAMES "+String(gamePage+1)+"/"+
+               String(pages?pages:1));
+  for(uint8_t row=0;row<4;++row) {
+    const uint8_t index=gamePage*4+row;
+    if(index<gameCount)drawS3GameRow(games[index],row);
+  }
+  if(!gameCount) {
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(S3_MUTED,S3_BG);
+    tft.drawString("No games loaded yet",240,160,4);
+    tft.setTextDatum(TL_DATUM);
+  }
+  drawS3Nav("TODAY");
 }
 void drawS3Empty() {
   tft.fillScreen(S3_BG);
@@ -3211,7 +3232,8 @@ void draw() {
   // Only the S3 live-game and compact-summary surfaces are native in phases 1/2.
   // Old event overlays, standings, stats and setup keep compatibility scaling.
   tft.setNativeLayout(!overlayController.active() &&
-      screen == Screen::LIVE && !showingStandingsPage());
+      ((screen == Screen::LIVE && !showingStandingsPage()) ||
+       screen == Screen::GAMES));
 #endif
   if (overlayController.active()) {
 #ifdef GLOWDECK_WAVESHARE_S3
@@ -3279,6 +3301,12 @@ void draw() {
     return;
   }
 
+#ifdef GLOWDECK_WAVESHARE_S3
+  if (screen == Screen::GAMES && tft.nativeLayout()) {
+    drawS3GamePicker();
+    return;
+  }
+#endif
   tft.fillScreen(BG);
   tft.fillRect(0, 0, 320, 33, PANEL);
   tft.setTextColor(WHITE, PANEL);
