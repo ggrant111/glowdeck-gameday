@@ -1421,7 +1421,10 @@ void loadSettings() {
   for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
     cfg.followIds[i] = prefs.getUInt(("follow" + String(i)).c_str(), 0);
   #ifdef GLOWDECK_WAVESHARE_S3
-  cfg.invertScreen = prefs.getBool("invert", false);
+  // First physical S3 test: toggling the color mode once corrected the LCD.
+  // Default fresh boards to that observed good ST7796 state. Saved per-board
+  // choices still take precedence; no NVS reset or forced migration.
+  cfg.invertScreen = prefs.getBool("invert", true);
 #else
   cfg.invertScreen = prefs.getBool("invert", true);
 #endif
@@ -3208,6 +3211,171 @@ void drawS3GamePicker() {
   }
   drawS3Nav("TODAY");
 }
+// Phase 3: native game comparisons and standings. Each screen reads the
+// existing NHL caches; no new network fetches or game-arm side effects.
+void drawS3StatsActions(bool armed) {
+  const S3NativeLayout::Rect back=S3NativeLayout::kPrev;
+  const S3NativeLayout::Rect arm=S3NativeLayout::kGames;
+  const S3NativeLayout::Rect setup=S3NativeLayout::kNext;
+  tft.fillRect(0,271,480,49,S3_BG);
+  tft.setTextDatum(MC_DATUM);
+  tft.fillRoundRect(back.x,back.y,back.w,back.h,8,S3_NAV);
+  tft.fillRoundRect(arm.x,arm.y,arm.w,arm.h,8,armed?S3_AQUA:S3_CARD);
+  tft.fillRoundRect(setup.x,setup.y,setup.w,setup.h,8,S3_NAV);
+  tft.setTextColor(WHITE,S3_NAV);
+  tft.drawString("< BACK",back.x+back.w/2,back.y+back.h/2,2);
+  tft.drawString("SETUP",setup.x+setup.w/2,setup.y+setup.h/2,2);
+  tft.setTextColor(armed?S3_BG:S3_AQUA,armed?S3_AQUA:S3_CARD);
+  tft.drawString(armed?"ARMED":"ARM GOALS",
+                 arm.x+arm.w/2,arm.y+arm.h/2,2);
+  tft.setTextDatum(TL_DATUM);
+}
+bool s3ComparableRow(const String &label,const String &away,
+                     const String &home) {
+  if (label!="SHOTS" && label!="FACEOFFS" && label!="HITS" &&
+      label!="BLOCKS" && label!="GIVEAWAYS" && label!="PEN. MIN") return false;
+  return away.length() && home.length() &&
+         away.indexOf("--")<0 && home.indexOf("--")<0 &&
+         away.indexOf('/')<0 && home.indexOf('/')<0;
+}
+void drawS3Stats() {
+  tft.fillScreen(S3_BG);
+  const Game *g=detailGame();
+  drawS3Header(g,"GAME STATS");
+  if(!g) {
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(S3_MUTED,S3_BG);
+    tft.drawString("Game unavailable",240,151,4);
+    tft.setTextDatum(TL_DATUM);
+    drawS3StatsActions(false);
+    return;
+  }
+  const uint16_t awayColor=to565(teamRgb(g->away));
+  const uint16_t homeColor=to565(teamRgb(g->home));
+  tft.fillRoundRect(12,54,456,76,10,S3_CARD);
+  tft.fillRect(14,68,4,48,awayColor);
+  tft.fillRect(462,68,4,48,homeColor);
+  drawTeamLogo(tft,g->away,37,62);
+  drawTeamLogo(tft,g->home,387,62);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE,S3_CARD);
+  tft.drawString(g->away,136,86,4);
+  tft.drawString(g->home,344,86,4);
+  const String score=gameIsFuture(*g)?"VS":
+      String(g->awayScore)+" - "+String(g->homeScore);
+  tft.drawString(score,240,77,4);
+  tft.setTextColor(S3_AQUA,S3_CARD);
+  String state=gameStatus(*g);
+  if(state.length()>30)state=state.substring(0,30);
+  tft.drawString(state,240,113,2);
+  const bool haveStats=detail.loaded && detail.gameId==g->id && detail.count>0;
+  if(haveStats) {
+    for(uint8_t row=0;row<detail.count && row<5;++row) {
+      const int16_t y=134+row*27;
+      const uint16_t plate=(row&1)?S3_DARK:S3_CARD;
+      tft.fillRoundRect(12,y,456,25,5,plate);
+      tft.setTextColor(WHITE,plate);
+      tft.drawString(detail.away[row],96,y+11,2);
+      tft.drawString(detail.home[row],384,y+11,2);
+      tft.setTextColor(S3_MUTED,plate);
+      tft.drawString(detail.label[row],240,y+10,2);
+      if (!gameIsFuture(*g) &&
+          s3ComparableRow(detail.label[row],detail.away[row],detail.home[row])) {
+        const float aw=detail.away[row].toFloat();
+        const float hm=detail.home[row].toFloat();
+        const float total=aw+hm;
+        if(aw>=0 && hm>=0 && total>0) {
+          const uint16_t awayWidth=uint16_t(80.0f*aw/total);
+          const uint16_t homeWidth=uint16_t(80.0f*hm/total);
+          tft.fillRect(54,y+22,80,2,S3_LINE);
+          tft.fillRect(346,y+22,80,2,S3_LINE);
+          if(awayWidth)tft.fillRect(54,y+22,awayWidth,2,awayColor);
+          if(homeWidth)tft.fillRect(346,y+22,homeWidth,2,homeColor);
+        }
+      }
+    }
+  } else {
+    tft.fillRoundRect(12,137,456,126,8,S3_CARD);
+    tft.setTextColor(WHITE,S3_CARD);
+    tft.drawString(detail.loaded?
+       (detail.error.length()?detail.error:String("No stats available")):
+       String("Loading team stats..."),240,187,2);
+    tft.setTextColor(S3_MUTED,S3_CARD);
+    tft.drawString(gameIsFuture(*g)?
+       "Season comparison updates before puck drop":
+       "NHL gamecenter data updates automatically",240,215,2);
+  }
+  tft.setTextDatum(TL_DATUM);
+  drawS3StatsActions(g->id==selectedGameId);
+}
+void drawS3Standings() {
+  const StandingsCarousel::Page page=StandingsCarousel::page(
+      currentCarouselPage().index);
+  tft.fillScreen(S3_BG);
+  drawS3Header(nullptr,"NHL STANDINGS");
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(WHITE,S3_BG);
+  tft.drawString(page.title,17,65,2);
+  tft.setTextDatum(MR_DATUM);
+  tft.setTextColor(S3_AQUA,S3_BG);
+  tft.drawString(page.range,464,65,2);
+  tft.fillRoundRect(12,83,456,20,4,S3_CARD);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(S3_MUTED,S3_CARD);
+  tft.drawString("#",37,93,2);
+  tft.drawString("TEAM",109,93,2);
+  tft.drawString("GP",217,93,2);
+  tft.drawString("W-L-OT",331,93,2);
+  tft.drawString("PTS",438,93,2);
+
+  const String localDay=deviceLocalDate();
+  const bool ready=standingsReady &&
+                   (!localDay.length() || standingsForDate==localDay);
+  if(!ready) {
+    tft.setTextColor(WHITE,S3_BG);
+    tft.drawString(standingsLastAttempt?
+       "Refreshing NHL standings...":"Loading NHL standings...",
+       240,160,2);
+    tft.setTextColor(S3_MUTED,S3_BG);
+    String reason=standingsError.length()?standingsError:
+                  String("Waiting for NHL standings data");
+    if(reason.length()>40)reason=reason.substring(0,40);
+    tft.drawString(reason,240,199,2);
+  } else {
+    uint8_t sorted[32]={};
+    const uint8_t n=StandingsCarousel::collectAndSort(
+       seasonStandings,32,page,sorted,32);
+    const Game *armed=selectedGame();
+    for(uint8_t row=0;row<StandingsCarousel::kRowsPerPage;++row) {
+      const uint8_t position=page.offset+row;
+      if(position>=n)break;
+      const SeasonStanding &entry=seasonStandings[sorted[position]];
+      const int16_t y=106+row*20;
+      const uint16_t plate=(row&1)?S3_DARK:S3_CARD;
+      tft.fillRoundRect(12,y,456,19,3,plate);
+      if(armed && (entry.team==armed->away || entry.team==armed->home))
+        tft.fillRect(12,y,4,19,S3_AQUA);
+      tft.fillRect(65,y+3,5,13,to565(teamRgb(entry.team)));
+      tft.setTextColor(WHITE,plate);
+      tft.drawString(String(StandingsCarousel::rank(
+          page.group,entry.conferenceSequence,entry.divisionSequence)),
+          37,y+10,2);
+      tft.drawString(entry.team,112,y+10,2);
+      tft.setTextColor(S3_MUTED,plate);
+      tft.drawString(String(entry.gamesPlayed),217,y+10,2);
+      tft.drawString(entry.seasonRecord,331,y+10,2);
+      tft.setTextColor(WHITE,plate);
+      tft.drawString(entry.points.length()?entry.points:String("--"),
+                     438,y+10,2);
+    }
+    if(!n) {
+      tft.setTextColor(S3_MUTED,S3_BG);
+      tft.drawString("No ranked teams for this page",240,167,2);
+    }
+  }
+  tft.setTextDatum(TL_DATUM);
+  drawS3Nav("ALL GAMES");
+}
 void drawS3Empty() {
   tft.fillScreen(S3_BG);
   drawS3Header(nullptr,"NHL TODAY");
@@ -3232,8 +3400,8 @@ void draw() {
   // Only the S3 live-game and compact-summary surfaces are native in phases 1/2.
   // Old event overlays, standings, stats and setup keep compatibility scaling.
   tft.setNativeLayout(!overlayController.active() &&
-      ((screen == Screen::LIVE && !showingStandingsPage()) ||
-       screen == Screen::GAMES));
+      (screen == Screen::LIVE || screen == Screen::GAMES ||
+       screen == Screen::STATS));
 #endif
   if (overlayController.active()) {
 #ifdef GLOWDECK_WAVESHARE_S3
@@ -3262,7 +3430,8 @@ void draw() {
   if (screen == Screen::LIVE) {
 #ifdef GLOWDECK_WAVESHARE_S3
     if (tft.nativeLayout()) {
-      if (showingSummaryPage()) drawS3Summary();
+      if (showingStandingsPage()) drawS3Standings();
+      else if (showingSummaryPage()) drawS3Summary();
       else if (!gameCount) drawS3Empty();
       else {
         const LiveCarousel::Page page=currentCarouselPage();
@@ -3302,8 +3471,10 @@ void draw() {
   }
 
 #ifdef GLOWDECK_WAVESHARE_S3
-  if (screen == Screen::GAMES && tft.nativeLayout()) {
-    drawS3GamePicker();
+  if (tft.nativeLayout()) {
+    if (screen == Screen::GAMES) drawS3GamePicker();
+    else if (screen == Screen::STATS) drawS3Stats();
+    else return;
     return;
   }
 #endif
@@ -3453,6 +3624,60 @@ void handleS3NativeTouch(bool pressed) {
   touchWasDown=false;
   const int dx=gestureEndX-gestureStartX;
   const int dy=gestureEndY-gestureStartY;
+  if(screen==Screen::STATS) {
+    const S3NativeLayout::Hit hit=S3NativeLayout::statsHitTest(
+        gestureStartX,gestureStartY);
+    switch(hit.action) {
+      case S3NativeLayout::Action::FOLLOW: {
+        const Game *g=detailGame();
+        if(g)setGameFollow(g->id,!rearFollows(g->id));
+        break;
+      }
+      case S3NativeLayout::Action::BACK:
+        screen=Screen::LIVE;
+        swallowLiveGesture=false;
+        break;
+      case S3NativeLayout::Action::ARM:
+        if(detailGameId) {
+          selectGame(detailGameId);
+          swallowLiveGesture=false;
+        }
+        break;
+      case S3NativeLayout::Action::SETUP:
+        screen=Screen::SETUP;
+        break;
+      case S3NativeLayout::Action::MENU:
+        screen=Screen::GAMES;
+        break;
+      default:break;
+    }
+    lastCarouselAdvance=millis();
+    needsDraw=true;
+    return;
+  }
+  if(screen==Screen::LIVE && showingStandingsPage()) {
+    if(carouselPageCount()>1 && S3NativeLayout::carouselSwipe(dx,dy)) {
+      advanceCarousel(dx<0?1:-1);
+    } else {
+      const S3NativeLayout::Hit hit=S3NativeLayout::standingsHitTest(
+          gestureStartX,gestureStartY);
+      switch(hit.action) {
+        case S3NativeLayout::Action::GAMES:
+          screen=Screen::GAMES;
+          break;
+        case S3NativeLayout::Action::PREVIOUS:
+          if(carouselPageCount()>1)advanceCarousel(-1);
+          break;
+        case S3NativeLayout::Action::NEXT:
+          if(carouselPageCount()>1)advanceCarousel(1);
+          break;
+        default:break;
+      }
+    }
+    lastCarouselAdvance=millis();
+    needsDraw=true;
+    return;
+  }
   if(screen==Screen::GAMES) {
     const bool swipe=S3NativeLayout::carouselSwipe(dx,dy);
     const S3NativeLayout::Hit hit=S3NativeLayout::hitTest(
@@ -3567,8 +3792,8 @@ void handleTouch() {
     return;
   }
 #ifdef GLOWDECK_WAVESHARE_S3
-  if ((screen==Screen::LIVE && !showingStandingsPage()) ||
-      screen==Screen::GAMES) {
+  if (screen==Screen::LIVE || screen==Screen::GAMES ||
+      screen==Screen::STATS) {
     handleS3NativeTouch(pressed);
     return;
   }

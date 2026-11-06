@@ -32,7 +32,7 @@ inline Rect summaryStar(uint8_t n) {
 }
 enum class Action : uint8_t {
   NONE, MENU, FOLLOW, PREVIOUS, NEXT, GAMES, DETAILS,
-  SUMMARY_DETAILS, SUMMARY_FOLLOW
+  SUMMARY_DETAILS, SUMMARY_FOLLOW, BACK, ARM, SETUP
 };
 struct Hit {
   Action action;
@@ -56,6 +56,29 @@ inline Hit hitTest(int16_t x, int16_t y, bool summary) {
   } else if (y >= 55 && y < 269) {
     return {Action::DETAILS, 0};
   }
+  return {Action::NONE, 0};
+}
+// Stats has a dedicated bottom action bar; never let a tap on the ARM
+// button accidentally navigate the carousel or open the game details again.
+inline Hit statsHitTest(int16_t x, int16_t y) {
+  if (x < 0 || y < 0 || x >= kWidth || y >= kHeight)
+    return {Action::NONE, 0};
+  if (kFollow.contains(x,y)) return {Action::FOLLOW, 0};
+  if (kMenu.contains(x,y)) return {Action::MENU, 0};
+  if (kPrev.contains(x,y)) return {Action::BACK, 0};
+  if (kGames.contains(x,y)) return {Action::ARM, 0};
+  if (kNext.contains(x,y)) return {Action::SETUP, 0};
+  return {Action::NONE, 0};
+}
+// Standings remain informational carousel slides, not selectable games.
+// The menu and footer can navigate; rows cannot arm or follow matchups.
+inline Hit standingsHitTest(int16_t x, int16_t y) {
+  if (x < 0 || y < 0 || x >= kWidth || y >= kHeight)
+    return {Action::NONE, 0};
+  if (kMenu.contains(x,y) || kGames.contains(x,y))
+    return {Action::GAMES, 0};
+  if (kPrev.contains(x,y)) return {Action::PREVIOUS, 0};
+  if (kNext.contains(x,y)) return {Action::NEXT, 0};
   return {Action::NONE, 0};
 }
 inline bool carouselSwipe(int dx, int dy) {
