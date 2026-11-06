@@ -1,6 +1,9 @@
 # ESP32-S3 hockey-goal GIF overlay
 
-This S3-only feature plays the hockey GOAL + siren-light animation in sync with each goal overlay on the Waveshare ESP32-S3-Touch-LCD-3.5. The screen draws the looping GIF plus a color-coded goal border and the scoring team's live game score. The WLED celebration, priority queue and automatic return to the previous scoreboard are unchanged.
+This S3-only feature plays the hockey GOAL + siren-light animation in sync with each goal overlay on the Waveshare ESP32-S3-Touch-LCD-3.5. The screen draws the looping 320×240 GIF **at original pixel size** centered
+at x=80, y=40 on the native 480×320 screen, with team-colored borders,
+a dismiss control and the live game score in the surrounding chrome.
+No GIF pixels are stretched, cropped or resampled. The WLED celebration, priority queue and automatic return to the previous scoreboard are unchanged.
 
 ## Install the animation
 
@@ -34,10 +37,16 @@ The original GIF is a separate user-supplied asset and is not checked into the p
 ## Support and safety
 
 - Hardware: **Waveshare ESP32-S3-Touch-LCD-3.5 ST7796**, **not** 3.5B, and not the original CYD.
-- Canvas: 320×240, scaled to 480×320 physical landscape orientation. GIF89a and GIF87a, file size max 1 MB.
-- Storage: ESP32 LittleFS; upload is restricted to the authenticated admin dashboard and uses a temporary file that is validated before replacing the current GIF.
+- Canvas: native 480×320; the GIF remains exactly 320×240 inside a centered
+  1:1 viewport at (80,40), leaving 80px side rails and 40px top/bottom bands.
+  GIF89a and GIF87a, file size max 1 MB.
+- Storage: ESP32 LittleFS; upload uses the protected GlowDeck setup-AP or
+  authenticated home-Wi-Fi dashboard and a temporary file validated before
+  replacing the current GIF.
 - Runtime: AnimatedGIF decoder handles scanlines and frame delays without blocking `loop()` between frames. The controller continues polling NHL, servicing web requests and restoring WLED states; any synchronous NHL request can still briefly delay GIF frames.
-- Fallback: if no valid GIF is installed, the existing vector goal overlay still renders.
+- Fallback: if no valid GIF is installed or decoding fails, the native
+  vector goal overlay renders. The event controller remains non-blocking and
+  preserves its queue, priorities and prior-screen restoration.
 - This GIF is **visual only**. Siren lights in the GIF animate, but ESP32-S3 physical sound through the ES8311 codec is **not** enabled by this change, and existing S3 hardware horn limitations are unchanged. WLED lights continue independently.
 - Testing: compile both PlatformIO environments, verify web syntax and policy tests in CI. Physical display, smoothness and touch need verification on the arrival-day hardware.
 
