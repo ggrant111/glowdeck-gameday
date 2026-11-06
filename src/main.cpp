@@ -203,6 +203,10 @@ EventOverlay::Controller overlayController;
 #ifdef GLOWDECK_WAVESHARE_S3
 GoalGifPlayer goalGif;
 uint32_t gifOverlayStart = 0;
+uint32_t gifOverlayFailedStart = 0;
+Screen s3ReturnFromSetup = Screen::LIVE;
+uint8_t s3TouchCheckMask = 0;
+int16_t s3TouchCheckX = -1, s3TouchCheckY = -1;
 File goalUpload;
 bool goalUploadFailed = false, goalUploadFinished = false;
 size_t goalUploadBytes = 0;
@@ -2945,30 +2949,12 @@ void drawOverlayStatic() {
   tft.setTextDatum(TL_DATUM);
 }
 
+// Native S3 celebration renderers are defined after the S3 color palette.
 #ifdef GLOWDECK_WAVESHARE_S3
-// Overlay the live team score on the hockey footage, but keep the arena's
-// "GOAL!" sign and sirens unobstructed. WLED and score detection are unchanged.
-void drawGoalGifHud(const EventOverlay::Item &e, uint32_t now) {
-  const uint16_t teamColor = TeamGradient::rgb565(e.color);
-  tft.fillRect(0, 0, 320, 4, teamColor);
-  tft.fillRect(0, 236, 320, 4, teamColor);
-  tft.fillRect(0, 0, 4, 240, teamColor);
-  tft.fillRect(316, 0, 4, 240, teamColor);
-  tft.fillRoundRect(18, 203, 284, 32, 6, 0x0841);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(WHITE, 0x0841);
-  const String score = String(e.team) + " GOAL!   " + String(e.away) +
-    " " + String(e.awayScore) + " - " + String(e.homeScore) +
-    " " + String(e.home);
-  tft.drawString(score, 160, 218, 2);
-  tft.setTextDatum(TL_DATUM);
-  const uint16_t remain = overlayController.remaining(now);
-  const uint16_t bar = e.duration ? uint16_t(310UL * remain / e.duration) : 0;
-  tft.fillRect(5, 232, 310, 3, 0x0841);
-  if (bar) tft.fillRect(5, 232, bar, 3, teamColor);
-  tft.setTextColor(WHITE);
-  tft.drawString("X", 302, 10, 2);
-}
+void drawS3EventStatic();
+void drawS3EventAnimation(uint32_t now);
+void drawS3GifBackdrop(const EventOverlay::Item &e);
+void drawS3GoalGifHud(const EventOverlay::Item &e, uint32_t now);
 #endif
 
 // Called at most once per ~140ms for goals and 240ms for calmer events.
@@ -2979,11 +2965,17 @@ void drawOverlayAnimation(uint32_t now) {
 #ifdef GLOWDECK_WAVESHARE_S3
   if (e.kind == EventOverlay::Kind::GOAL && goalGif.active()) {
     if (goalGif.tick(now)) {
-      drawGoalGifHud(e, now);
+      drawS3GoalGifHud(e, now);
       overlayLastFrame = now;
+    } else if (!goalGif.active()) {
+      // One corrupt/unsupported GIF must not cause an infinite retry loop.
+      gifOverlayFailedStart = overlayController.startedAt();
+      needsDraw = true;
     }
     return;
   }
+  drawS3EventAnimation(now);
+  return;
 #endif
   const uint32_t elapsed = now - overlayController.startedAt();
   uint8_t brightness = 72;
