@@ -111,6 +111,13 @@ jobs:
         run: pio run -e cyd
       - name: Compile Waveshare ESP32-S3 3.5-inch firmware
         run: pio run -e s3_waveshare_35
+      - name: Publish S3 Phase 6B.2A background preview
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: glowdeck-s3-arena-6b2a-preview
+          path: assets/s3_arena_live_480x320.png
+          if-no-files-found: error
       - name: Publish CYD installable firmware
         if: success()
         uses: actions/upload-artifact@v4

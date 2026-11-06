@@ -3212,6 +3212,29 @@ void drawS3ArenaReadout(const Game &g) {
   }
   tft.setTextDatum(TL_DATUM);
 }
+// A freestanding follow star for the de-boxed Phase 6B.2A broadcast page.
+// Unlike the shared CYD/S3 control this does NOT draw a 44x30 card behind it.
+// Preserve follow vs armed semantics, position and existing touch geometry.
+void drawS3ArenaFollowStar(const Game &g) {
+  constexpr int16_t x=399, y=24;
+  const bool followed=rearFollows(g.id);
+  const bool armed=g.id==selectedGameId;
+  const uint16_t color=followed ? 0xFE60 : 0xCE79;
+  const int8_t px[10]={0,3,10,5,6,0,-6,-5,-10,-3};
+  const int8_t py[10]={-11,-3,-3,2,10,6,10,2,-3,-3};
+  for(uint8_t i=0;i<10;++i) {
+    const uint8_t j=(i+1)%10;
+    if(followed)
+      tft.fillTriangle(x,y,x+px[i],y+py[i],x+px[j],y+py[j],color);
+    tft.drawLine(x+px[i],y+py[i],x+px[j],y+py[j],color);
+  }
+  if(armed) {
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(S3_AQUA);
+    tft.drawString("A",x+15,y-9,1);
+    tft.setTextDatum(TL_DATUM);
+  }
+}
 void drawS3ArenaScoreboard(const Game &g) {
   if(!s3Arena.restore(tft))return;
   const uint16_t away=to565(teamRgb(g.away));
@@ -3225,8 +3248,8 @@ void drawS3ArenaScoreboard(const Game &g) {
   tft.setTextDatum(MC_DATUM);
   drawS3ArenaFitted(g.away,88,204,100,4,WHITE);
   drawS3ArenaFitted(g.home,392,204,100,4,WHITE);
-  // Team follow/arm indicator lives in a discreet upper-right corner.
-  drawFollowStar(g,399,24,S3_BG);
+  // Frameless follow/arm indicator, original touch target unchanged.
+  drawS3ArenaFollowStar(g);
   // Only two minimal navigation affordances remain. Swiping is primary.
   tft.setTextColor(S3_MUTED);
   tft.drawString("GAMES",39,300,2);

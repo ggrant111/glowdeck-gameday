@@ -27,6 +27,41 @@ high-contrast SOG/status plate. The background contains **no NHL team logo,
 score, clock, game state, labels or player data**. Those remain real-time
 firmware overlays from the existing NHL engine.
 
+## Phase 6B.2A — de-boxed broadcast layout
+
+Physical S3 feedback showed that even the native, darker Phase 6B.1
+background had too many crisp blue-edged cards. This update changes **only
+the Arena Live Game visual layer**:
+
+- Remove all visible border strokes around the time, away/home and main score
+  zones. Their existing positions and dimensions become subtly feathered
+  charcoal fields, keeping legibility without the look of separate boxes.
+- Replace the three outlined shots/PP areas with **one continuous lower
+  information band**, using two nearly invisible separators.
+- Eliminate the outlined logo rings, replacing them with soft radial plinths
+  behind the dynamically drawn official NHL logos.
+- Remove the full-width footer divider and framed footer surface. The existing
+  GAMES, page counter and SETUP labels float over a faint dark vignette.
+- Remove the S3 live follow-star's rectangular background. The star and
+  armed indicator remain clearly visible at their original position.
+- Keep the actual NHL text, logos, team-primary accent bars, game states,
+  touch geometry, carousel, and event/WLED functionality **unchanged**.
+
+The exact generated artwork remains full-resolution 480×320 RGB565 and
+decompresses just once into PSRAM. Phase 6B.2A modifies only the standard
+Python generator and one S3-only live star helper; no display dependency,
+compression format or UI coordinates change.
+
+**Tests:** CI checks RGB565/PNG integrity, mean brightness, edge discontinuities
+where each former border used to be, diffuse logo-plinth edges and uniform
+lower-third fill. It also checks that the follow star has no background card
+but retains the game follow/arm behavior and original hit target.
+
+**Physical check:** compare a pregame and a live matchup against the generated
+PNG, verify the former border lines are not visible, and ensure the score and
+shot data are still high contrast. Test follow/armed stars, swipes and overlays.
+A software build cannot certify the look of the physical ST7796 panel.
+
 ### Lossless asset pipeline (no third-party Python packages)
 
 `scripts/generate_s3_arena.py` creates two resources using standard Python
