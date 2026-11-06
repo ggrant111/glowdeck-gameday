@@ -2,7 +2,8 @@
 #ifdef GLOWDECK_WAVESHARE_S3
 #include <Arduino.h>
 #include <esp_heap_caps.h>
-#include <miniz.h>
+// Arduino-ESP32 2.0.x (ESP-IDF 4.4) keeps the S3 ROM inflater here.
+#include <esp32s3/rom/miniz.h>
 #include "S3ArenaEmbedded.h"
 #include "S3RasterGeometry.h"
 
