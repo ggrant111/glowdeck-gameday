@@ -3142,6 +3142,15 @@ void drawS3Readout(const Game &g) {
   tft.setTextDatum(TL_DATUM);
 }
 #if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
+void drawS3ArenaFitted(const String &value,int16_t x,int16_t y,
+                       int16_t maxWidth,uint8_t font,uint16_t color){
+  String label=value;
+  while(label.length()&&tft.textWidth(label,font)>maxWidth)
+    label.remove(label.length()-1);
+  if(!label.length())return;
+  tft.setTextColor(color); // transparent glyphs over the photograph
+  tft.drawString(label,x,y,font);
+}
 // Phase 6B Arena Broadcast: the asset is a static arena template,
 // while logos, numbers, clock, PP and touch targets remain live GameDay data.
 // The transparent NHL logo pixels are composited into TFT_eSprite.
@@ -3155,8 +3164,7 @@ void drawS3ArenaReadout(const Game &g) {
   tft.setTextColor(WHITE);
   String clock=broadcastTime(g);
   if(clock.length()>24)clock=clock.substring(0,24);
-  drawS3FittedText(clock,240,68,167,clock.length()>17?2:4,
-                   WHITE,S3_DARK);
+  drawS3ArenaFitted(clock,240,68,167,clock.length()>17?2:4,WHITE);
   if(gameIsLive(g)) {
     tft.fillCircle(162,69,3,0xF124);
     tft.setTextColor(0xF97E);
@@ -3215,8 +3223,8 @@ void drawS3ArenaScoreboard(const Game &g) {
   drawTeamLogo(tft,g.away,48,101,80);
   drawTeamLogo(tft,g.home,352,101,80);
   tft.setTextDatum(MC_DATUM);
-  drawS3FittedText(g.away,88,204,100,4,WHITE,S3_BG);
-  drawS3FittedText(g.home,392,204,100,4,WHITE,S3_BG);
+  drawS3ArenaFitted(g.away,88,204,100,4,WHITE);
+  drawS3ArenaFitted(g.home,392,204,100,4,WHITE);
   // Team follow/arm indicator lives in a discreet upper-right corner.
   drawFollowStar(g,399,24,S3_BG);
   // Only two minimal navigation affordances remain. Swiping is primary.
@@ -4163,6 +4171,34 @@ void handleS3NativeTouch(bool pressed) {
     needsDraw=true;
     return;
   }
+#if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
+  if(screen==Screen::LIVE && showingGamePage() && s3Arena.ready()) {
+    const auto hit=S3NativeLayout::broadcastHitTest(gestureStartX,gestureStartY);
+    const LiveCarousel::Page page=currentCarouselPage();
+    switch(hit.action){
+      case S3NativeLayout::Action::FOLLOW:
+        if(page.index<gameCount){
+          const Game &g=games[page.index];
+          setGameFollow(g.id,!rearFollows(g.id));
+        }
+        break;
+      case S3NativeLayout::Action::GAMES:
+        screen=Screen::GAMES;
+        break;
+      case S3NativeLayout::Action::MENU:
+        s3ReturnFromSetup=Screen::LIVE;
+        screen=Screen::SETUP;
+        break;
+      case S3NativeLayout::Action::DETAILS:
+        if(page.index<gameCount)showDetail(games[page.index].id);
+        break;
+      default:break;
+    }
+    lastCarouselAdvance=millis();
+    needsDraw=true;
+    return;
+  }
+#endif
   const bool summary=showingSummaryPage();
   const S3NativeLayout::Hit hit=S3NativeLayout::hitTest(
       gestureStartX,gestureStartY,summary);
