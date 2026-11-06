@@ -36,6 +36,22 @@ These assignments come from [Waveshare official Arduino examples](https://github
 
 The GitHub Actions workflow builds and uploads **`glowdeck-gameday-s3-waveshare-35-firmware`** as a downloadable build artifact (when the branch checks pass). The file inside is `firmware.bin`. Use **PlatformIO upload** for the first flash; do not assume that an app-only `firmware.bin` is an all-in-one `0x0` factory image for a blank board.
 
+## S3 startup crash fix — TFT_eSPI 2.5.43
+
+If the serial monitor shows `StoreProhibited`, `EXCVADDR: 0x00000010`, and a
+backtrace pointing to `TFT_eSPI::begin_tft_write()` during `tft.init()`,
+the default ESP32-S3 SPI port definition in TFT_eSPI 2.5.43 may be invalid.
+The S3 PlatformIO environment adds `-D USE_FSPI_PORT` to force the valid SPI
+register port index. This is **S3-only** and leaves the CYD build unchanged.
+
+To apply the fix, pull the updated main branch, build and flash the
+`s3_waveshare_35` environment over USB. If an older local binary was built,
+run `pio run -e s3_waveshare_35 -t clean` before rebuilding. Then reset the
+board and inspect serial output at 115200 baud. A successful compile is not
+equivalent to a verified physical display or touch test.
+
+Reference: https://github.com/Bodmer/TFT_eSPI/issues/3925
+
 ## First-arrival smoke test
 
 - Look for a correctly colored 480×320 landscape screen and a GameDay welcome view.
