@@ -399,8 +399,8 @@ header{padding:19px 17px}
 <p class="small muted">The onboard horn is a simple tone sequence. Custom WAV playback is not yet included.</p>
 <div class="toggle" style="margin-top:18px"><input id="screenInverted" type="checkbox"><label for="screenInverted">Correct inverted CYD display colors</label></div>
 <p class="small muted">Enable if the screen is pale blue or buttons appear pink instead of dark teal. It can also be toggled under SETUP directly on the touchscreen.</p>
-<label for="adminPassword">Change dashboard password</label><input id="adminPassword" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing">
-<p class="small muted">Web username is always admin. Enter at least 8 characters to change its password.</p>
+<label for="adminPassword">Change home Wi-Fi dashboard password</label><input id="adminPassword" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing">
+<p class="small muted">Connected to GlowDeck's setup hotspot? The dashboard opens without an extra login. Over your home Wi-Fi, sign in as admin with the dashboard password. Enter at least 8 characters to change it. The hotspot itself remains Wi-Fi password protected.</p>
 </div></div>
 <div class="card" id="s3GoalGifCard" hidden style="display:none">
 <h2>Hockey goal GIF · ESP32-S3</h2>

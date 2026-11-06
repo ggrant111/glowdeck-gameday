@@ -36,6 +36,40 @@ These assignments come from [Waveshare official Arduino examples](https://github
 
 The GitHub Actions workflow builds and uploads **`glowdeck-gameday-s3-waveshare-35-firmware`** as a downloadable build artifact (when the branch checks pass). The file inside is `firmware.bin`. Use **PlatformIO upload** for the first flash; do not assume that an app-only `firmware.bin` is an all-in-one `0x0` factory image for a blank board.
 
+## S3 startup crash fix — TFT_eSPI 2.5.43
+
+If the serial monitor shows `StoreProhibited`, `EXCVADDR: 0x00000010`, and a
+backtrace pointing to `TFT_eSPI::begin_tft_write()` during `tft.init()`,
+the default ESP32-S3 SPI port definition in TFT_eSPI 2.5.43 may be invalid.
+The S3 PlatformIO environment adds `-D USE_FSPI_PORT` to force the valid SPI
+register port index. This is **S3-only** and leaves the CYD build unchanged.
+
+To apply the fix, pull the updated main branch, build and flash the
+`s3_waveshare_35` environment over USB. If an older local binary was built,
+run `pio run -e s3_waveshare_35 -t clean` before rebuilding. Then reset the
+board and inspect serial output at 115200 baud. A successful compile is not
+equivalent to a verified physical display or touch test.
+
+Reference: https://github.com/Bodmer/TFT_eSPI/issues/3925
+
+## Real-hardware touchscreen alignment and AP login (November 2026)
+
+The ST7796 screen renders correctly in landscape with rotation 1. Physical
+FT6336 touches were observed **180° reversed** from those displayed pixels.
+The S3-only touch conversion now inverts both raw touch axes while keeping the
+320×240 GameDay coordinate system, panel orientation, and legacy CYD untouched.
+After updating, test the four corners, bottom TODAY/GAMES/SETUP buttons,
+the game follow star, and left/right carousel swipes. If you previously used
+the S3 TOUCH calibration screen, its saved NVS calibration may override the
+standard 300..3800 range; do not recalibrate unless tests require it.
+
+The password-protected `GlowDeck-XXXXXX` **Wi-Fi hotspot** still requires its
+per-device WPA2 password to join. Once connected to the hotspot, open
+`http://192.168.4.1` **without a separate browser admin login**. Requests on
+the home network remain HTTP Basic authenticated as `admin`, including OTA.
+GIF and OTA uploads share this policy. Avoid sharing the hotspot Wi-Fi password
+with untrusted devices.
+
 ## First-arrival smoke test
 
 - Look for a correctly colored 480×320 landscape screen and a GameDay welcome view.

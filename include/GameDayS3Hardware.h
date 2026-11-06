@@ -135,11 +135,14 @@ class GameDayS3Touch {
       int16_t nativeY = ((yh & 0x0F) << 8) | yl;
       nativeX = constrain(nativeX, 0, 319);
       nativeY = constrain(nativeY, 0, 479);
-      // Portrait raw -> landscape rotation 1 -> 320x240 UI.
-      // Virtual raw is intentionally scaled to legacy calibration defaults
-      // (300..3800), so existing hit targets and swipes remain unchanged.
-      point_.x = 300 + ((479L - nativeY) * 3500L / 479L);
-      point_.y = 300 + (nativeX * 3500L / 319L);
+      // Real Waveshare 3.5-inch hardware reports FT6336 coordinates
+      // 180 degrees opposite the ST7796's landscape rotation 1.
+      // Keep the correctly oriented display unchanged and invert BOTH
+      // touch axes here; one-axis inversion would mirror the UI instead.
+      // Scale into the legacy CYD calibration range (300..3800), which
+      // keeps game stars, carousel swipes, and menu hit targets aligned.
+      point_.x = 300 + (nativeY * 3500L / 479L);
+      point_.y = 300 + ((319L - nativeX) * 3500L / 319L);
       point_.z = 1;
     }
     return isDown_;
