@@ -4042,8 +4042,8 @@ void registerRoutes() {
     if (!authorized()) return;
     if (!goalUploadFinished || goalUploadFailed) {
       LittleFS.remove("/goal.tmp");
-      return errorResponse(goalUploadError.isEmpty()
-                           ? "GIF upload incomplete" : goalUploadError, 400);
+      if (goalUploadError.isEmpty()) return errorResponse("GIF upload incomplete", 400);
+      return errorResponse(goalUploadError.c_str(), 400);
     }
     File file = LittleFS.open("/goal.tmp", "r");
     uint8_t header[10] = {};
