@@ -4091,9 +4091,16 @@ void handleTouch() {
       touchWasDown = true;
       lastTouch = millis();
       const TS_Point p = touch.getPoint();
+#ifdef GLOWDECK_WAVESHARE_S3
+      const TS_Point native = touch.getScreenPoint();
+      const bool dismiss=S3NativeLayout::overlayCloseHit(
+          native.x,native.y);
+#else
       const int16_t x = constrain((int)map(p.x, cfg.touchX0, cfg.touchX1, 0, 319), 0, 319);
       const int16_t y = constrain((int)map(p.y, cfg.touchY0, cfg.touchY1, 0, 239), 0, 239);
-      if (x >= 266 && y <= 39) {
+      const bool dismiss=x>=266 && y<=39;
+#endif
+      if (dismiss) {
         overlayController.dismiss(millis());
         overlayLastFrame = 0;
         lastCarouselAdvance = millis();
@@ -4104,7 +4111,8 @@ void handleTouch() {
   }
 #ifdef GLOWDECK_WAVESHARE_S3
   if (screen==Screen::LIVE || screen==Screen::GAMES ||
-      screen==Screen::STATS) {
+      screen==Screen::STATS || screen==Screen::SETUP ||
+      screen==Screen::CALIBRATE) {
     handleS3NativeTouch(pressed);
     return;
   }
