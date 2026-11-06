@@ -13,6 +13,9 @@ main=(root/"src/main.cpp").read_text(encoding="utf-8")
 
 required=[
     "void fillScreen(uint32_t color) { fillSprite(color); }",
+    "int16_t drawString(const String &label",
+    "TFT_eSprite::drawChar(cp,cx,y,font);",
+    "TFT_eSPI::decodeUTF8(",
     "void fillRoundRect(",
     "void drawRoundRect(",
     "void fillCircle(",
@@ -40,4 +43,4 @@ assert "s3ScoreOnlyFrame" in main
 assert "tft.presentRegion(score.x,score.y,score.w,score.h);" in main
 assert "tft.presentRegion(shots.x,shots.y,shots.w,shots.h);" in main
 assert "else {\n      tft.present();\n    }" in main
-print("S3 framebuffer safety: no LCD-only inherited fullscreen/rounded-shape path")
+print("S3 framebuffer safety: text, fullscreen, shapes and partial updates use native sprite")
