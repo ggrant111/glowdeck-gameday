@@ -3635,36 +3635,45 @@ void drawS3Empty() {
 void draw() {
   needsDraw = false;
 #ifdef GLOWDECK_WAVESHARE_S3
-  // Only the S3 live-game and compact-summary surfaces are native in phases 1/2.
-  // Old event overlays, standings, stats and setup keep compatibility scaling.
-  tft.setNativeLayout(!overlayController.active() &&
-      (screen == Screen::LIVE || screen == Screen::GAMES ||
-       screen == Screen::STATS));
+  // Phase 4: every S3 screen uses the native 480x320 canvas.
+  // The uploaded GIF itself remains 320x240, centered and unscaled.
+  tft.setNativeLayout(true);
 #endif
   if (overlayController.active()) {
 #ifdef GLOWDECK_WAVESHARE_S3
-    const EventOverlay::Item &e = overlayController.current();
-    if (e.kind == EventOverlay::Kind::GOAL && goalGif.available()) {
-      if (!goalGif.active() || gifOverlayStart != overlayController.startedAt()) {
+    const EventOverlay::Item &e=overlayController.current();
+    if(e.kind==EventOverlay::Kind::GOAL && goalGif.available() &&
+       gifOverlayFailedStart!=overlayController.startedAt()) {
+      if(!goalGif.active() || gifOverlayStart!=overlayController.startedAt()) {
         goalGif.stop();
-        gifOverlayStart = overlayController.startedAt();
-        goalGif.start(tft);
+        gifOverlayStart=overlayController.startedAt();
+        drawS3GifBackdrop(e);
+        if(!goalGif.start(tft,S3NativeLayout::kGifViewport.x,
+                         S3NativeLayout::kGifViewport.y))
+          gifOverlayFailedStart=overlayController.startedAt();
       }
-      if (goalGif.active()) {
+      if(goalGif.active()) {
         drawOverlayAnimation(millis());
         return;
       }
     }
     goalGif.stop();
-#endif
+    drawS3EventStatic();
+    drawOverlayAnimation(millis());
+    return;
+#else
     drawOverlayStatic();
     drawOverlayAnimation(millis());
     return;
+#endif
   }
 #ifdef GLOWDECK_WAVESHARE_S3
-  if (goalGif.active()) goalGif.stop();
-#endif
+  if(goalGif.active())goalGif.stop();
+  if(screen==Screen::CALIBRATE) { drawS3TouchCheck(); return; }
+  if(screen==Screen::SETUP) { drawS3Setup(); return; }
+#else
   if (screen == Screen::CALIBRATE) { drawCalibration(); return; }
+#endif
   if (screen == Screen::LIVE) {
 #ifdef GLOWDECK_WAVESHARE_S3
     if (tft.nativeLayout()) {
