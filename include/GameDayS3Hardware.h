@@ -51,9 +51,10 @@ inline bool beginHardware() {
 }
 } // namespace GameDayS3
 
-// TFT_eSprite has the same primitives and fonts used by the existing
-// broadcast UI. The physical panel receives one scaled RGB565 frame at a time.
-// Frame copy only happens after an actual screen/overlay redraw, not each loop.
+// TFT_eSprite remains the shared drawable API. New S3 game screens use its
+// native 480x320 canvas directly. Legacy stats, standings, setup and event
+// overlays still render at 320x240 in the upper-left of the same canvas and
+// are scaled only until their own native-design phases are implemented.
 class GameDayS3Display : public TFT_eSprite {
  public:
   GameDayS3Display() : TFT_eSprite(&panel_) {}
@@ -62,10 +63,12 @@ class GameDayS3Display : public TFT_eSprite {
     panel_.setRotation(1);  // 480x320 landscape
     panel_.fillScreen(TFT_BLACK);
     setColorDepth(16);
-    if (!createSprite(GameDayS3::VIRTUAL_W, GameDayS3::VIRTUAL_H)) {
-      Serial.println("[S3] ERROR: couldn't allocate game canvas");
+    if (!createSprite(GameDayS3::PHYSICAL_W, GameDayS3::PHYSICAL_H)) {
+      Serial.println("[S3] ERROR: couldn't allocate native 480x320 canvas");
       return false;
     }
+    Serial.printf("[S3] Native 480x320 RGB565 canvas ready, free PSRAM: %u bytes\\n",
+                  (unsigned)ESP.getFreePsram());
     scaled_ = static_cast<uint16_t *>(heap_caps_malloc(
       GameDayS3::PHYSICAL_W * GameDayS3::PHYSICAL_H * sizeof(uint16_t),
       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
@@ -76,10 +79,19 @@ class GameDayS3Display : public TFT_eSprite {
     if (!scaled_) Serial.println("[S3] ERROR: no scaled frame buffer");
     return scaled_ != nullptr;
   }
-  // Virtual landscape always stays 320x240; ignore the legacy CYD rotation.
+  // The original TFT_eSPI draw commands don't set sprite rotation here.
   void setRotation(uint8_t) {}
   void invertDisplay(bool enabled) { panel_.invertDisplay(enabled); }
+  void setNativeLayout(bool enabled) { nativeLayout_ = enabled; }
+  bool nativeLayout() const { return nativeLayout_; }
   void present() {
+    if (nativeLayout_) {
+      // Pass the native sprite directly to the panel: no pixel resampling,
+      // extra RGB565 copies or 320x240 text enlargement.
+      pushSprite(0, 0);
+      return;
+    }
+    // Transitional compatibility for old CYD-only screens and the 320x240 GIF.
     if (!scaled_) return;
     for (uint16_t y = 0; y < GameDayS3::PHYSICAL_H; ++y) {
       const uint16_t sy = (uint32_t(y) * GameDayS3::VIRTUAL_H) /
@@ -97,6 +109,7 @@ class GameDayS3Display : public TFT_eSprite {
  private:
   TFT_eSPI panel_;
   uint16_t *scaled_ = nullptr;
+  bool nativeLayout_ = false;
 };
 
 // Data shape compatible with the legacy XPT2046_Touchscreen usage.
@@ -148,6 +161,12 @@ class GameDayS3Touch {
     return isDown_;
   }
   TS_Point getPoint() { return point_; }
+  // Hardware-oriented pixel coordinates for the native 480x320 S3 UI.
+  // Independent from the legacy CYD calibration stored in NVS.
+  TS_Point getScreenPoint() const {
+    return TS_Point((point_.x - 300L) * 479L / 3500L,
+                    (point_.y - 300L) * 319L / 3500L, point_.z);
+  }
  private:
   uint32_t readAt_ = 0;
   bool isDown_ = false;
