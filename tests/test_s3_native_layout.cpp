@@ -69,6 +69,21 @@ int main() {
   assert(touchCheckHitTest(405,296).action == Action::GAMES);
   assert(touchCheckHitTest(240,170).action == Action::NONE);
   assert(touchCheckHitTest(-1,20).action == Action::NONE);
+  // Phase 6B clean broadcast navigation: swipe carousel, score -> stats,
+  // follow star and tiny corner controls; no 3-button footer.
+  assert(broadcastHitTest(401,23).action==Action::FOLLOW);
+  assert(broadcastHitTest(24,301).action==Action::GAMES);
+  assert(broadcastHitTest(453,301).action==Action::MENU);
+  assert(broadcastHitTest(240,148).action==Action::DETAILS);
+  assert(broadcastHitTest(110,240).action==Action::NONE);
+  assert(broadcastHitTest(479,319).action==Action::MENU);
+  assert(broadcastHitTest(480,300).action==Action::NONE);
+  assert(broadcastHitTest(-1,150).action==Action::NONE);
+  assert(kBroadcastReadoutTop.x>=130 &&
+         kBroadcastReadoutTop.x+kBroadcastReadoutTop.w<=350);
+  assert(kBroadcastReadoutTop.y+kBroadcastReadoutTop.h<
+         kBroadcastReadoutBottom.y);
+  assert(kBroadcastReadoutBottom.y+kBroadcastReadoutBottom.h<=272);
   assert(carouselSwipe(-66,0));
   assert(carouselSwipe(70,20));
   assert(!carouselSwipe(20,3));
