@@ -22,7 +22,9 @@ assert 5000 < len(compressed) < 100000, len(compressed)
 raw = zlib.decompress(compressed)
 assert len(raw) == 480 * 320 * 2 == 307200
 sha = hashlib.sha256(raw).hexdigest()
-assert sha == "4c69235f74faf34d048f1bbec2309b35c7fdda7c52aa9ee3ea000c6dc5f63cf8", sha
+# The source artwork evolves across Phase 6 releases. Its generated SHA must
+# match the header and CRC, but should never pin the old (boxed) artwork.
+assert re.fullmatch(r"[0-9a-f]{64}", sha), sha
 assert f'RawSha256="{sha}"' in header
 crc = zlib.crc32(raw) & 0xFFFFFFFF
 assert f"RawCrc32=0x{crc:08X}U" in header
@@ -73,6 +75,44 @@ assert sum(rgb(240,150))/3 < 35
 assert sum(rgb(85,144))/3 < 40
 assert rgb(240,150) != rgb(85,144), "Foreground plates must remain separate"
 
+# Phase 6B.2A: every previously hard-bordered panel is now a feathered
+# tonal zone. Pixel gradients at former box edges must be smooth, with no
+# high-contrast 1px outlines. These checks are against PNG pixels, independent
+# of the RGB565 byte-order checks above.
+def edge_jump(x, y):
+    a, b = rgb(x - 1, y), rgb(x, y)
+    return max(abs(a[i] - b[i]) for i in range(3))
+
+for x, y in ((153, 68), (15, 150), (154, 157),
+             (327, 157), (465, 150), (45, 246),
+             (172, 244), (308, 244), (435, 246),
+             (374, 24), (424, 24), (240, 285)):
+    assert edge_jump(x, y) < 12, (x, y, edge_jump(x, y))
+
+# The three old outlined SOG cards are now one unified strip; left/center/
+# right share the same tonal fill. No separately bordered center PP rectangle.
+lower_left = rgb(114, 245)
+lower_center = rgb(240, 245)
+lower_right = rgb(365, 245)
+assert max(abs(lower_left[i] - lower_center[i]) for i in range(3)) < 12
+assert max(abs(lower_right[i] - lower_center[i]) for i in range(3)) < 12
+
+# The old crisp logo rings at r=43 are gone; a diffuse plinth remains.
+for center in (86, 394):
+    for delta in (40, 42, 43, 44, 46):
+        assert edge_jump(center + delta, 144) < 12
+
+# Removing the footer frame must preserve an uninterrupted soft gradient.
+assert edge_jump(240, 285) < 12
+assert edge_jump(240, 286) < 12
+
+generator=(ROOT / "scripts" / "generate_s3_arena.py").read_text()
+assert "soft_plate(" in generator and "soft_disc(" in generator
+assert "Phase 6B.2A" in generator
+assert "ellipse(cx, 144, 43" not in generator
+assert "rounded(172, 221, 308, 266" not in generator
+assert "line(0, 285, 480, 285" not in generator
+
 # Byte order self-test covers red, green and blue, not just muted navy pixels.
 for r, g, b, packed in ((255, 0, 0, 0xF800),
                          (0, 255, 0, 0x07E0),
@@ -94,5 +134,13 @@ assert "memcpy(framebuffer+pos,cache_+pos" in loader
 assert "mix565(" not in loader, "No 192x128 bilinear resampling should remain"
 assert "extra_scripts = pre:scripts/generate_s3_arena.py" in config
 assert "-D GLOWDECK_S3_PHASE6_LIVE=1" in config
-print(f"PASS Phase 6B.1: 480x320 native RGB565, {len(compressed)} B compressed, "
+assert "void drawS3ArenaFollowStar(const Game &g)" in source
+assert "drawS3ArenaFollowStar(g);" in source
+assert "drawFollowStar(g,399,24,S3_BG);" not in source
+# Accent bars and original dynamic labels remain outside the PNG.
+assert "tft.fillRoundRect(36,189,105,3,1,away);" in source
+assert "tft.fillRoundRect(339,189,105,3,1,home);" in source
+assert 'tft.drawString("GAMES",39,300,2);' in source
+assert 'tft.drawString("SETUP",443,300,2);' in source
+print(f"PASS Phase 6B.2A de-boxed: 480x320 native RGB565, {len(compressed)} B compressed, "
       f"dark mean RGB={tuple(round(v,1) for v in mean)}, CRC={crc:08X}")
