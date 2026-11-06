@@ -3871,6 +3871,68 @@ void handleS3NativeTouch(bool pressed) {
   touchWasDown=false;
   const int dx=gestureEndX-gestureStartX;
   const int dy=gestureEndY-gestureStartY;
+  if(screen==Screen::SETUP) {
+    const S3NativeLayout::Hit hit=S3NativeLayout::setupHitTest(
+        gestureStartX,gestureStartY);
+    switch(hit.action) {
+      case S3NativeLayout::Action::TEST: {
+        Game *g=selectedGame();
+        celebrate(teamRgb(g?g->home:String("UTA")));
+        break;
+      }
+      case S3NativeLayout::Action::TOUCH_CHECK:
+        s3TouchCheckMask=0;
+        s3TouchCheckX=s3TouchCheckY=-1;
+        screen=Screen::CALIBRATE;
+        break;
+      case S3NativeLayout::Action::COLOR_MODE:
+        cfg.invertScreen=!cfg.invertScreen;
+        tft.invertDisplay(cfg.invertScreen);
+        prefs.putBool("invert",cfg.invertScreen);
+        break;
+      case S3NativeLayout::Action::PREVIOUS:
+        screen=Screen::LIVE;
+        break;
+      case S3NativeLayout::Action::GAMES:
+        screen=Screen::GAMES;
+        break;
+      case S3NativeLayout::Action::BACK:
+        screen=s3ReturnFromSetup==Screen::CALIBRATE?
+            Screen::LIVE:s3ReturnFromSetup;
+        break;
+      default:break;
+    }
+    lastCarouselAdvance=millis();
+    needsDraw=true;
+    return;
+  }
+  if(screen==Screen::CALIBRATE) {
+    const S3NativeLayout::Hit hit=S3NativeLayout::touchCheckHitTest(
+        gestureStartX,gestureStartY);
+    switch(hit.action) {
+      case S3NativeLayout::Action::TOUCH_CHECK:
+        s3TouchCheckMask|=uint8_t(1U<<hit.row);
+        s3TouchCheckX=gestureEndX;
+        s3TouchCheckY=gestureEndY;
+        break;
+      case S3NativeLayout::Action::RESET_CHECK:
+        s3TouchCheckMask=0;
+        s3TouchCheckX=s3TouchCheckY=-1;
+        break;
+      case S3NativeLayout::Action::BACK:
+        screen=Screen::SETUP;
+        break;
+      case S3NativeLayout::Action::GAMES:
+        screen=Screen::GAMES;
+        break;
+      default:
+        s3TouchCheckX=gestureEndX;
+        s3TouchCheckY=gestureEndY;
+        break;
+    }
+    needsDraw=true;
+    return;
+  }
   if(screen==Screen::STATS) {
     const S3NativeLayout::Hit hit=S3NativeLayout::statsHitTest(
         gestureStartX,gestureStartY);
@@ -3891,6 +3953,7 @@ void handleS3NativeTouch(bool pressed) {
         }
         break;
       case S3NativeLayout::Action::SETUP:
+        s3ReturnFromSetup=Screen::STATS;
         screen=Screen::SETUP;
         break;
       case S3NativeLayout::Action::MENU:
@@ -3935,6 +3998,7 @@ void handleS3NativeTouch(bool pressed) {
     } else {
       switch(hit.action) {
         case S3NativeLayout::Action::MENU:
+          s3ReturnFromSetup=Screen::GAMES;
           screen=Screen::SETUP; break;
         case S3NativeLayout::Action::GAMES:
           screen=Screen::LIVE;
