@@ -402,6 +402,18 @@ header{padding:19px 17px}
 <label for="adminPassword">Change dashboard password</label><input id="adminPassword" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing">
 <p class="small muted">Web username is always admin. Enter at least 8 characters to change its password.</p>
 </div></div>
+<div class="card" id="s3GoalGifCard" hidden style="display:none">
+<h2>Hockey goal GIF · ESP32-S3</h2>
+<p>Play your hockey goal-and-siren animation whenever a real NHL goal or GOAL preview appears on the touchscreen. Team-colored borders, score, and WLED celebrations stay synchronized. The GIF is a silent animation; ESP32-S3 onboard audio requires its own codec driver.</p>
+<p id="goalGifStatus" class="small muted">Checking animation storage...</p>
+<form id="goalGifUploadForm">
+<label for="goalGifFile">Upload optimized 320×240 GIF (maximum 1 MB)</label>
+<input type="file" name="goal" id="goalGifFile" accept=".gif,image/gif" required>
+<div class="actions"><button class="primary" type="submit">Install goal GIF</button>
+<button type="button" id="goalGifPreview">Preview GOAL on device</button>
+<button type="button" id="goalGifRemove">Remove animation</button></div></form>
+<p class="small muted">The animation is stored in device flash and survives firmware updates, unless you erase flash or reformat its filesystem. Applies to the S3 only; existing CYD overlays are unchanged.</p>
+</div>
 <div class="card"><button class="primary" id="saveSettings">Save setup</button>
 <div class="hint">If you change Wi-Fi, reconnect your phone to GlowDeck's setup hotspot or the new home network to reopen the page.</div></div>
 <div class="card"><h2>Connection information</h2>
@@ -1102,6 +1114,40 @@ $("scanWifi").onclick=()=>perform(async()=>{
   message("Wi-Fi scan complete");
 });
 $("networks").onchange=e=>{if(e.target.value)$("ssid").value=e.target.value};
+async function loadGoalGif(){
+  const res=await fetch("/api/goal-gif");
+  if(!res.ok)return; // The legacy CYD has no GIF hardware capability.
+  const info=await res.json();
+  $("s3GoalGifCard").hidden=!info.supported;
+  $("s3GoalGifCard").style.display=info.supported?"block":"none";
+  if(!info.supported)return;
+  $("goalGifStatus").textContent=info.installed
+    ? "Installed · "+Math.round(info.bytes/1024)+" KB · loops during each GOAL event"
+    : "No animation installed · choose your GlowDeck_Goal_320x240.gif file";
+}
+$("goalGifUploadForm").onsubmit=e=>{e.preventDefault();perform(async()=>{
+  const file=$("goalGifFile").files[0];if(!file)return;
+  if(file.size>1048576)throw Error("GIF must be under 1 MB");
+  const header=new Uint8Array(await file.slice(0,10).arrayBuffer());
+  const signature=String.fromCharCode(...header.slice(0,6));
+  const width=header[6]|(header[7]<<8),height=header[8]|(header[9]<<8);
+  if(!["GIF87a","GIF89a"].includes(signature)||width!==320||height!==240)
+    throw Error("Use the prepared 320×240 GlowDeck GIF");
+  const data=new FormData();data.append("goal",file);
+  const res=await fetch("/api/goal-gif/upload",{method:"POST",body:data});
+  const result=await res.json();if(!res.ok)throw Error(result.error||"Upload failed");
+  await loadGoalGif();
+  message("Hockey goal animation installed");
+})};
+$("goalGifPreview").onclick=()=>perform(async()=>{
+  await post("/api/overlay/preview",{kind:"goal",side:"home"});
+  message("Hockey goal animation preview started on the S3");
+});
+$("goalGifRemove").onclick=()=>perform(async()=>{
+  if(!confirm("Remove the installed hockey-goal animation?"))return;
+  await post("/api/goal-gif/remove",{});
+  await loadGoalGif();message("Goal animation removed");
+});
 $("uploadForm").onsubmit=e=>{e.preventDefault();perform(async()=>{
   const file=$("bin").files[0];if(!file)return;
   if(!confirm("Flash "+file.name+" and restart the CYD?"))return;
@@ -1115,7 +1161,7 @@ $("reboot").onclick=()=>perform(async()=>{
   await api("/api/reboot",{method:"POST"});message("Restart requested");
 });
 (async()=>{
-  try{await loadConfig();await refresh()}
+  try{await loadConfig();await refresh();await loadGoalGif()}
   catch(err){message("Cannot load device: "+err.message)}
   setInterval(()=>refresh().catch(()=>{}),15000);
 })();

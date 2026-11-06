@@ -11,6 +11,7 @@
 #include <WiFiClientSecure.h>
 #ifdef GLOWDECK_WAVESHARE_S3
 #include "GameDayS3Hardware.h"
+#include "GoalGifPlayer.h"
 #else
 #include <XPT2046_Touchscreen.h>
 #endif
@@ -198,6 +199,14 @@ uint16_t hornFrequency = 0;
 
 enum class Screen : uint8_t { LIVE, GAMES, SETUP, CALIBRATE, STATS };
 EventOverlay::Controller overlayController;
+#ifdef GLOWDECK_WAVESHARE_S3
+GoalGifPlayer goalGif;
+uint32_t gifOverlayStart = 0;
+File goalUpload;
+bool goalUploadFailed = false, goalUploadFinished = false;
+size_t goalUploadBytes = 0;
+String goalUploadError;
+#endif
 uint32_t overlayLastFrame = 0;
 uint32_t overlayCount = 0;
 struct DetailStats {
@@ -2911,11 +2920,46 @@ void drawOverlayStatic() {
   tft.setTextDatum(TL_DATUM);
 }
 
+#ifdef GLOWDECK_WAVESHARE_S3
+// Overlay the live team score on the hockey footage, but keep the arena's
+// "GOAL!" sign and sirens unobstructed. WLED and score detection are unchanged.
+void drawGoalGifHud(const EventOverlay::Item &e, uint32_t now) {
+  const uint16_t teamColor = TeamGradient::rgb565(e.color);
+  tft.fillRect(0, 0, 320, 4, teamColor);
+  tft.fillRect(0, 236, 320, 4, teamColor);
+  tft.fillRect(0, 0, 4, 240, teamColor);
+  tft.fillRect(316, 0, 4, 240, teamColor);
+  tft.fillRoundRect(18, 203, 284, 32, 6, 0x0841);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE, 0x0841);
+  const String score = String(e.team) + " GOAL!   " + String(e.away) +
+    " " + String(e.awayScore) + " - " + String(e.homeScore) +
+    " " + String(e.home);
+  tft.drawString(score, 160, 218, 2);
+  tft.setTextDatum(TL_DATUM);
+  const uint16_t remain = overlayController.remaining(now);
+  const uint16_t bar = e.duration ? uint16_t(310UL * remain / e.duration) : 0;
+  tft.fillRect(5, 232, 310, 3, 0x0841);
+  if (bar) tft.fillRect(5, 232, bar, 3, teamColor);
+  tft.setTextColor(WHITE);
+  tft.drawString("X", 302, 10, 2);
+}
+#endif
+
 // Called at most once per ~140ms for goals and 240ms for calmer events.
 // Colors animate only the perimeter; no full-screen flashing.
 void drawOverlayAnimation(uint32_t now) {
   if (!overlayController.active()) return;
   const EventOverlay::Item &e = overlayController.current();
+#ifdef GLOWDECK_WAVESHARE_S3
+  if (e.kind == EventOverlay::Kind::GOAL && goalGif.active()) {
+    if (goalGif.tick(now)) {
+      drawGoalGifHud(e, now);
+      overlayLastFrame = now;
+    }
+    return;
+  }
+#endif
   const uint32_t elapsed = now - overlayController.startedAt();
   uint8_t brightness = 72;
   if (EventOverlay::isFlash(e.kind)) {
@@ -2955,10 +2999,28 @@ void drawOverlayAnimation(uint32_t now) {
 void draw() {
   needsDraw = false;
   if (overlayController.active()) {
+#ifdef GLOWDECK_WAVESHARE_S3
+    const EventOverlay::Item &e = overlayController.current();
+    if (e.kind == EventOverlay::Kind::GOAL && goalGif.available()) {
+      if (!goalGif.active() || gifOverlayStart != overlayController.startedAt()) {
+        goalGif.stop();
+        gifOverlayStart = overlayController.startedAt();
+        goalGif.start(tft);
+      }
+      if (goalGif.active()) {
+        drawOverlayAnimation(millis());
+        return;
+      }
+    }
+    goalGif.stop();
+#endif
     drawOverlayStatic();
     drawOverlayAnimation(millis());
     return;
   }
+#ifdef GLOWDECK_WAVESHARE_S3
+  if (goalGif.active()) goalGif.stop();
+#endif
   if (screen == Screen::CALIBRATE) { drawCalibration(); return; }
   if (screen == Screen::LIVE) {
     if (showingStandingsPage()) {
@@ -3966,6 +4028,87 @@ void registerRoutes() {
     celebrate(teamRgb(team), seq);
     StaticJsonDocument<96> ok; ok["ok"] = true; sendJson(ok);
   });
+#ifdef GLOWDECK_WAVESHARE_S3
+  server.on("/api/goal-gif", HTTP_GET, []() {
+    if (!authorized()) return;
+    StaticJsonDocument<192> result;
+    result["supported"] = true;
+    result["installed"] = goalGif.available();
+    result["bytes"] = goalGif.size();
+    result["maxBytes"] = GoalGifPlayer::kMaxBytes;
+    sendJson(result);
+  });
+  server.on("/api/goal-gif/upload", HTTP_POST, []() {
+    if (!authorized()) return;
+    if (!goalUploadFinished || goalUploadFailed) {
+      LittleFS.remove("/goal.tmp");
+      if (goalUploadError.isEmpty()) return errorResponse("GIF upload incomplete", 400);
+      return errorResponse(goalUploadError.c_str(), 400);
+    }
+    File file = LittleFS.open("/goal.tmp", "r");
+    uint8_t header[10] = {};
+    const bool valid = file && file.read(header, 10) == 10 &&
+                       GoalGifPlayer::validHeader(header);
+    file.close();
+    if (!valid) {
+      LittleFS.remove("/goal.tmp");
+      return errorResponse("Upload an animated GIF scaled to exactly 320x240", 400);
+    }
+    goalGif.stop();
+    // Preserve the old GIF if the new upload was interrupted. Existing image
+    // is only removed after validation succeeds.
+    LittleFS.remove(GoalGifPlayer::kFilename);
+    if (!LittleFS.rename("/goal.tmp", GoalGifPlayer::kFilename))
+      return errorResponse("Could not install GIF", 500);
+    StaticJsonDocument<128> result;
+    result["ok"] = true;
+    result["bytes"] = goalUploadBytes;
+    sendJson(result);
+  }, []() {
+    HTTPUpload &upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      goalUploadFinished = false;
+      goalUploadFailed = !server.authenticate("admin", cfg.adminPassword.c_str());
+      goalUploadError = goalUploadFailed ? "Unauthorized" : "";
+      goalUploadBytes = 0;
+      if (!goalUploadFailed) {
+        if (!goalGif.mounted()) {
+          goalUploadFailed = true;
+          goalUploadError = "Flash storage unavailable";
+        } else {
+          LittleFS.remove("/goal.tmp");
+          goalUpload = LittleFS.open("/goal.tmp", "w");
+          if (!goalUpload) {
+            goalUploadFailed = true;
+            goalUploadError = "Unable to write flash storage";
+          }
+        }
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      if (!goalUploadFailed) {
+        if (goalUploadBytes + upload.currentSize > GoalGifPlayer::kMaxBytes ||
+            goalUpload.write(upload.buf, upload.currentSize) != upload.currentSize) {
+          goalUploadFailed = true;
+          goalUploadError = "GIF exceeds 1MB or flash write failed";
+        } else goalUploadBytes += upload.currentSize;
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      goalUpload.close();
+      goalUploadFinished = !goalUploadFailed && goalUploadBytes >= 16;
+    } else if (upload.status == UPLOAD_FILE_ABORTED) {
+      goalUpload.close();
+      goalUploadFailed = true;
+      goalUploadError = "Upload aborted";
+      LittleFS.remove("/goal.tmp");
+    }
+  });
+  server.on("/api/goal-gif/remove", HTTP_POST, []() {
+    if (!authorized()) return;
+    goalGif.stop();
+    LittleFS.remove(GoalGifPlayer::kFilename);
+    StaticJsonDocument<64> result; result["ok"] = true; sendJson(result);
+  });
+#endif
   server.on("/api/update", HTTP_POST, []() {
     if (!authorized()) return;
     bool ok = !Update.hasError();
@@ -4021,6 +4164,7 @@ void setup() {
   digitalWrite(PIN_BL, HIGH);
 #ifdef GLOWDECK_WAVESHARE_S3
   if (!tft.init()) Serial.println("[S3] Display init or PSRAM allocation failed");
+  goalGif.beginStorage();
 #else
   tft.init();
 #endif
@@ -4208,6 +4352,14 @@ void loop() {
     const uint32_t frameNow = millis();
     const uint32_t period = EventOverlay::isFlash(overlayController.current().kind)
                             ? 140UL : 240UL;
+#ifdef GLOWDECK_WAVESHARE_S3
+    if (goalGif.active()) {
+      if (goalGif.due(frameNow)) {
+        drawOverlayAnimation(frameNow);
+        displayChanged = true;
+      }
+    } else
+#endif
     if (uint32_t(frameNow - overlayLastFrame) >= period) {
       drawOverlayAnimation(frameNow);
 #ifdef GLOWDECK_WAVESHARE_S3
