@@ -67,6 +67,38 @@ goal celebration rules, WLED state restoration or AP/browser controls.
    calibration; this page never rewrites calibration NVS values. Legacy CYD
    calibration is unaffected.
 
+## Official NHL logos on the native S3 framebuffer
+
+**Fix for blank logos (November 2026).** The previous generated header
+declared only `drawTeamLogo(TFT_eSPI&)`, whose non-virtual `pushImage` went
+straight to the physical ST7796. The S3 UI now composes every screen into an
+off-screen `TFT_eSprite` first; presenting that framebuffer subsequently
+overwrote those direct-to-panel logo pixels. A dedicated
+`drawTeamLogo(TFT_eSprite&)` overload now unpacks transparent 4-bit pixels
+into the native sprite with `drawPixel`, which persists when
+`pushSprite()` transmits the final frame.
+
+The **logo URLs are sourced from the NHL scoreboard JSON** during the build,
+preferring `darkLogo` and falling back to the official
+`assets.nhle.com/logos/nhl/svg/{TEAM}_dark.svg` endpoint. CairoSVG converts
+SVG once at build time; the image generator packs all 32 clubs into flash.
+The new S3 build uses **80×80 source assets** and sizes them appropriately
+(80px scoreboard, 60px details, 30px game lists, 17px standings, 72px
+celebration card, 56px GIF side rail). The CYD retains its original 56px
+assets and unchanged direct-panel renderer.
+
+No extra network requests, SVG rendering libraries, Wi-Fi dependency, user
+settings changes or filesystem uploads are needed **on the ESP32-S3** for the
+logos to appear. If the NHL API omits a team on the current day, the generator
+uses that team's official CDN asset at build time. Unknown team codes display
+their abbreviation rather than a silent blank.
+
+**First hardware check:** after updating the S3 firmware, verify away/home
+logos on the main score view, two smaller icons per row in GAMES, standings
+icons, both logos in GAME STATS and the scoring-team logo on a GOAL overlay.
+For a GOAL GIF, the logo lives in the left side rail while the centered
+animation remains 320×240 unscaled.
+
 ## Test checklist on the physical S3
 
 - Confirm startup and 480x320 landscape color rendering; no Guru Meditation
