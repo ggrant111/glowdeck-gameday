@@ -40,10 +40,14 @@ class GoalGifPlayer {
       ((uint16_t)h[6] | ((uint16_t)h[7] << 8)) == 320 &&
       ((uint16_t)h[8] | ((uint16_t)h[9] << 8)) == 240;
   }
-  bool start(TFT_eSprite &canvas) {
+  // A 320x240 asset is centered within the native 480x320 canvas.
+  // The GIF decoder writes pixels 1:1 without zooming/cropping the artwork.
+  bool start(TFT_eSprite &canvas, int16_t offsetX = 0, int16_t offsetY = 0) {
     stop();
     if (!available()) return false;
     canvas_ = &canvas;
+    offsetX_ = offsetX;
+    offsetY_ = offsetY;
     current() = this;
     decoder_.begin(LITTLE_ENDIAN_PIXELS);
     if (!decoder_.open(kFilename, openFile, closeFile, readFile, seekFile, drawLine)) {
@@ -53,7 +57,7 @@ class GoalGifPlayer {
     }
     playing_ = true;
     nextFrameAt_ = 0;
-    canvas_->fillScreen(TFT_BLACK);
+    canvas_->fillRect(offsetX_, offsetY_, 320, 240, TFT_BLACK);
     return true;
   }
   void stop() {
@@ -73,7 +77,7 @@ class GoalGifPlayer {
     if (!decoder_.playFrame(false, &delayMs)) {
       // A GIF is short (~1.26 seconds), and repeats for the entire goal overlay.
       decoder_.close();
-      canvas_->fillScreen(TFT_BLACK);
+      canvas_->fillRect(offsetX_, offsetY_, 320, 240, TFT_BLACK);
       if (!decoder_.open(kFilename, openFile, closeFile, readFile, seekFile, drawLine)) {
         stop();
         return false;
@@ -122,16 +126,17 @@ class GoalGifPlayer {
     if (!player || !player->canvas_ || !line) return;
     int16_t y = line->iY + line->y;
     if (y < 0 || y >= 240) return;
+    const int16_t dstY = y + player->offsetY_;
     for (int16_t index = 0; index < line->iWidth; ++index) {
       const int16_t x = line->iX + index;
       if (x < 0 || x >= 320) continue;
       const uint8_t pixel = line->pPixels[index];
       if (line->ucHasTransparency && pixel == line->ucTransparent) {
         if (line->ucDisposalMethod == 2)
-          player->canvas_->drawPixel(x, y, TFT_BLACK);
+          player->canvas_->drawPixel(x + player->offsetX_, dstY, TFT_BLACK);
         continue;
       }
-      player->canvas_->drawPixel(x, y, line->pPalette[pixel]);
+      player->canvas_->drawPixel(x + player->offsetX_, dstY, line->pPalette[pixel]);
     }
   }
   bool mounted_ = false, playing_ = false;
@@ -139,5 +144,6 @@ class GoalGifPlayer {
   File file_;
   AnimatedGIF decoder_;
   uint32_t nextFrameAt_ = 0;
+  int16_t offsetX_ = 0, offsetY_ = 0;
 };
 #endif
