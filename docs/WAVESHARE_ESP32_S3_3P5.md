@@ -52,6 +52,24 @@ equivalent to a verified physical display or touch test.
 
 Reference: https://github.com/Bodmer/TFT_eSPI/issues/3925
 
+## Real-hardware touchscreen alignment and AP login (November 2026)
+
+The ST7796 screen renders correctly in landscape with rotation 1. Physical
+FT6336 touches were observed **180° reversed** from those displayed pixels.
+The S3-only touch conversion now inverts both raw touch axes while keeping the
+320×240 GameDay coordinate system, panel orientation, and legacy CYD untouched.
+After updating, test the four corners, bottom TODAY/GAMES/SETUP buttons,
+the game follow star, and left/right carousel swipes. If you previously used
+the S3 TOUCH calibration screen, its saved NVS calibration may override the
+standard 300..3800 range; do not recalibrate unless tests require it.
+
+The password-protected `GlowDeck-XXXXXX` **Wi-Fi hotspot** still requires its
+per-device WPA2 password to join. Once connected to the hotspot, open
+`http://192.168.4.1` **without a separate browser admin login**. Requests on
+the home network remain HTTP Basic authenticated as `admin`, including OTA.
+GIF and OTA uploads share this policy. Avoid sharing the hotspot Wi-Fi password
+with untrusted devices.
+
 ## First-arrival smoke test
 
 - Look for a correctly colored 480×320 landscape screen and a GameDay welcome view.
