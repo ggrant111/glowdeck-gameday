@@ -5273,6 +5273,7 @@ void loop() {
   }
 #ifdef GLOWDECK_WAVESHARE_S3
   bool displayChanged = false;
+  bool s3ScoreOnlyFrame = false;
 #endif
   if (needsDraw) {
     partialLiveUpdate = false;
@@ -5306,6 +5307,9 @@ void loop() {
       const LiveCarousel::Page page=currentCarouselPage();
       drawS3Readout(games[page.kind==LiveCarousel::Kind::GAME
                          ? page.index:featuredIndex % gameCount]);
+      // Only opaque readout plates changed. Avoid retransmitting official
+      // NHL logos, header, gradient and footer navigation over the SPI bus.
+      s3ScoreOnlyFrame = true;
     } else {
       drawLiveReadout(games[featuredIndex % gameCount]);
     }
@@ -5315,7 +5319,19 @@ void loop() {
 #endif
   }
 #ifdef GLOWDECK_WAVESHARE_S3
-  if (displayChanged) tft.present();
+  if (displayChanged) {
+    if (s3ScoreOnlyFrame && !overlayController.active()) {
+      // Two small SPI transfers instead of the full 480x320 (~300 KiB).
+      // Full redraws always transmit all pixels, so changing away from
+      // standings/stats/events can never preserve portions of old pages.
+      const auto score=S3Raster::kClockScore;
+      const auto shots=S3Raster::kShots;
+      tft.presentRegion(score.x,score.y,score.w,score.h);
+      tft.presentRegion(shots.x,shots.y,shots.w,shots.h);
+    } else {
+      tft.present();
+    }
+  }
 #endif
   // Update one optional pregame conference record after the current frame
   // is painted. This keeps the first season/standings view responsive.
