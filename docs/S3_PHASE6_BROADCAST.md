@@ -16,29 +16,67 @@ Phase 5 Live screen. Build-time switch:
 - `-D GLOWDECK_S3_PHASE6_LIVE=1`: use the arena artwork (default).
 - `-D GLOWDECK_S3_PHASE6_LIVE=0`: restore the Phase 5 native S3 scoreboard.
 
-## Image pipeline
+## Phase 6B.1: darker, full-native arena artwork
 
-The source is `bg_live_480x320.png` from the Phase 6A design package.
-To limit flash consumption and expensive runtime PNG decoding, a 192x128
-RGB565 version is zlib-compressed and embedded in
-`include/S3ArenaEmbedded.h` (~6KB compressed). It is **not fetched over Wi-Fi**.
-On first use, ESP32 ROM miniz inflates the image and smooth-scales it to a
-480x320 RGB565 **background cache in PSRAM** (~300 KiB); the existing TFT_eSprite
-is a separate 480x320 framebuffer (~300 KiB). Temporary ~49KB source pixels
-and ~6KB compressed buffers are released immediately.
+The previously installed S3 used a 192x128 RGB565 thumbnail that the
+firmware upscaled to 480x320. Hardware testing showed soft details, a blue
+haze and poor text separation. Phase 6B.1 **replaces the thumbnail** with a
+crisp, native 480x320 image: deep charcoal, understated arena rafters and
+light accents, dark team-logo plinths, a separate score stage and a flat,
+high-contrast SOG/status plate. The background contains **no NHL team logo,
+score, clock, game state, labels or player data**. Those remain real-time
+firmware overlays from the existing NHL engine.
 
-The Phase 6A full-resolution artwork is the visual master, and the compressed
-version is intentionally a smaller embedded sampling. The logos and text
-remain full-resolution; hardware evaluation may later justify higher-density
-background data, a separate asset filesystem, or alternative compression.
+### Lossless asset pipeline (no third-party Python packages)
 
-On page change, `s3Arena.restore(tft)` copies the background into the native
-sprite. Logos, labels and scores are layered over it. During a same-game NHL
-readout change, only two regions are restored from the cached background and
-redrawn: top (144,43,192,160), bottom (48,215,384,53). Those same two
-rectangles are sent over SPI via `presentRegion()`; the background is **never
-re-inflated** on each poll or animation frame. The Phase 5 full-clear and
-sprite-safe text/shape renderer remains in use.
+`scripts/generate_s3_arena.py` creates two resources using standard Python
+only:
+
+- `assets/s3_arena_live_480x320.png` — inspectable true-resolution PNG
+  artwork, for designers and hardware comparison.
+- `include/S3ArenaEmbeddedGenerated.h` — full 480x320 **big-endian RGB565**
+  pixels compressed with zlib for flash. The immutable wrapper
+  `include/S3ArenaEmbedded.h` includes this generated resource.
+
+The generator runs automatically through the **S3-only PlatformIO pre-build
+hook**, so a `git pull` cannot silently leave the old 192x128 background
+in place. Both outputs are ignored in Git and are regenerated during local
+builds and CI. To inspect the image manually:
+```powershell
+python scripts/generate_s3_arena.py
+```
+
+On first use, ESP32-S3 ROM miniz decompresses the entire asset **directly
+into one ~300 KiB PSRAM background cache**, with no intermediate raster
+buffer and no bilinear or nearest-neighbor scaling. The cache bytes already
+match TFT_eSprite's swapped RGB565 representation on the little-endian S3.
+The firmware checks the uncompressed byte count and CRC32 before making
+the asset active; any failure cleanly falls back to the known Phase 5 S3
+scoreboard. The existing 480x320 S3 foreground sprite remains separate.
+
+Every S3 Live page copies that cache into the foreground sprite and then
+renders dynamic logos, text, game time, scores, shots, PP and empty-net states.
+During same-game updates, only two regions are restored from the cached
+background and transferred over SPI: top (144,43,192,160), bottom
+(48,215,384,53). The full image is decoded **once**, never each game tick.
+No change was made to the other S3 pages, original CYD renderer, NHL polling,
+favorite/follow behavior, WLED, or Fire TV.
+
+At boot, the serial monitor at 115200 reports:
+- `[S3 Color] ST7796 invert=ON/OFF ...` — **existing NVS setting is
+  preserved**; this update never forces another inversion.
+- `[S3 Arena] native 480x320 | compressed ... | cache ... |
+  loaded ... ms | center RGB565 ... | free PSRAM ...`.
+
+### Color integrity
+
+CI compares the generated PNG's actual RGB bytes to the native RGB565
+asset at multiple regions, validates full-image SHA-256/CRC32, tests
+red/green/blue endianness, and bounds mean background brightness to prevent
+a new washed-out image. It also verifies that firmware still reads and
+applies the user's saved screen-inversion preference. Passing these tests
+does **not** replace inspection of the physical ST7796 panel.
+
 
 ## Clean navigation
 
@@ -56,9 +94,10 @@ Other pages keep Phase 5 navigation until their individual Phase 6 conversions.
 
 1. Load the S3 Phase 6B firmware over USB or OTA and check boot diagnostics
    for `[S3 Arena] loaded ...`; reboot loops are not acceptable.
-2. Confirm correct colors without changing the existing inversion preference,
-   sharp official NHL logos, readable clock/score/SOG and no drawn text behind
-   another screen's content.
+2. Confirm the new background is genuinely dark, clean and sharp at 480x320,
+   including its thin arena lines, without cyan haze. Compare the generated
+   `assets/s3_arena_live_480x320.png` with the physical LCD. Check 80px NHL
+   logos, score/clock/SOG, and verify the saved inversion preference is unchanged.
 3. Swipe through games; tap the score for Stats, return, follow/unfollow via
    star, and use lower corners to enter Games and Setup.
 4. Trigger preview GOAL/PP/FINAL from the dashboard. Event overlays must
@@ -71,9 +110,12 @@ Other pages keep Phase 5 navigation until their individual Phase 6 conversions.
 
 ## Files
 
-- `include/S3ArenaEmbedded.h` — optimized compressed arena art (no logos)
+- `scripts/generate_s3_arena.py` — deterministic 480x320 background source
+- `include/S3ArenaEmbedded.h` — stable resource include wrapper
+- `include/S3ArenaEmbeddedGenerated.h` — generated full-resolution RGB565 asset
+- `assets/s3_arena_live_480x320.png` — generated artist preview (not firmware)
 - `include/S3ArenaBackground.h` — miniz inflate, PSRAM cache, region restore
 - `include/S3NativeLayout.h` — contextual live hit targets/dirty rectangles
 - `src/main.cpp` — native broadcast overlays and navigation
-- `tests/test_s3_phase6_arena.py` — compressed payload integrity checks
+- `tests/test_s3_phase6_arena.py` — native asset, color, CRC and saved-inversion tests
 - `tests/test_s3_native_layout.cpp` — hit geometry tests

@@ -5284,6 +5284,12 @@ void setup() {
   // Some ILI9341-compatible CYDs boot with visually inverted colors.
   // Runtime setting is stored in NVS, so the user can change it from web or touch.
   tft.invertDisplay(cfg.invertScreen);
+#ifdef GLOWDECK_WAVESHARE_S3
+  // Respect saved ST7796 inversion; never override a user's corrected colors.
+  // Full-native art is RGB565 big-endian, byte-compatible with S3 sprite RAM.
+  Serial.printf("[S3 Color] ST7796 invert=%s (saved in NVS) | art=RGB565BE native 480x320\n",
+                cfg.invertScreen ? "ON" : "OFF");
+#endif
   applyTimezone();
 
   WiFi.persistent(false);
