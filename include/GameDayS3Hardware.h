@@ -79,6 +79,43 @@ class GameDayS3Display : public TFT_eSprite {
   // remains stale; the next pushSprite() resurrects pixels from the last page.
   // Explicitly shadow these methods on our S3 display type, and draw every
   // pixel into the same native sprite. CYD does not use this subclass.
+  // TFT_eSPI::drawString() likewise binds to the physical LCD's drawChar(),
+  // even when invoked on a TFT_eSprite subclass. Build text with the
+  // sprite-specific drawChar() implementation and preserve the datums used
+  // by GameDay (TL, ML, MC, MR and TR). This keeps labels composited with
+  // their cards instead of flashing over the previous page.
+  int16_t drawString(const String &label,int32_t x,int32_t y,uint8_t font) {
+    if(!label.length())return 0;
+    const int16_t width=TFT_eSPI::textWidth(label,font);
+    const int16_t height=TFT_eSPI::fontHeight(font);
+    const uint8_t datum=getTextDatum();
+    if(datum==TC_DATUM || datum==MC_DATUM || datum==BC_DATUM)
+      x-=width/2;
+    else if(datum==TR_DATUM || datum==MR_DATUM || datum==BR_DATUM)
+      x-=width;
+    if(datum==ML_DATUM || datum==MC_DATUM || datum==MR_DATUM)
+      y-=height/2;
+    else if(datum==BL_DATUM || datum==BC_DATUM || datum==BR_DATUM)
+      y-=height;
+    const uint8_t* utf=reinterpret_cast<const uint8_t*>(label.c_str());
+    uint16_t pos=0;
+    const uint16_t n=label.length();
+    int32_t cx=x;
+    while(pos<n){
+      const uint16_t cp=TFT_eSPI::decodeUTF8((uint8_t*)utf,&pos,n-pos);
+      cx+=TFT_eSprite::drawChar(cp,cx,y,font);
+    }
+    return width;
+  }
+  int16_t drawString(const String &label,int32_t x,int32_t y) {
+    return drawString(label,x,y,textfont);
+  }
+  int16_t drawString(const char *label,int32_t x,int32_t y,uint8_t font) {
+    return drawString(String(label?label:""),x,y,font);
+  }
+  int16_t drawString(const char *label,int32_t x,int32_t y) {
+    return drawString(String(label?label:""),x,y,textfont);
+  }
   void fillScreen(uint32_t color) { fillSprite(color); }
   void fillRoundRect(int32_t x,int32_t y,int32_t w,int32_t h,
                      int32_t r,uint32_t color) {
