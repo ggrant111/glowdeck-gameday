@@ -1,4 +1,4 @@
-# GlowDeck GameDay — Native Waveshare S3 UI (Phases 1–3)
+# GlowDeck GameDay — Native Waveshare S3 UI (Phases 1–4)
 
 ## Scope
 
@@ -6,7 +6,7 @@ The **Waveshare ESP32-S3-Touch-LCD-3.5** (ST7796, FT6336, 480x320
 landscape) uses a separate full-resolution "Arena Broadcast" rendering path
 for the primary NHL scoreboard, compact four-game carousel slides, the
 all-games picker, pregame/live/final game statistics, conference/division
-standings, and the no-games state.
+standings, the no-games state, event celebrations, device setup and touch check.
 
 The original 2.8-inch CYD keeps its existing 320x240 drawing and resistive
 touch implementation. There is no change to the NHL API, event queue, favorites,
@@ -17,12 +17,14 @@ goal celebration rules, WLED state restoration or AP/browser controls.
 - The S3 allocates one 480x320 RGB565 TFT_eSprite canvas (~300 KiB), and
   sends that sprite directly to the physical TFT for **native** screens using
   pushSprite(). These pages are not horizontally or vertically resampled.
-- A second ~300 KiB RGB565 PSRAM staging buffer remains for the **transitional**
-  320x240 legacy screens. As those pages are converted, that buffer can be
-  removed. The S3 must have its configured OPI PSRAM operational.
-- Legacy event/GIF overlays, setup and calibration are
-  temporarily scaled with the old path; the GIF remains exactly 320x240 and
-  retains its uploaded flash storage and WLED synchronization.
+- Phase 4 removes the additional ~300 KiB RGB565 resampling buffer entirely.
+  All S3 screens now render at the physical 480x320 resolution. The board still
+  requires its configured OPI PSRAM for the single native canvas.
+- Uploaded 320x240 goal GIFs are drawn at original pixel size inside a
+  centered (80,40) viewport, with purpose-built 40px top/bottom ribbons and
+  side rails. The GIF is **not stretched, cropped or resampled**. GIF storage
+  in LittleFS, the existing 1 MB upload validation, NHL/WLED triggers and the
+  goal event queue continue unchanged.
 - Score/period/SOG/PP/EN changes on the same featured game repaint the opaque
   readout regions of the sprite without re-decoding official NHL logos. An
   update still transfers the complete native sprite to the display; dirty
@@ -52,8 +54,18 @@ goal celebration rules, WLED state restoration or AP/browser controls.
    official ranked team order, team color accents, GP, W-L-OT, PTS and armed
    team emphasis. Previous/next and swipe actions keep the old carousel order;
    standings rows do not arm games.
-7. **Remaining legacy screens:** setup, calibration and event/GIF overlays
-   retain compatibility scaling until Phase 4.
+7. **Celebrations (Phase 4):** full-resolution goal, power play, puck drop
+   and final-result cards, with team-primary color, logo, score, period/clock,
+   dismiss control, pulsing/flashing border and duration indicator. Goal GIFs
+   play 1:1 in the center with a separately drawn native scoreboard HUD.
+   Invalid GIFs fall back to vector celebrations without interrupting WLED.
+8. **Setup (Phase 4):** native network/hotspot details, TEST LIGHTS, TOUCH
+   CHECK and COLORS controls, plus TODAY/GAMES/BACK navigation. The existing
+   home-Wi-Fi web admin policy and protected setup hotspot remain unchanged.
+9. **Touch check (Phase 4):** 4 corners and last-touch coordinates to verify
+   orientation. The factory-capacitive FT6336 requires no two-point resistive
+   calibration; this page never rewrites calibration NVS values. Legacy CYD
+   calibration is unaffected.
 
 ## Test checklist on the physical S3
 
@@ -75,8 +87,16 @@ goal celebration rules, WLED state restoration or AP/browser controls.
 - Navigate to native standings when no games are live and verify all eight
   conference/division pages, sorted ranks and current-day freshness.
   Confirm standings rows never accidentally arm a game.
-- Preview the legacy goal GIF and ensure it still renders after returning
-  from the native detail/standings screens.
+- Upload and preview a 320x240 goal GIF. Confirm 1:1 centered pixels, team
+  color framing, live score ribbon, dismiss X and return to the exact screen.
+  Remove the GIF and preview again to confirm native vector fallback.
+- Preview GOAL, both POWER PLAY states, PUCK DROP and FINAL from the dashboard.
+  Verify each native overlay's logo, time/status, duration indicator, visual
+  treatment and queue priority, including preemptions during goal events.
+- Enter native SETUP from the GAMES picker or stats page, verify the protected
+  AP credentials and locally hosted dashboard, and test light preview/color
+  toggle without losing preferences. Run TOUCH CHECK on all four corners;
+  it must never modify the CYD/legacy calibration fields.
 - Verify all-game event overlays, goal triggering, queue priority, and WLED
   restoration still operate. Confirm no AP or OTA changes.
 - Record serial monitor at 115200 and free PSRAM after native sprite startup.
