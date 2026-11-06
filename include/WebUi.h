@@ -402,7 +402,7 @@ header{padding:19px 17px}
 <label for="adminPassword">Change dashboard password</label><input id="adminPassword" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing">
 <p class="small muted">Web username is always admin. Enter at least 8 characters to change its password.</p>
 </div></div>
-<div class="card" id="s3GoalGifCard" hidden>
+<div class="card" id="s3GoalGifCard" hidden style="display:none">
 <h2>Hockey goal GIF · ESP32-S3</h2>
 <p>Play your hockey goal-and-siren animation whenever a real NHL goal or GOAL preview appears on the touchscreen. Team-colored borders, score, and WLED celebrations stay synchronized. The GIF is a silent animation; ESP32-S3 onboard audio requires its own codec driver.</p>
 <p id="goalGifStatus" class="small muted">Checking animation storage...</p>
@@ -1119,6 +1119,7 @@ async function loadGoalGif(){
   if(!res.ok)return; // The legacy CYD has no GIF hardware capability.
   const info=await res.json();
   $("s3GoalGifCard").hidden=!info.supported;
+  $("s3GoalGifCard").style.display=info.supported?"block":"none";
   if(!info.supported)return;
   $("goalGifStatus").textContent=info.installed
     ? "Installed · "+Math.round(info.bytes/1024)+" KB · loops during each GOAL event"
