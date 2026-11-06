@@ -13,6 +13,7 @@
 #include "GameDayS3Hardware.h"
 #include "GoalGifPlayer.h"
 #include "S3NativeLayout.h"
+#include "S3ArenaBackground.h"
 #else
 #include <XPT2046_Touchscreen.h>
 #endif
@@ -201,6 +202,7 @@ uint16_t hornFrequency = 0;
 enum class Screen : uint8_t { LIVE, GAMES, SETUP, CALIBRATE, STATS };
 EventOverlay::Controller overlayController;
 #ifdef GLOWDECK_WAVESHARE_S3
+S3ArenaBackground s3Arena;
 GoalGifPlayer goalGif;
 uint32_t gifOverlayStart = 0;
 uint32_t gifOverlayFailedStart = 0;
@@ -3139,6 +3141,106 @@ void drawS3Readout(const Game &g) {
   tft.drawString(g.homeShots>=0?String(g.homeShots):String("--"),438,242,4);
   tft.setTextDatum(TL_DATUM);
 }
+#if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
+void drawS3ArenaFitted(const String &value,int16_t x,int16_t y,
+                       int16_t maxWidth,uint8_t font,uint16_t color){
+  String label=value;
+  while(label.length()&&tft.textWidth(label,font)>maxWidth)
+    label.remove(label.length()-1);
+  if(!label.length())return;
+  tft.setTextColor(color); // transparent glyphs over the photograph
+  tft.drawString(label,x,y,font);
+}
+// Phase 6B Arena Broadcast: the asset is a static arena template,
+// while logos, numbers, clock, PP and touch targets remain live GameDay data.
+// The transparent NHL logo pixels are composited into TFT_eSprite.
+void drawS3ArenaReadout(const Game &g) {
+  if(!s3Arena.ready())return;
+  const auto top=S3NativeLayout::kBroadcastReadoutTop;
+  const auto bottom=S3NativeLayout::kBroadcastReadoutBottom;
+  s3Arena.restoreRegion(tft,top.x,top.y,top.w,top.h);
+  s3Arena.restoreRegion(tft,bottom.x,bottom.y,bottom.w,bottom.h);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE);
+  String clock=broadcastTime(g);
+  if(clock.length()>24)clock=clock.substring(0,24);
+  drawS3ArenaFitted(clock,240,68,167,clock.length()>17?2:4,WHITE);
+  if(gameIsLive(g)) {
+    tft.fillCircle(162,69,3,0xF124);
+    tft.setTextColor(0xF97E);
+    tft.drawString("LIVE",240,92,1);
+  } else {
+    tft.setTextColor(S3_AQUA);
+    tft.drawString(gameIsFuture(g)?"UPCOMING":"FINAL",240,92,1);
+  }
+  if(gameIsFuture(g)) {
+    tft.setTextColor(WHITE);
+    tft.drawString("VS",240,143,4);
+  } else {
+    tft.setTextColor(WHITE);
+    const bool doubleDigit=g.awayScore>9||g.homeScore>9;
+    tft.setTextSize(doubleDigit?1:2);
+    tft.drawString(String(g.awayScore),204,147,4);
+    tft.drawString(String(g.homeScore),276,147,4);
+    tft.setTextSize(1);
+    tft.setTextColor(S3_MUTED);
+    tft.drawString("-",240,149,4);
+  }
+  tft.setTextColor(S3_MUTED);
+  tft.drawString("SOG",115,228,1);
+  tft.drawString("SOG",365,228,1);
+  tft.setTextColor(WHITE);
+  tft.drawString(g.awayShots>=0?String(g.awayShots):String("--"),
+                 115,247,4);
+  tft.drawString(g.homeShots>=0?String(g.homeShots):String("--"),
+                 365,247,4);
+  if(gameIsLive(g) && !g.intermission) {
+    const bool ppFresh=g.ppDataKnown &&
+       uint32_t(millis()-g.ppUpdatedAt)<45000UL && g.ppSide!=0;
+    const bool emptyFresh=g.emptyNetKnown &&
+       uint32_t(millis()-g.emptyNetUpdatedAt)<45000UL &&
+       g.emptyNetSide!=0;
+    if(ppFresh || emptyFresh) {
+      tft.setTextColor(ppFresh?0xFDA6:S3_AQUA);
+      const String label=ppFresh?"POWER PLAY":"EMPTY NET";
+      tft.drawString(label,240,236,2);
+      tft.setTextColor(S3_MUTED);
+      const String team=ppFresh?(g.ppSide==1?g.home:g.away):
+        (g.emptyNetSide==1?g.home:g.away);
+      tft.drawString(team,240,256,1);
+    }
+  }
+  tft.setTextDatum(TL_DATUM);
+}
+void drawS3ArenaScoreboard(const Game &g) {
+  if(!s3Arena.restore(tft))return;
+  const uint16_t away=to565(teamRgb(g.away));
+  const uint16_t home=to565(teamRgb(g.home));
+  // No persistent top banner or bottom button bar.
+  // Official logo and vivid 3px team accents sit above the arena template.
+  tft.fillRoundRect(36,189,105,3,1,away);
+  tft.fillRoundRect(339,189,105,3,1,home);
+  drawTeamLogo(tft,g.away,48,101,80);
+  drawTeamLogo(tft,g.home,352,101,80);
+  tft.setTextDatum(MC_DATUM);
+  drawS3ArenaFitted(g.away,88,204,100,4,WHITE);
+  drawS3ArenaFitted(g.home,392,204,100,4,WHITE);
+  // Team follow/arm indicator lives in a discreet upper-right corner.
+  drawFollowStar(g,399,24,S3_BG);
+  // Only two minimal navigation affordances remain. Swiping is primary.
+  tft.setTextColor(S3_MUTED);
+  tft.drawString("GAMES",39,300,2);
+  tft.drawString("SETUP",443,300,2);
+  if(carouselPageCount()>1) {
+    tft.setTextColor(S3_AQUA);
+    tft.drawString(String(carouselSlide+1)+"/"+
+                   String(carouselPageCount()),240,300,1);
+  }
+  tft.setTextDatum(TL_DATUM);
+  drawS3ArenaReadout(g);
+}
+#endif
+
 void drawS3Scoreboard(const Game &g) {
   const uint32_t away=teamRgb(g.away), home=teamRgb(g.home);
   tft.fillScreen(S3_BG);
@@ -3711,7 +3813,12 @@ void draw() {
         const LiveCarousel::Page page=currentCarouselPage();
         const Game &g=games[page.kind==LiveCarousel::Kind::GAME
                             ? page.index : featuredIndex % gameCount];
+#if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
+        if(s3Arena.begin()) drawS3ArenaScoreboard(g);
+        else drawS3Scoreboard(g);
+#else
         drawS3Scoreboard(g);
+#endif
       }
       return;
     }
@@ -4064,6 +4171,34 @@ void handleS3NativeTouch(bool pressed) {
     needsDraw=true;
     return;
   }
+#if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
+  if(screen==Screen::LIVE && showingGamePage() && s3Arena.ready()) {
+    const auto hit=S3NativeLayout::broadcastHitTest(gestureStartX,gestureStartY);
+    const LiveCarousel::Page page=currentCarouselPage();
+    switch(hit.action){
+      case S3NativeLayout::Action::FOLLOW:
+        if(page.index<gameCount){
+          const Game &g=games[page.index];
+          setGameFollow(g.id,!rearFollows(g.id));
+        }
+        break;
+      case S3NativeLayout::Action::GAMES:
+        screen=Screen::GAMES;
+        break;
+      case S3NativeLayout::Action::MENU:
+        s3ReturnFromSetup=Screen::LIVE;
+        screen=Screen::SETUP;
+        break;
+      case S3NativeLayout::Action::DETAILS:
+        if(page.index<gameCount)showDetail(games[page.index].id);
+        break;
+      default:break;
+    }
+    lastCarouselAdvance=millis();
+    needsDraw=true;
+    return;
+  }
+#endif
   const bool summary=showingSummaryPage();
   const S3NativeLayout::Hit hit=S3NativeLayout::hitTest(
       gestureStartX,gestureStartY,summary);
@@ -5324,8 +5459,14 @@ void loop() {
 #ifdef GLOWDECK_WAVESHARE_S3
     if (tft.nativeLayout()) {
       const LiveCarousel::Page page=currentCarouselPage();
-      drawS3Readout(games[page.kind==LiveCarousel::Kind::GAME
-                         ? page.index:featuredIndex % gameCount]);
+#if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
+      if(s3Arena.ready())
+        drawS3ArenaReadout(games[page.kind==LiveCarousel::Kind::GAME
+                           ? page.index:featuredIndex % gameCount]);
+      else
+#endif
+        drawS3Readout(games[page.kind==LiveCarousel::Kind::GAME
+                           ? page.index:featuredIndex % gameCount]);
       // Only opaque readout plates changed. Avoid retransmitting official
       // NHL logos, header, gradient and footer navigation over the SPI bus.
       s3ScoreOnlyFrame = true;
@@ -5343,10 +5484,20 @@ void loop() {
       // Two small SPI transfers instead of the full 480x320 (~300 KiB).
       // Full redraws always transmit all pixels, so changing away from
       // standings/stats/events can never preserve portions of old pages.
-      const auto score=S3Raster::kClockScore;
-      const auto shots=S3Raster::kShots;
-      tft.presentRegion(score.x,score.y,score.w,score.h);
-      tft.presentRegion(shots.x,shots.y,shots.w,shots.h);
+#if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
+      if(s3Arena.ready()){
+        const auto top=S3NativeLayout::kBroadcastReadoutTop;
+        const auto bottom=S3NativeLayout::kBroadcastReadoutBottom;
+        tft.presentRegion(top.x,top.y,top.w,top.h);
+        tft.presentRegion(bottom.x,bottom.y,bottom.w,bottom.h);
+      } else
+#endif
+      {
+        const auto score=S3Raster::kClockScore;
+        const auto shots=S3Raster::kShots;
+        tft.presentRegion(score.x,score.y,score.w,score.h);
+        tft.presentRegion(shots.x,shots.y,shots.w,shots.h);
+      }
     } else {
       tft.present();
     }

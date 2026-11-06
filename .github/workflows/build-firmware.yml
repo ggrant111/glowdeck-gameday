@@ -95,6 +95,8 @@ jobs:
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_raster_geometry.cpp -o /tmp/glowdeck-s3-raster-test
           /tmp/glowdeck-s3-raster-test
           python tests/test_s3_framebuffer_contract.py
+      - name: Test S3 Phase 6B embedded arena background and UI interaction
+        run: python tests/test_s3_phase6_arena.py
       - name: Install PlatformIO
         run: pip install platformio==6.1.18
       - name: Install logo build dependencies
