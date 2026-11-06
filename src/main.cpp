@@ -3133,8 +3133,10 @@ void drawS3Scoreboard(const Game &g) {
   tft.drawRoundRect(12,53,456,160,12,S3_LINE);
   tft.fillRoundRect(19,60,7,146,3,to565(away));
   tft.fillRoundRect(454,60,7,146,3,to565(home));
-  drawTeamLogo(tft,g.away,69,97);
-  drawTeamLogo(tft,g.home,355,97);
+  // 80px official NHL SVG rasters, centered under each team's label.
+  // Sprite overload writes to the native framebuffer, not directly to ST7796.
+  drawTeamLogo(tft,g.away,57,96,80);
+  drawTeamLogo(tft,g.home,343,96,80);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(WHITE,S3_CARD);
   tft.drawString(g.away,97,184,4);
@@ -3153,10 +3155,14 @@ void drawS3GameRow(const Game &g, uint8_t row) {
   tft.fillRoundRect(r.x,r.y,r.w,r.h,9,surface);
   tft.fillRect(r.x+2,r.y+7,4,r.h-14,
                g.id==selectedGameId?S3_AQUA:to565(teamRgb(g.away)));
+  // Small logos on every summary and All Games row, sourced from the
+  // same JSON/CDN assets as the main scoreboard (no HTTP in the draw loop).
+  drawTeamLogo(tft,g.away,24,r.y+8,30);
+  drawTeamLogo(tft,g.home,369,r.y+8,30);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(WHITE,surface);
-  tft.drawString(g.away,70,r.y+17,4);
-  tft.drawString(g.home,340,r.y+17,4);
+  tft.drawString(g.away,103,r.y+17,4);
+  tft.drawString(g.home,341,r.y+17,4);
   if(gameIsFuture(g)) {
     tft.setTextColor(S3_AQUA,surface);
     tft.drawString("VS",219,r.y+16,4);
@@ -3247,8 +3253,9 @@ void drawS3Stats() {
   tft.fillRoundRect(12,54,456,76,10,S3_CARD);
   tft.fillRect(14,68,4,48,awayColor);
   tft.fillRect(462,68,4,48,homeColor);
-  drawTeamLogo(tft,g->away,37,62);
-  drawTeamLogo(tft,g->home,387,62);
+  // Fit inside the native 76px-high stats header without being clipped.
+  drawTeamLogo(tft,g->away,37,62,60);
+  drawTeamLogo(tft,g->home,387,62,60);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(WHITE,S3_CARD);
   tft.drawString(g->away,136,86,4);
@@ -3347,12 +3354,13 @@ void drawS3Standings() {
       tft.fillRoundRect(12,y,456,19,3,plate);
       if(armed && (entry.team==armed->away || entry.team==armed->home))
         tft.fillRect(12,y,4,19,S3_AQUA);
-      tft.fillRect(65,y+3,5,13,to565(teamRgb(entry.team)));
+      tft.fillRect(65,y+3,4,13,to565(teamRgb(entry.team)));
+      drawTeamLogo(tft,entry.team,75,y+1,17);
       tft.setTextColor(WHITE,plate);
       tft.drawString(String(StandingsCarousel::rank(
           page.group,entry.conferenceSequence,entry.divisionSequence)),
           37,y+10,2);
-      tft.drawString(entry.team,112,y+10,2);
+      tft.drawString(entry.team,130,y+10,2);
       tft.setTextColor(S3_MUTED,plate);
       tft.drawString(String(entry.gamesPlayed),217,y+10,2);
       tft.drawString(entry.seasonRecord,331,y+10,2);
@@ -3422,7 +3430,7 @@ void drawS3EventStatic() {
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(WHITE,S3_CARD);
   if(cfg.overlayLogos && e.team[0]) {
-    drawTeamLogo(tft,String(e.team),45,91);
+    drawTeamLogo(tft,String(e.team),45,91,72);
   } else {
     tft.drawString(e.team[0]?String(e.team):String("NHL"),73,120,4);
   }
@@ -3491,7 +3499,7 @@ void drawS3GifBackdrop(const EventOverlay::Item &e) {
   tft.drawString(String(e.team)+"  GOAL!",16,21,4);
   tft.setTextDatum(TL_DATUM);
   if(cfg.overlayLogos && e.team[0])
-    drawTeamLogo(tft,String(e.team),12,129);
+    drawTeamLogo(tft,String(e.team),12,129,56);
   // Native 320x240 GIF viewport starts at 80,40. No portion is stretched.
   tft.fillRect(S3NativeLayout::kGifViewport.x,
                S3NativeLayout::kGifViewport.y,
@@ -5085,6 +5093,9 @@ void setup() {
   digitalWrite(PIN_BL, HIGH);
 #ifdef GLOWDECK_WAVESHARE_S3
   if (!tft.init()) Serial.println("[S3] Display init or PSRAM allocation failed");
+  Serial.printf("[S3] NHL embedded logos: %u teams, %ux%u SVG rasters, native sprite renderer\\n",
+                (unsigned)(sizeof(TEAM_LOGOS)/sizeof(TEAM_LOGOS[0])),
+                (unsigned)TEAM_LOGO_SIZE, (unsigned)TEAM_LOGO_SIZE);
   goalGif.beginStorage();
 #else
   tft.init();
