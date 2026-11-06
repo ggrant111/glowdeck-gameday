@@ -71,16 +71,18 @@ goal celebration rules, WLED state restoration or AP/browser controls.
 
 **Standings-to-stats overlap root cause.** The first S3 native renderer
 inherited several **nonvirtual** `TFT_eSPI` drawing methods, including
-`fillScreen()`, `fillRoundRect()`, `drawRoundRect()`, `fillCircle()`,
-and `fillTriangle()`. Those routines rendered directly to the LCD, even
+`fillScreen()`, `drawString()`, `fillRoundRect()`,
+`drawRoundRect()`, `fillCircle()`, and `fillTriangle()`. Those routines
+rendered directly to the LCD, even
 though the final GameDay frame is composed in `TFT_eSprite`. The next
 `pushSprite()` could display pixels from the *previous* page because the
 native framebuffer had not actually been cleared. This particularly affected
 opening stats immediately after standings or a game list.
 
 `GameDayS3Display` now shadows these routines with sprite-native drawing
-operations: `fillScreen` delegates to `fillSprite`, cards/borders use sprite
-scanlines and pixels, and star/circle fills stay within the framebuffer.
+operations: `fillScreen` delegates to `fillSprite`, labels use
+`TFT_eSprite::drawChar` with their original font/datum, cards/borders use
+sprite scanlines and pixels, and star/circle fills stay within the framebuffer.
 Every complete page change clears the entire 480×320 sprite before drawing
 opaque new cards and labels. CYD continues using its old direct-LCD methods.
 
