@@ -28,7 +28,7 @@ for needle in required:
 
 for name in ("drawS3Stats", "drawS3Standings", "drawS3Scoreboard",
              "drawS3GamePicker", "drawS3EventStatic", "drawS3Setup"):
-    start=main.index(f"void {name}() {")
+    start=main.index("void " + name + "() {")
     body=main[start:main.index("\n}", start)]
     assert "tft.fillScreen(S3_BG);" in body, f"{name} must clear frame completely"
 
