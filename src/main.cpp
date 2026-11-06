@@ -3453,6 +3453,48 @@ void handleS3NativeTouch(bool pressed) {
   touchWasDown=false;
   const int dx=gestureEndX-gestureStartX;
   const int dy=gestureEndY-gestureStartY;
+  if(screen==Screen::GAMES) {
+    const bool swipe=S3NativeLayout::carouselSwipe(dx,dy);
+    const S3NativeLayout::Hit hit=S3NativeLayout::hitTest(
+        gestureStartX,gestureStartY,true);
+    if(swipe) {
+      if(dx<0 && (uint16_t(gamePage)+1)*4<gameCount)++gamePage;
+      else if(dx>0 && gamePage)--gamePage;
+    } else {
+      switch(hit.action) {
+        case S3NativeLayout::Action::MENU:
+          screen=Screen::SETUP; break;
+        case S3NativeLayout::Action::GAMES:
+          screen=Screen::LIVE;
+          swallowLiveGesture=false; break;
+        case S3NativeLayout::Action::PREVIOUS:
+          if(gamePage)--gamePage; break;
+        case S3NativeLayout::Action::NEXT:
+          if((uint16_t(gamePage)+1)*4<gameCount)++gamePage;
+          break;
+        case S3NativeLayout::Action::SUMMARY_FOLLOW:
+        case S3NativeLayout::Action::SUMMARY_DETAILS: {
+          const uint8_t index=gamePage*4+hit.row;
+          if(index<gameCount) {
+            const Game &g=games[index];
+            if(hit.action==S3NativeLayout::Action::SUMMARY_FOLLOW)
+              setGameFollow(g.id,!rearFollows(g.id));
+            else {
+              selectGame(g.id);
+              // Picker taps are processed on finger release, unlike the old
+              // CYD press handler: there is no subsequent release to swallow.
+              swallowLiveGesture=false;
+            }
+          }
+          break;
+        }
+        default: break;
+      }
+    }
+    lastCarouselAdvance=millis();
+    needsDraw=true;
+    return;
+  }
   if (carouselPageCount()>1 && S3NativeLayout::carouselSwipe(dx,dy)) {
     advanceCarousel(dx<0?1:-1);
     lastCarouselAdvance=millis();
@@ -3525,7 +3567,8 @@ void handleTouch() {
     return;
   }
 #ifdef GLOWDECK_WAVESHARE_S3
-  if (screen==Screen::LIVE && !showingStandingsPage()) {
+  if ((screen==Screen::LIVE && !showingStandingsPage()) ||
+      screen==Screen::GAMES) {
     handleS3NativeTouch(pressed);
     return;
   }
