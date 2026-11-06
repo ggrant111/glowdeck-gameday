@@ -3368,6 +3368,252 @@ void drawS3Standings() {
   tft.setTextDatum(TL_DATUM);
   drawS3Nav("ALL GAMES");
 }
+// --- Phase 4: native 480x320 celebrations and device surfaces ----------------
+void drawS3OverlayDismiss() {
+  const S3NativeLayout::Rect r=S3NativeLayout::kOverlayClose;
+  tft.fillRoundRect(r.x,r.y,r.w,r.h,8,S3_CARD);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE,S3_CARD);
+  tft.drawString("X",r.x+r.w/2,r.y+r.h/2,4);
+  tft.setTextDatum(TL_DATUM);
+}
+String s3OverlayScore(const EventOverlay::Item &e) {
+  if(!e.away[0] || !e.home[0])return String("NHL GAME EVENT");
+  return String(e.away)+"  "+String(e.awayScore)+"  -  "+
+         String(e.homeScore)+"  "+String(e.home);
+}
+String s3OverlaySubtitle(const EventOverlay::Item &e) {
+  switch(e.kind) {
+    case EventOverlay::Kind::GOAL:
+      return String(e.team)+" SCORES!";
+    case EventOverlay::Kind::POWER_PLAY_START:
+      return String(e.team)+" HAS THE ADVANTAGE";
+    case EventOverlay::Kind::POWER_PLAY_END:
+      return "BACK TO EVEN STRENGTH";
+    case EventOverlay::Kind::GAME_START:
+      return "THE PUCK HAS DROPPED";
+    case EventOverlay::Kind::FINAL_WIN:
+      return String(e.team)+" WINS";
+    case EventOverlay::Kind::FINAL_LOSS:
+      return String(e.team)+" FALLS";
+    default: return "";
+  }
+}
+void drawS3EventStatic() {
+  if(!overlayController.active())return;
+  const EventOverlay::Item &e=overlayController.current();
+  const uint32_t rgb=e.color?e.color:0x31837AUL;
+  const uint16_t club=TeamGradient::rgb565(rgb);
+  tft.fillScreen(S3_BG);
+  for(int x=0;x<480;x+=8) {
+    const uint16_t sample=uint16_t(uint32_t(x+4)*319UL/479UL);
+    const uint16_t c=TeamGradient::rgb565(
+         TeamGradient::colorAt(rgb,rgb,sample));
+    tft.fillRect(x,44,8,231,c);
+  }
+  tft.fillRect(0,0,480,44,S3_NAV);
+  tft.fillRoundRect(15,54,450,211,13,S3_CARD);
+  tft.drawRoundRect(15,54,450,211,13,S3_LINE);
+  tft.fillRect(19,64,6,192,club);
+  tft.fillRect(455,64,6,192,club);
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(S3_MUTED,S3_NAV);
+  tft.drawString("GLOWDECK  /  NHL EVENT",15,22,2);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE,S3_CARD);
+  if(cfg.overlayLogos && e.team[0]) {
+    drawTeamLogo(tft,String(e.team),45,91);
+  } else {
+    tft.drawString(e.team[0]?String(e.team):String("NHL"),73,120,4);
+  }
+  String headline=EventOverlay::label(e.kind);
+  tft.drawString(headline,280,97,headline.length()>12?2:4);
+  tft.setTextColor(0xD6FA,S3_CARD);
+  tft.drawString(s3OverlaySubtitle(e),280,134,2);
+  tft.drawFastHLine(43,165,394,S3_LINE);
+  tft.setTextColor(WHITE,S3_CARD);
+  tft.drawString(s3OverlayScore(e),240,197,4);
+  String period=e.period?String("P")+String(e.period):String("");
+  if(e.clock[0]) period+=(period.length()?"  |  ":"")+String(e.clock);
+  tft.setTextColor(S3_AQUA,S3_CARD);
+  tft.drawString(period.length()?period:String("LIVE NHL"),240,238,2);
+  tft.setTextDatum(TL_DATUM);
+  drawS3OverlayDismiss();
+}
+void drawS3EventAnimation(uint32_t now) {
+  if(!overlayController.active())return;
+  const EventOverlay::Item &e=overlayController.current();
+  const uint32_t elapsed=now-overlayController.startedAt();
+  uint8_t brightness=80;
+  if(EventOverlay::isFlash(e.kind)) {
+    brightness=(cfg.overlayFlash && elapsed<1200UL &&
+        (elapsed/180UL)%2UL)?38:95;
+  } else if(EventOverlay::isPulse(e.kind)) {
+    const uint32_t phase=elapsed%1600UL;
+    const uint32_t wave=phase<800UL?phase:1600UL-phase;
+    brightness=uint8_t(35UL+wave*65UL/800UL);
+  } else {
+    const uint32_t phase=elapsed%2200UL;
+    const uint32_t wave=phase<1100UL?phase:2200UL-phase;
+    brightness=uint8_t(52UL+wave*36UL/1100UL);
+  }
+  const uint32_t rgb=e.color?e.color:0x31837AUL;
+  const uint32_t r=TeamGradient::scale((rgb>>16)&255U,brightness);
+  const uint32_t g=TeamGradient::scale((rgb>>8)&255U,brightness);
+  const uint32_t b=TeamGradient::scale(rgb&255U,brightness);
+  const uint16_t c=TeamGradient::rgb565((r<<16)|(g<<8)|b);
+  // Animate only the perimeter and progress; preserve static logo and copy.
+  tft.fillRect(0,0,6,320,c);
+  tft.fillRect(474,0,6,320,c);
+  tft.fillRect(0,0,480,4,c);
+  tft.fillRect(0,316,480,4,c);
+  const uint32_t remain=overlayController.remaining(now);
+  const uint16_t progress=e.duration?
+       uint16_t(456UL*remain/e.duration):0;
+  tft.fillRoundRect(12,285,456,16,6,S3_NAV);
+  if(progress)tft.fillRoundRect(12,285,progress,16,6,c);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE,S3_BG);
+  tft.drawString(String((remain+999)/1000)+"s",240,309,1);
+  tft.setTextDatum(TL_DATUM);
+  overlayLastFrame=now;
+}
+void drawS3GifBackdrop(const EventOverlay::Item &e) {
+  const uint16_t club=TeamGradient::rgb565(e.color?e.color:0x31837AUL);
+  tft.fillScreen(S3_BG);
+  tft.fillRect(0,0,480,4,club);
+  tft.fillRect(0,316,480,4,club);
+  tft.fillRect(0,40,8,240,club);
+  tft.fillRect(472,40,8,240,club);
+  tft.fillRect(0,4,480,36,S3_NAV);
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(WHITE,S3_NAV);
+  tft.drawString(String(e.team)+"  GOAL!",16,21,4);
+  tft.setTextDatum(TL_DATUM);
+  if(cfg.overlayLogos && e.team[0])
+    drawTeamLogo(tft,String(e.team),12,129);
+  // Native 320x240 GIF viewport starts at 80,40. No portion is stretched.
+  tft.fillRect(S3NativeLayout::kGifViewport.x,
+               S3NativeLayout::kGifViewport.y,
+               S3NativeLayout::kGifViewport.w,
+               S3NativeLayout::kGifViewport.h,TFT_BLACK);
+  tft.fillRect(0,281,480,35,S3_NAV);
+  drawS3OverlayDismiss();
+}
+void drawS3GoalGifHud(const EventOverlay::Item &e,uint32_t now) {
+  const uint16_t club=TeamGradient::rgb565(e.color?e.color:0x31837AUL);
+  const uint32_t remain=overlayController.remaining(now);
+  tft.fillRect(0,281,480,35,S3_NAV);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE,S3_NAV);
+  tft.drawString(s3OverlayScore(e),235,294,2);
+  tft.setTextDatum(TL_DATUM);
+  tft.fillRect(12,310,456,4,S3_LINE);
+  const uint16_t width=e.duration?uint16_t(456UL*remain/e.duration):0;
+  if(width)tft.fillRect(12,310,width,4,club);
+  const uint32_t elapsed=now-overlayController.startedAt();
+  const uint8_t light=((elapsed/180UL)%2UL)?55:100;
+  const uint16_t pulse=TeamGradient::rgb565(
+      (uint32_t(TeamGradient::scale((e.color>>16)&255U,light))<<16)|
+      (uint32_t(TeamGradient::scale((e.color>>8)&255U,light))<<8)|
+      uint32_t(TeamGradient::scale(e.color&255U,light)));
+  tft.fillRect(0,40,7,240,pulse);
+  tft.fillRect(473,40,7,240,pulse);
+  overlayLastFrame=now;
+}
+void drawS3SetupNav() {
+  const auto l=S3NativeLayout::kPrev;
+  const auto m=S3NativeLayout::kGames;
+  const auto r=S3NativeLayout::kNext;
+  tft.fillRect(0,271,480,49,S3_BG);
+  tft.fillRoundRect(l.x,l.y,l.w,l.h,8,S3_NAV);
+  tft.fillRoundRect(m.x,m.y,m.w,m.h,8,S3_CARD);
+  tft.fillRoundRect(r.x,r.y,r.w,r.h,8,S3_NAV);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE,S3_NAV);
+  tft.drawString("TODAY",l.x+l.w/2,l.y+l.h/2,2);
+  tft.drawString("BACK",r.x+r.w/2,r.y+r.h/2,2);
+  tft.setTextColor(S3_AQUA,S3_CARD);
+  tft.drawString("GAMES",m.x+m.w/2,m.y+m.h/2,2);
+  tft.setTextDatum(TL_DATUM);
+}
+void drawS3Setup() {
+  tft.fillScreen(S3_BG);
+  drawS3Header(nullptr,"DEVICE SETUP");
+  tft.fillRoundRect(12,56,456,145,10,S3_CARD);
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(S3_AQUA,S3_CARD);
+  tft.drawString("NETWORK",25,74,2);
+  tft.setTextColor(WHITE,S3_CARD);
+  String ssid=cfg.ssid.isEmpty()?String("Not configured"):cfg.ssid;
+  if(ssid.length()>29)ssid=ssid.substring(0,29)+"...";
+  tft.drawString("Wi-Fi: "+ssid,25,102,2);
+  String ip=localAddress();
+  if(ip.length()>32)ip=ip.substring(0,32);
+  tft.drawString("IP: "+ip,25,124,2);
+  tft.setTextColor(S3_AQUA,S3_CARD);
+  tft.drawString("GLOWDECK HOTSPOT",25,151,2);
+  tft.setTextColor(WHITE,S3_CARD);
+  tft.drawString("AP: "+apSsid,25,174,2);
+  tft.setTextDatum(MR_DATUM);
+  tft.setTextColor(S3_MUTED,S3_CARD);
+  tft.drawString("KEY: "+apPassword,456,174,2);
+  tft.setTextDatum(MC_DATUM);
+  const S3NativeLayout::Rect b[3]={
+    S3NativeLayout::kSetupTest,
+    S3NativeLayout::kSetupTouchCheck,
+    S3NativeLayout::kSetupColorMode};
+  const char* label[3]={"TEST LIGHTS","TOUCH CHECK","COLORS"};
+  for(uint8_t i=0;i<3;++i) {
+    tft.fillRoundRect(b[i].x,b[i].y,b[i].w,b[i].h,9,S3_CARD);
+    tft.setTextColor(i==2?S3_AQUA:WHITE,S3_CARD);
+    tft.drawString(label[i],b[i].x+b[i].w/2,b[i].y+b[i].h/2,2);
+  }
+  tft.setTextDatum(TL_DATUM);
+  drawS3SetupNav();
+}
+void drawS3TouchCheck() {
+  tft.fillScreen(S3_BG);
+  drawS3Header(nullptr,"TOUCH CHECK");
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(S3_MUTED,S3_BG);
+  tft.drawString("Tap all four targets to check alignment",240,57,2);
+  const S3NativeLayout::Rect r[4]={
+    S3NativeLayout::kTouchCheckTopLeft,
+    S3NativeLayout::kTouchCheckTopRight,
+    S3NativeLayout::kTouchCheckBottomLeft,
+    S3NativeLayout::kTouchCheckBottomRight};
+  for(uint8_t i=0;i<4;++i) {
+    const bool detected=s3TouchCheckMask&(1U<<i);
+    const uint16_t bg=detected?S3_AQUA:S3_CARD;
+    tft.fillRoundRect(r[i].x,r[i].y,r[i].w,r[i].h,12,bg);
+    tft.setTextColor(detected?S3_BG:WHITE,bg);
+    tft.drawString(detected?"OK":"+",r[i].x+r[i].w/2,
+                   r[i].y+r[i].h/2,4);
+  }
+  tft.setTextColor(s3TouchCheckMask==15?S3_AQUA:S3_MUTED,S3_BG);
+  tft.drawString(s3TouchCheckMask==15?
+      "All corners registered correctly":
+      "Factory FT6336 mapping - no calibration required",240,142,2);
+  if(s3TouchCheckX>=0) {
+    tft.setTextColor(WHITE,S3_BG);
+    tft.drawString("Last touch: "+
+       String(s3TouchCheckX)+", "+String(s3TouchCheckY),240,175,2);
+  }
+  tft.fillRect(0,271,480,49,S3_BG);
+  const auto l=S3NativeLayout::kPrev;
+  const auto m=S3NativeLayout::kGames;
+  const auto n=S3NativeLayout::kNext;
+  tft.fillRoundRect(l.x,l.y,l.w,l.h,8,S3_NAV);
+  tft.fillRoundRect(m.x,m.y,m.w,m.h,8,S3_CARD);
+  tft.fillRoundRect(n.x,n.y,n.w,n.h,8,S3_NAV);
+  tft.setTextColor(WHITE,S3_NAV);
+  tft.drawString("BACK",l.x+l.w/2,l.y+l.h/2,2);
+  tft.drawString("GAMES",n.x+n.w/2,n.y+n.h/2,2);
+  tft.setTextColor(S3_AQUA,S3_CARD);
+  tft.drawString("RESET",m.x+m.w/2,m.y+m.h/2,2);
+  tft.setTextDatum(TL_DATUM);
+}
 void drawS3Empty() {
   tft.fillScreen(S3_BG);
   drawS3Header(nullptr,"NHL TODAY");
