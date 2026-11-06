@@ -1,4 +1,4 @@
-# GlowDeck GameDay — Native Waveshare S3 UI (Phases 1–4)
+# GlowDeck GameDay — Native Waveshare S3 UI (Phases 1–5)
 
 ## Scope
 
@@ -66,6 +66,53 @@ goal celebration rules, WLED state restoration or AP/browser controls.
    orientation. The factory-capacitive FT6336 requires no two-point resistive
    calibration; this page never rewrites calibration NVS values. Legacy CYD
    calibration is unaffected.
+
+## Phase 5 — framebuffer isolation, readable stats and faster live updates
+
+**Standings-to-stats overlap root cause.** The first S3 native renderer
+inherited several **nonvirtual** `TFT_eSPI` drawing methods, including
+`fillScreen()`, `fillRoundRect()`, `drawRoundRect()`, `fillCircle()`,
+and `fillTriangle()`. Those routines rendered directly to the LCD, even
+though the final GameDay frame is composed in `TFT_eSprite`. The next
+`pushSprite()` could display pixels from the *previous* page because the
+native framebuffer had not actually been cleared. This particularly affected
+opening stats immediately after standings or a game list.
+
+`GameDayS3Display` now shadows these routines with sprite-native drawing
+operations: `fillScreen` delegates to `fillSprite`, cards/borders use sprite
+scanlines and pixels, and star/circle fills stay within the framebuffer.
+Every complete page change clears the entire 480×320 sprite before drawing
+opaque new cards and labels. CYD continues using its old direct-LCD methods.
+
+**Text layout:** labels, team records, and status values in native stats and
+standings have measured width limits and are truncated with ellipses rather
+than overwriting neighboring cells.
+
+**SPI efficiency:** the existing same-game score/period/SOG update path now
+presents only two bounded rectangles: (154,61)–(326,190) for clock/score and
+(14,220)–(466,265) for shots. Full navigation, NHL goal/PP overlays, standings,
+stats and logo updates continue to present the *whole* sprite, never
+reusing a partial region from a different screen.
+
+**Validation:** host geometry tests verify rounded-card corners, cropped
+regions, footer/logo exclusion, and a complete buffer-clear model. A
+code-contract test specifically guards against regressing to the inherited
+physical LCD drawing primitives. Passing CI does **not** substitute for
+checking the screen on the physical Waveshare panel.
+
+### Physical acceptance check
+
+1. View any conference/division standings slide; open GAMES, choose a game,
+   then open its stats. No standings rank, points, rows or title should
+   show through any part of the Stats page, including rounded corners.
+2. Repeat from a live score slide, a four-game summary and a GOAL overlay.
+   Navigate back and forth multiple times and leave stats loading/updating.
+3. Ensure the official 80px logos, text, star fills and rounded button cards
+   remain visible and use the correct team colors.
+4. Watch a live game clock/score update and confirm only the readout changes,
+   while logos and navigation stay stable without flickering.
+5. Confirm original CYD, WLED celebrations, follow/arm behavior and
+   settings are unchanged.
 
 ## Official NHL logos on the native S3 framebuffer
 
