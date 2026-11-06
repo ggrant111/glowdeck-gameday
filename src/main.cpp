@@ -3624,6 +3624,60 @@ void handleS3NativeTouch(bool pressed) {
   touchWasDown=false;
   const int dx=gestureEndX-gestureStartX;
   const int dy=gestureEndY-gestureStartY;
+  if(screen==Screen::STATS) {
+    const S3NativeLayout::Hit hit=S3NativeLayout::statsHitTest(
+        gestureStartX,gestureStartY);
+    switch(hit.action) {
+      case S3NativeLayout::Action::FOLLOW: {
+        const Game *g=detailGame();
+        if(g)setGameFollow(g->id,!rearFollows(g->id));
+        break;
+      }
+      case S3NativeLayout::Action::BACK:
+        screen=Screen::LIVE;
+        swallowLiveGesture=false;
+        break;
+      case S3NativeLayout::Action::ARM:
+        if(detailGameId) {
+          selectGame(detailGameId);
+          swallowLiveGesture=false;
+        }
+        break;
+      case S3NativeLayout::Action::SETUP:
+        screen=Screen::SETUP;
+        break;
+      case S3NativeLayout::Action::MENU:
+        screen=Screen::GAMES;
+        break;
+      default:break;
+    }
+    lastCarouselAdvance=millis();
+    needsDraw=true;
+    return;
+  }
+  if(screen==Screen::LIVE && showingStandingsPage()) {
+    if(carouselPageCount()>1 && S3NativeLayout::carouselSwipe(dx,dy)) {
+      advanceCarousel(dx<0?1:-1);
+    } else {
+      const S3NativeLayout::Hit hit=S3NativeLayout::standingsHitTest(
+          gestureStartX,gestureStartY);
+      switch(hit.action) {
+        case S3NativeLayout::Action::GAMES:
+          screen=Screen::GAMES;
+          break;
+        case S3NativeLayout::Action::PREVIOUS:
+          if(carouselPageCount()>1)advanceCarousel(-1);
+          break;
+        case S3NativeLayout::Action::NEXT:
+          if(carouselPageCount()>1)advanceCarousel(1);
+          break;
+        default:break;
+      }
+    }
+    lastCarouselAdvance=millis();
+    needsDraw=true;
+    return;
+  }
   if(screen==Screen::GAMES) {
     const bool swipe=S3NativeLayout::carouselSwipe(dx,dy);
     const S3NativeLayout::Hit hit=S3NativeLayout::hitTest(
@@ -3738,8 +3792,8 @@ void handleTouch() {
     return;
   }
 #ifdef GLOWDECK_WAVESHARE_S3
-  if ((screen==Screen::LIVE && !showingStandingsPage()) ||
-      screen==Screen::GAMES) {
+  if (screen==Screen::LIVE || screen==Screen::GAMES ||
+      screen==Screen::STATS) {
     handleS3NativeTouch(pressed);
     return;
   }
