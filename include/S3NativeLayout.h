@@ -32,7 +32,8 @@ inline Rect summaryStar(uint8_t n) {
 }
 enum class Action : uint8_t {
   NONE, MENU, FOLLOW, PREVIOUS, NEXT, GAMES, DETAILS,
-  SUMMARY_DETAILS, SUMMARY_FOLLOW, BACK, ARM, SETUP
+  SUMMARY_DETAILS, SUMMARY_FOLLOW, BACK, ARM, SETUP,
+  TEST, TOUCH_CHECK, COLOR_MODE, RESET_CHECK
 };
 struct Hit {
   Action action;
@@ -80,6 +81,42 @@ inline Hit standingsHitTest(int16_t x, int16_t y) {
   if (kPrev.contains(x,y)) return {Action::PREVIOUS, 0};
   if (kNext.contains(x,y)) return {Action::NEXT, 0};
   return {Action::NONE, 0};
+}
+// Phase 4: GIFs remain exactly 320x240 on the 480x320 S3 canvas.
+// At (80,40), the pixels are neither stretched nor cropped; the top/bottom
+// 40-pixel ribbons and side rails are reserved for live event chrome.
+constexpr Rect kGifViewport = {80, 40, 320, 240};
+constexpr Rect kOverlayClose = {428, 2, 50, 38};
+constexpr Rect kSetupTest = {12, 212, 144, 46};
+constexpr Rect kSetupTouchCheck = {168, 212, 144, 46};
+constexpr Rect kSetupColorMode = {324, 212, 144, 46};
+constexpr Rect kTouchCheckTopLeft = {14, 62, 72, 66};
+constexpr Rect kTouchCheckTopRight = {394, 62, 72, 66};
+constexpr Rect kTouchCheckBottomLeft = {14, 183, 72, 66};
+constexpr Rect kTouchCheckBottomRight = {394, 183, 72, 66};
+inline bool overlayCloseHit(int16_t x, int16_t y) {
+  return kOverlayClose.contains(x,y);
+}
+inline Hit setupHitTest(int16_t x, int16_t y) {
+  if(x<0 || y<0 || x>=kWidth || y>=kHeight) return {Action::NONE,0};
+  if(kSetupTest.contains(x,y)) return {Action::TEST,0};
+  if(kSetupTouchCheck.contains(x,y)) return {Action::TOUCH_CHECK,0};
+  if(kSetupColorMode.contains(x,y)) return {Action::COLOR_MODE,0};
+  if(kPrev.contains(x,y)) return {Action::PREVIOUS,0}; // TODAY
+  if(kGames.contains(x,y)) return {Action::GAMES,0};
+  if(kNext.contains(x,y) || kMenu.contains(x,y)) return {Action::BACK,0};
+  return {Action::NONE,0};
+}
+inline Hit touchCheckHitTest(int16_t x, int16_t y) {
+  if(x<0 || y<0 || x>=kWidth || y>=kHeight) return {Action::NONE,0};
+  if(kPrev.contains(x,y) || kMenu.contains(x,y)) return {Action::BACK,0};
+  if(kGames.contains(x,y)) return {Action::RESET_CHECK,0};
+  if(kNext.contains(x,y)) return {Action::GAMES,0};
+  if(kTouchCheckTopLeft.contains(x,y)) return {Action::TOUCH_CHECK,0};
+  if(kTouchCheckTopRight.contains(x,y)) return {Action::TOUCH_CHECK,1};
+  if(kTouchCheckBottomLeft.contains(x,y)) return {Action::TOUCH_CHECK,2};
+  if(kTouchCheckBottomRight.contains(x,y)) return {Action::TOUCH_CHECK,3};
+  return {Action::NONE,0};
 }
 inline bool carouselSwipe(int dx, int dy) {
   const int magnitudeX = dx < 0 ? -dx : dx;
