@@ -8,6 +8,7 @@
 #include <Wire.h>
 #include <TFT_eSPI.h>
 #include <esp_heap_caps.h>
+#include "S3RasterGeometry.h"
 
 namespace GameDayS3 {
 constexpr uint8_t SDA_PIN = 8;
@@ -71,14 +72,132 @@ class GameDayS3Display : public TFT_eSprite {
     // One native RGB565 sprite is sufficient for all S3 screens.
     return true;
   }
+  // NOTE: TFT_eSprite inherits several non-virtual TFT_eSPI methods that
+  // write straight to the LCD. fillScreen(), fillRoundRect(), drawRoundRect(),
+  // fillCircle() and fillTriangle() are NOT sprite primitives. When inherited
+  // methods run, the physical panel changes but the off-screen framebuffer
+  // remains stale; the next pushSprite() resurrects pixels from the last page.
+  // Explicitly shadow these methods on our S3 display type, and draw every
+  // pixel into the same native sprite. CYD does not use this subclass.
+  // TFT_eSPI::drawString() likewise binds to the physical LCD's drawChar(),
+  // even when invoked on a TFT_eSprite subclass. Build text with the
+  // sprite-specific drawChar() implementation and preserve the datums used
+  // by GameDay (TL, ML, MC, MR and TR). This keeps labels composited with
+  // their cards instead of flashing over the previous page.
+  int16_t drawString(const String &label,int32_t x,int32_t y,uint8_t font) {
+    if(!label.length())return 0;
+    const int16_t width=TFT_eSPI::textWidth(label,font);
+    const int16_t height=TFT_eSPI::fontHeight(font);
+    const uint8_t datum=getTextDatum();
+    if(datum==TC_DATUM || datum==MC_DATUM || datum==BC_DATUM)
+      x-=width/2;
+    else if(datum==TR_DATUM || datum==MR_DATUM || datum==BR_DATUM)
+      x-=width;
+    if(datum==ML_DATUM || datum==MC_DATUM || datum==MR_DATUM)
+      y-=height/2;
+    else if(datum==BL_DATUM || datum==BC_DATUM || datum==BR_DATUM)
+      y-=height;
+    const uint8_t* utf=reinterpret_cast<const uint8_t*>(label.c_str());
+    uint16_t pos=0;
+    const uint16_t n=label.length();
+    int32_t cx=x;
+    while(pos<n){
+      const uint16_t cp=TFT_eSPI::decodeUTF8((uint8_t*)utf,&pos,n-pos);
+      cx+=TFT_eSprite::drawChar(cp,cx,y,font);
+    }
+    return width;
+  }
+  int16_t drawString(const String &label,int32_t x,int32_t y) {
+    return drawString(label,x,y,textfont);
+  }
+  int16_t drawString(const char *label,int32_t x,int32_t y,uint8_t font) {
+    return drawString(String(label?label:""),x,y,font);
+  }
+  int16_t drawString(const char *label,int32_t x,int32_t y) {
+    return drawString(String(label?label:""),x,y,textfont);
+  }
+  void fillScreen(uint32_t color) { fillSprite(color); }
+  void fillRoundRect(int32_t x,int32_t y,int32_t w,int32_t h,
+                     int32_t r,uint32_t color) {
+    if(w<=0 || h<=0)return;
+    r=S3Raster::roundedRadius(w,h,r);
+    if(!r){TFT_eSprite::fillRect(x,y,w,h,color);return;}
+    for(int32_t iy=0;iy<r;++iy){
+      const int32_t inset=S3Raster::cornerInset(r,iy);
+      TFT_eSprite::drawFastHLine(x+inset,y+iy,w-2*inset,color);
+      TFT_eSprite::drawFastHLine(x+inset,y+h-1-iy,w-2*inset,color);
+    }
+    if(h>2*r)TFT_eSprite::fillRect(x,y+r,w,h-2*r,color);
+  }
+  void drawRoundRect(int32_t x,int32_t y,int32_t w,int32_t h,
+                     int32_t r,uint32_t color) {
+    if(w<=0 || h<=0)return;
+    r=S3Raster::roundedRadius(w,h,r);
+    if(!r) {
+      TFT_eSprite::drawFastHLine(x,y,w,color);
+      TFT_eSprite::drawFastHLine(x,y+h-1,w,color);
+      TFT_eSprite::drawFastVLine(x,y,h,color);
+      TFT_eSprite::drawFastVLine(x+w-1,y,h,color);
+      return;
+    }
+    for(int32_t iy=0;iy<r;++iy) {
+      const int32_t inset=S3Raster::cornerInset(r,iy);
+      if(iy==0){
+        TFT_eSprite::drawFastHLine(x+inset,y,w-2*inset,color);
+        TFT_eSprite::drawFastHLine(x+inset,y+h-1,w-2*inset,color);
+      }else{
+        TFT_eSprite::drawPixel(x+inset,y+iy,color);
+        TFT_eSprite::drawPixel(x+w-1-inset,y+iy,color);
+        TFT_eSprite::drawPixel(x+inset,y+h-1-iy,color);
+        TFT_eSprite::drawPixel(x+w-1-inset,y+h-1-iy,color);
+      }
+    }
+    if(h>2*r) {
+      TFT_eSprite::drawFastVLine(x,y+r,h-2*r,color);
+      TFT_eSprite::drawFastVLine(x+w-1,y+r,h-2*r,color);
+    }
+  }
+  void fillCircle(int32_t x,int32_t y,int32_t r,uint32_t color) {
+    if(r<0)return;
+    for(int32_t dy=-r;dy<=r;++dy){
+      int32_t dx=r;
+      while(dx>0 && dx*dx+dy*dy>r*r)--dx;
+      TFT_eSprite::drawFastHLine(x-dx,y+dy,2*dx+1,color);
+    }
+  }
+  void fillTriangle(int32_t x0,int32_t y0,int32_t x1,int32_t y1,
+                    int32_t x2,int32_t y2,uint32_t color) {
+    // Filled follow-star wedges are small (< 25px per side). Integer
+    // barycentric scan conversion avoids LCD-only inherited fillTriangle().
+    const int32_t minX=max(0,min(x0,min(x1,x2)));
+    const int32_t maxX=min(int32_t(GameDayS3::PHYSICAL_W-1),
+                           max(x0,max(x1,x2)));
+    const int32_t minY=max(0,min(y0,min(y1,y2)));
+    const int32_t maxY=min(int32_t(GameDayS3::PHYSICAL_H-1),
+                           max(y0,max(y1,y2)));
+    const int32_t orientation=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
+    if(!orientation)return;
+    for(int32_t y=minY;y<=maxY;++y)for(int32_t x=minX;x<=maxX;++x) {
+      const int32_t a=(x1-x0)*(y-y0)-(y1-y0)*(x-x0);
+      const int32_t b=(x2-x1)*(y-y1)-(y2-y1)*(x-x1);
+      const int32_t c=(x0-x2)*(y-y2)-(y0-y2)*(x-x2);
+      if((orientation>0 && a>=0 && b>=0 && c>=0) ||
+         (orientation<0 && a<=0 && b<=0 && c<=0))
+        TFT_eSprite::drawPixel(x,y,color);
+    }
+  }
   // The original TFT_eSPI draw commands don't set sprite rotation here.
   void setRotation(uint8_t) {}
   void invertDisplay(bool enabled) { panel_.invertDisplay(enabled); }
   void setNativeLayout(bool enabled) { nativeLayout_ = enabled; }
   bool nativeLayout() const { return nativeLayout_; }
-  void present() {
-    // Every S3 page draws in native landscape pixels, no resampling pass.
-    pushSprite(0, 0);
+  void present() { pushSprite(0,0); }
+  bool presentRegion(int32_t x,int32_t y,int32_t w,int32_t h) {
+    S3Raster::Rect region=S3Raster::cropToPanel({x,y,w,h});
+    if(!S3Raster::area(region))return false;
+    // TFT_eSprite crops its own source. The destination must be the same
+    // origin to preserve exact 480x320 layout and existing touch targets.
+    return pushSprite(region.x,region.y,region.x,region.y,region.w,region.h);
   }
  private:
   TFT_eSPI panel_;

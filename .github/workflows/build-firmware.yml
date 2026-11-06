@@ -90,6 +90,11 @@ jobs:
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_native_layout.cpp -o /tmp/glowdeck-s3-native-test
           /tmp/glowdeck-s3-native-test
+      - name: Test S3 Phase 5 framebuffer and dirty-region geometry
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_raster_geometry.cpp -o /tmp/glowdeck-s3-raster-test
+          /tmp/glowdeck-s3-raster-test
+          python tests/test_s3_framebuffer_contract.py
       - name: Install PlatformIO
         run: pip install platformio==6.1.18
       - name: Install logo build dependencies

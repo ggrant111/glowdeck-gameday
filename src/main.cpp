@@ -3024,6 +3024,26 @@ constexpr uint16_t S3_LINE = 0x31E9;
 constexpr uint16_t S3_MUTED = 0xB5D5;
 constexpr uint16_t S3_AQUA = 0x36DD;
 
+// Bounded labels keep long NHL status strings and pregame records in their
+// respective cards. Text overrun can look like another screen bleeding
+// through, particularly in the compact 480px comparison/standings layouts.
+// Caller sets the desired text datum before invoking this helper.
+void drawS3FittedText(const String &value,int16_t x,int16_t y,
+                      int16_t maxWidth,uint8_t font,
+                      uint16_t fg,uint16_t bg) {
+  if(maxWidth<=0)return;
+  String label=value;
+  if(tft.textWidth(label,font)>maxWidth) {
+    const String dots="...";
+    while(label.length() && tft.textWidth(label+dots,font)>maxWidth)
+      label.remove(label.length()-1);
+    if(!label.length())return;
+    label+=dots;
+  }
+  tft.setTextColor(fg,bg);
+  tft.drawString(label,x,y,font);
+}
+
 void drawS3Nav(const char *label) {
   const S3NativeLayout::Rect prev = S3NativeLayout::kPrev;
   const S3NativeLayout::Rect next = S3NativeLayout::kNext;
@@ -3258,15 +3278,15 @@ void drawS3Stats() {
   drawTeamLogo(tft,g->home,387,62,60);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(WHITE,S3_CARD);
-  tft.drawString(g->away,136,86,4);
-  tft.drawString(g->home,344,86,4);
+  drawS3FittedText(g->away,136,86,60,4,WHITE,S3_CARD);
+  drawS3FittedText(g->home,344,86,60,4,WHITE,S3_CARD);
   const String score=gameIsFuture(*g)?"VS":
       String(g->awayScore)+" - "+String(g->homeScore);
-  tft.drawString(score,240,77,4);
+  drawS3FittedText(score,240,77,125,4,WHITE,S3_CARD);
   tft.setTextColor(S3_AQUA,S3_CARD);
   String state=gameStatus(*g);
   if(state.length()>30)state=state.substring(0,30);
-  tft.drawString(state,240,113,2);
+  drawS3FittedText(state,240,113,230,2,S3_AQUA,S3_CARD);
   const bool haveStats=detail.loaded && detail.gameId==g->id && detail.count>0;
   if(haveStats) {
     for(uint8_t row=0;row<detail.count && row<5;++row) {
@@ -3274,10 +3294,9 @@ void drawS3Stats() {
       const uint16_t plate=(row&1)?S3_DARK:S3_CARD;
       tft.fillRoundRect(12,y,456,25,5,plate);
       tft.setTextColor(WHITE,plate);
-      tft.drawString(detail.away[row],96,y+11,2);
-      tft.drawString(detail.home[row],384,y+11,2);
-      tft.setTextColor(S3_MUTED,plate);
-      tft.drawString(detail.label[row],240,y+10,2);
+      drawS3FittedText(detail.away[row],96,y+11,105,2,WHITE,plate);
+      drawS3FittedText(detail.home[row],384,y+11,105,2,WHITE,plate);
+      drawS3FittedText(detail.label[row],240,y+10,140,2,S3_MUTED,plate);
       if (!gameIsFuture(*g) &&
           s3ComparableRow(detail.label[row],detail.away[row],detail.home[row])) {
         const float aw=detail.away[row].toFloat();
@@ -3314,10 +3333,10 @@ void drawS3Standings() {
   drawS3Header(nullptr,"NHL STANDINGS");
   tft.setTextDatum(ML_DATUM);
   tft.setTextColor(WHITE,S3_BG);
-  tft.drawString(page.title,17,65,2);
+  drawS3FittedText(page.title,17,65,310,2,WHITE,S3_BG);
   tft.setTextDatum(MR_DATUM);
   tft.setTextColor(S3_AQUA,S3_BG);
-  tft.drawString(page.range,464,65,2);
+  drawS3FittedText(page.range,464,65,120,2,S3_AQUA,S3_BG);
   tft.fillRoundRect(12,83,456,20,4,S3_CARD);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(S3_MUTED,S3_CARD);
@@ -3363,7 +3382,7 @@ void drawS3Standings() {
       tft.drawString(entry.team,130,y+10,2);
       tft.setTextColor(S3_MUTED,plate);
       tft.drawString(String(entry.gamesPlayed),217,y+10,2);
-      tft.drawString(entry.seasonRecord,331,y+10,2);
+      drawS3FittedText(entry.seasonRecord,331,y+10,107,2,S3_MUTED,plate);
       tft.setTextColor(WHITE,plate);
       tft.drawString(entry.points.length()?entry.points:String("--"),
                      438,y+10,2);
@@ -5273,6 +5292,7 @@ void loop() {
   }
 #ifdef GLOWDECK_WAVESHARE_S3
   bool displayChanged = false;
+  bool s3ScoreOnlyFrame = false;
 #endif
   if (needsDraw) {
     partialLiveUpdate = false;
@@ -5306,6 +5326,9 @@ void loop() {
       const LiveCarousel::Page page=currentCarouselPage();
       drawS3Readout(games[page.kind==LiveCarousel::Kind::GAME
                          ? page.index:featuredIndex % gameCount]);
+      // Only opaque readout plates changed. Avoid retransmitting official
+      // NHL logos, header, gradient and footer navigation over the SPI bus.
+      s3ScoreOnlyFrame = true;
     } else {
       drawLiveReadout(games[featuredIndex % gameCount]);
     }
@@ -5315,7 +5338,19 @@ void loop() {
 #endif
   }
 #ifdef GLOWDECK_WAVESHARE_S3
-  if (displayChanged) tft.present();
+  if (displayChanged) {
+    if (s3ScoreOnlyFrame && !overlayController.active()) {
+      // Two small SPI transfers instead of the full 480x320 (~300 KiB).
+      // Full redraws always transmit all pixels, so changing away from
+      // standings/stats/events can never preserve portions of old pages.
+      const auto score=S3Raster::kClockScore;
+      const auto shots=S3Raster::kShots;
+      tft.presentRegion(score.x,score.y,score.w,score.h);
+      tft.presentRegion(shots.x,shots.y,shots.w,shots.h);
+    } else {
+      tft.present();
+    }
+  }
 #endif
   // Update one optional pregame conference record after the current frame
   // is painted. This keeps the first season/standings view responsive.
