@@ -12,7 +12,14 @@ import struct
 import zlib
 
 W, H = 480, 320
-ROOT = Path(__file__).resolve().parent.parent
+# PlatformIO executes pre: extra_scripts via SCons without __file__.
+# Its exported construction environment supplies the true project root.
+if "__file__" in globals():
+    ROOT = Path(__file__).resolve().parent.parent
+elif "env" in globals():
+    ROOT = Path(env.subst("$PROJECT_DIR")).resolve()
+else:
+    ROOT = Path.cwd().resolve()
 OUT_HEADER = ROOT / "include" / "S3ArenaEmbeddedGenerated.h"
 OUT_PNG = ROOT / "assets" / "s3_arena_live_480x320.png"
 pixels = bytearray(W * H * 3)
