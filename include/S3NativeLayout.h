@@ -59,6 +59,23 @@ inline Hit hitTest(int16_t x, int16_t y, bool summary) {
   }
   return {Action::NONE, 0};
 }
+// Phase 6B broadcast Live Game touch map: minimal corner actions, no
+// permanent header or three-button footer. Swipe still advances the carousel.
+constexpr Rect kBroadcastFollow={375,2,52,42};
+constexpr Rect kBroadcastGames={0,272,82,48};
+constexpr Rect kBroadcastSettings={398,272,82,48};
+constexpr Rect kBroadcastDetails={139,90,202,119};
+constexpr Rect kBroadcastReadoutTop={144,43,192,160};
+constexpr Rect kBroadcastReadoutBottom={48,215,384,53};
+inline Hit broadcastHitTest(int16_t x,int16_t y) {
+  if(x<0 || y<0 || x>=kWidth || y>=kHeight)return {Action::NONE,0};
+  if(kBroadcastFollow.contains(x,y))return {Action::FOLLOW,0};
+  if(kBroadcastGames.contains(x,y))return {Action::GAMES,0};
+  if(kBroadcastSettings.contains(x,y))return {Action::MENU,0};
+  if(kBroadcastDetails.contains(x,y))return {Action::DETAILS,0};
+  return {Action::NONE,0};
+}
+
 // Stats has a dedicated bottom action bar; never let a tap on the ARM
 // button accidentally navigate the carousel or open the game details again.
 inline Hit statsHitTest(int16_t x, int16_t y) {
