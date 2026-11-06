@@ -1,7 +1,7 @@
 #pragma once
 // Waveshare ESP32-S3-Touch-LCD-3.5 (ST7796 SPI, FT6336 I2C).
-// Keeps the existing 320x240 GameDay renderer and touch hit targets identical
-// while pixel-scaling onto the 480x320 physical landscape panel.
+// Full native 480x320 landscape UI, with factory-mapped FT6336 touch.
+// Uploaded 320x240 GOAL GIFs are centered 1:1, not stretched.
 // No rear-RGB or speaker pins are claimed: Waveshare uses different hardware.
 #ifdef GLOWDECK_WAVESHARE_S3
 #include <Arduino.h>
@@ -51,10 +51,8 @@ inline bool beginHardware() {
 }
 } // namespace GameDayS3
 
-// TFT_eSprite remains the shared drawable API. New S3 game screens use its
-// native 480x320 canvas directly. Legacy stats, standings, setup and event
-// overlays still render at 320x240 in the upper-left of the same canvas and
-// are scaled only until their own native-design phases are implemented.
+// The shared GameDay renderer uses one native 480x320 RGB565 TFT_eSprite.
+// Every S3 screen presents the same canvas directly to the ST7796.
 class GameDayS3Display : public TFT_eSprite {
  public:
   GameDayS3Display() : TFT_eSprite(&panel_) {}
@@ -69,15 +67,9 @@ class GameDayS3Display : public TFT_eSprite {
     }
     Serial.printf("[S3] Native 480x320 RGB565 canvas ready, free PSRAM: %u bytes\\n",
                   (unsigned)ESP.getFreePsram());
-    scaled_ = static_cast<uint16_t *>(heap_caps_malloc(
-      GameDayS3::PHYSICAL_W * GameDayS3::PHYSICAL_H * sizeof(uint16_t),
-      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (!scaled_) {
-      scaled_ = static_cast<uint16_t *>(malloc(
-        GameDayS3::PHYSICAL_W * GameDayS3::PHYSICAL_H * sizeof(uint16_t)));
-    }
-    if (!scaled_) Serial.println("[S3] ERROR: no scaled frame buffer");
-    return scaled_ != nullptr;
+    // Phase 4 removes the additional 480x320 scaling buffer (~300 KiB).
+    // One native RGB565 sprite is sufficient for all S3 screens.
+    return true;
   }
   // The original TFT_eSPI draw commands don't set sprite rotation here.
   void setRotation(uint8_t) {}
@@ -85,31 +77,12 @@ class GameDayS3Display : public TFT_eSprite {
   void setNativeLayout(bool enabled) { nativeLayout_ = enabled; }
   bool nativeLayout() const { return nativeLayout_; }
   void present() {
-    if (nativeLayout_) {
-      // Pass the native sprite directly to the panel: no pixel resampling,
-      // extra RGB565 copies or 320x240 text enlargement.
-      pushSprite(0, 0);
-      return;
-    }
-    // Transitional compatibility for old CYD-only screens and the 320x240 GIF.
-    if (!scaled_) return;
-    for (uint16_t y = 0; y < GameDayS3::PHYSICAL_H; ++y) {
-      const uint16_t sy = (uint32_t(y) * GameDayS3::VIRTUAL_H) /
-                          GameDayS3::PHYSICAL_H;
-      uint16_t *row = scaled_ + size_t(y) * GameDayS3::PHYSICAL_W;
-      for (uint16_t x = 0; x < GameDayS3::PHYSICAL_W; ++x) {
-        const uint16_t sx = (uint32_t(x) * GameDayS3::VIRTUAL_W) /
-                            GameDayS3::PHYSICAL_W;
-        row[x] = readPixel(sx, sy);
-      }
-    }
-    panel_.pushImage(0, 0, GameDayS3::PHYSICAL_W,
-                     GameDayS3::PHYSICAL_H, scaled_);
+    // Every S3 page draws in native landscape pixels, no resampling pass.
+    pushSprite(0, 0);
   }
  private:
   TFT_eSPI panel_;
-  uint16_t *scaled_ = nullptr;
-  bool nativeLayout_ = false;
+  bool nativeLayout_ = true;
 };
 
 // Data shape compatible with the legacy XPT2046_Touchscreen usage.
