@@ -3401,6 +3401,78 @@ void selectGame(uint32_t id) {
   needsDraw = true;
 }
 
+#ifdef GLOWDECK_WAVESHARE_S3
+void handleS3NativeTouch(bool pressed) {
+  // All coordinates here are 480x320 hardware pixels, not the CYD's
+  // calibrated 320x240 positions. Gesture semantics remain unchanged.
+  if (swallowLiveGesture) {
+    if (!pressed) { swallowLiveGesture=false; touchWasDown=false; }
+    return;
+  }
+  if (pressed) {
+    const TS_Point p=touch.getScreenPoint();
+    const int16_t x=constrain(p.x,0,479), y=constrain(p.y,0,319);
+    if (!touchWasDown) {
+      touchWasDown=true;
+      gestureStartX=x;
+      gestureStartY=y;
+    }
+    gestureEndX=x;
+    gestureEndY=y;
+    return;
+  }
+  if (!touchWasDown) return;
+  touchWasDown=false;
+  const int dx=gestureEndX-gestureStartX;
+  const int dy=gestureEndY-gestureStartY;
+  if (carouselPageCount()>1 && S3NativeLayout::carouselSwipe(dx,dy)) {
+    advanceCarousel(dx<0?1:-1);
+    lastCarouselAdvance=millis();
+    needsDraw=true;
+    return;
+  }
+  const bool summary=showingSummaryPage();
+  const S3NativeLayout::Hit hit=S3NativeLayout::hitTest(
+      gestureStartX,gestureStartY,summary);
+  const LiveCarousel::Page page=currentCarouselPage();
+  switch(hit.action) {
+    case S3NativeLayout::Action::MENU:
+    case S3NativeLayout::Action::GAMES:
+      screen=Screen::GAMES;
+      break;
+    case S3NativeLayout::Action::FOLLOW:
+      if(!summary && showingGamePage() && page.index<gameCount) {
+        const Game &g=games[page.index];
+        setGameFollow(g.id,!rearFollows(g.id));
+      }
+      break;
+    case S3NativeLayout::Action::PREVIOUS:
+      if(carouselPageCount()>1)advanceCarousel(-1);
+      break;
+    case S3NativeLayout::Action::NEXT:
+      if(carouselPageCount()>1)advanceCarousel(1);
+      break;
+    case S3NativeLayout::Action::SUMMARY_FOLLOW:
+    case S3NativeLayout::Action::SUMMARY_DETAILS:
+      if(summary && hit.row<page.count && page.rows[hit.row]<gameCount) {
+        const Game &g=games[page.rows[hit.row]];
+        if(hit.action==S3NativeLayout::Action::SUMMARY_FOLLOW)
+          setGameFollow(g.id,!rearFollows(g.id));
+        else
+          showDetail(g.id);
+      }
+      break;
+    case S3NativeLayout::Action::DETAILS:
+      if(showingGamePage() && page.index<gameCount)
+        showDetail(games[page.index].id);
+      break;
+    default: break;
+  }
+  lastCarouselAdvance=millis();
+  needsDraw=true;
+}
+#endif
+
 void handleTouch() {
   const bool pressed = touch.touched();
   if (overlayController.active()) {
@@ -3424,6 +3496,12 @@ void handleTouch() {
     }
     return;
   }
+#ifdef GLOWDECK_WAVESHARE_S3
+  if (screen==Screen::LIVE && !showingStandingsPage()) {
+    handleS3NativeTouch(pressed);
+    return;
+  }
+#endif
   // On the full-screen broadcast view, gestures are recognized on finger lift:
   // swipe left/right to change games, tap a matchup for stats, tap top-right
   // menu glyph to open GAMES (which provides SETUP in its footer).
