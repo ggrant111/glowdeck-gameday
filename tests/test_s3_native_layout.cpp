@@ -25,10 +25,26 @@ int main() {
     assert(star.action == Action::SUMMARY_FOLLOW && star.row == row);
   }
   assert(hitTest(170,267,true).action == Action::NONE);
+  // Phase 3 native game-detail and standings navigation are deliberately
+  // separated from game/summary hit targets: no accidental arm on standings.
+  assert(statsHitTest(398,24).action == Action::FOLLOW);
+  assert(statsHitTest(452,24).action == Action::MENU);
+  assert(statsHitTest(62,297).action == Action::BACK);
+  assert(statsHitTest(230,297).action == Action::ARM);
+  assert(statsHitTest(406,297).action == Action::SETUP);
+  assert(statsHitTest(210,160).action == Action::NONE);
+  assert(statsHitTest(-1,100).action == Action::NONE);
+  assert(standingsHitTest(452,24).action == Action::GAMES);
+  assert(standingsHitTest(230,297).action == Action::GAMES);
+  assert(standingsHitTest(62,297).action == Action::PREVIOUS);
+  assert(standingsHitTest(406,297).action == Action::NEXT);
+  assert(standingsHitTest(398,24).action == Action::NONE);
+  assert(standingsHitTest(110,156).action == Action::NONE);
+  assert(standingsHitTest(480,0).action == Action::NONE);
   assert(carouselSwipe(-66,0));
   assert(carouselSwipe(70,20));
   assert(!carouselSwipe(20,3));
   assert(!carouselSwipe(75,110));
-  std::cout << "S3 480x320 native hit targets passed\n";
+  std::cout << "S3 native scoreboard, detail, standings and touch tests passed\n";
   return 0;
 }
