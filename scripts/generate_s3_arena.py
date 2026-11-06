@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a crisp, dark 480x320 NHL-neutral arena broadcast background.
+"""Generate a de-boxed, dark 480x320 NHL-neutral arena background.
 
 No third-party packages, no logos, no game data. PlatformIO invokes this
 automatically for the Waveshare S3 target so the bitmap cannot become stale.
@@ -75,6 +75,31 @@ def rounded(x0, y0, x1, y1, r, fill, border=None, bw=1):
                 put(x, y, border if edge else fill)
 
 
+def soft_plate(x0, y0, x1, y1, r, color, opacity=0.80, feather=9):
+    """Low-contrast filled plate with a feathered edge, NO border stroke.
+
+    Keep the existing information geometry and touch zones, but visually
+    integrate the surface into the arena instead of drawing boxed panels.
+    """
+    for y in range(max(0, y0), min(H, y1)):
+        for x in range(max(0, x0), min(W, x1)):
+            if not inside_round(x, y, x0, y0, x1, y1, r):
+                continue
+            d = min(x - x0, x1 - 1 - x, y - y0, y1 - 1 - y)
+            edge = min(1.0, (d + 1) / float(feather))
+            put(x, y, color, opacity * edge)
+
+
+def soft_disc(cx, cy, radius, color, opacity=0.32):
+    """Diffuse logo plinth with NO circular outline or sharp edge."""
+    for y in range(max(0, cy - radius), min(H, cy + radius + 1)):
+        for x in range(max(0, cx - radius), min(W, cx + radius + 1)):
+            r2 = (x - cx) ** 2 + (y - cy) ** 2
+            if r2 < radius * radius:
+                fade = 1.0 - r2 / float(radius * radius)
+                put(x, y, color, opacity * fade * fade)
+
+
 def ellipse(cx, cy, rx, ry, color, alpha=1, thick=1):
     n = int(2 * math.pi * max(rx, ry) * 1.5)
     for i in range(n):
@@ -105,60 +130,46 @@ for y in range(H):
              21 + 2.2 * hazy + noise + 4 * vertical)
         put(x, y, tuple(clamp(v) for v in c))
 
-# Dim abstract arena rafters and spotlights, leaving all information areas clean.
+# Arena presence stays at the edges. Softer beams and rafters avoid
+# repeating hard outlines around the NHL content itself.
 for x in range(-40, 540, 35):
-    line(x, 0, 240 + (x - 240) * .22, 108, (37, 56, 66), .24)
+    line(x, 0, 240 + (x - 240) * .22, 108, (37, 56, 66), .17)
 for y in (9, 19, 33):
-    line(0, y, 480, y, (43, 65, 72), .26)
+    line(0, y, 480, y, (43, 65, 72), .14)
 for x in (35, 92, 388, 445):
-    glow(x, 13, 38, (56, 98, 109), .14)
-    line(x, 7, 240 + (x - 240) * .64, 75, (51, 84, 94), .16)
+    glow(x, 13, 38, (56, 98, 109), .10)
+    line(x, 7, 240 + (x - 240) * .64, 75, (51, 84, 94), .10)
 for x in range(10, 470, 19):
-    put(x, 15, (60, 86, 99), .44)
-    put(x + 1, 15, (34, 52, 64), .3)
+    put(x, 15, (60, 86, 99), .28)
 
-line(0, 77, 165, 109, (42, 66, 74), .33)
-line(480, 77, 315, 109, (42, 66, 74), .33)
-line(0, 256, 167, 210, (34, 60, 73), .24)
-line(480, 256, 313, 210, (34, 60, 73), .24)
-line(19, 272, 461, 272, (34, 58, 68), .38)
-line(33, 284, 447, 284, (23, 47, 58), .35)
+# Keep all existing text/logo positions, but replace the outlined boxes with
+# feathered dark regions. No decorative border stroke along any of these
+# surfaces. The score gets the darkest center; time remains readable.
+soft_plate(153, 44, 327, 98, 13, (9, 20, 28), .84, 11)
+soft_plate(15, 87, 153, 220, 15, (9, 19, 28), .71, 15)
+soft_plate(327, 87, 465, 220, 15, (9, 19, 28), .71, 15)
+soft_plate(154, 102, 326, 209, 14, (5, 13, 21), .91, 12)
 
-# Scoreboard plates are intentionally empty. Team marks, time, scores and SOG
-# are rendered live by src/main.cpp; no labels/images are baked into this asset.
-rounded(153, 44, 327, 98, 12, (11, 21, 31), (46, 71, 80), 1)
-rect(177, 45, 304, 47, (49, 88, 100), .7)
-rounded(15, 87, 153, 220, 13, (11, 21, 32), (42, 65, 76), 2)
-rounded(327, 87, 465, 220, 13, (11, 21, 32), (42, 65, 76), 2)
-rounded(154, 102, 326, 209, 12, (6, 15, 25), (48, 76, 89), 2)
-line(168, 103, 312, 103, (51, 82, 96), .65)
-line(168, 208, 312, 208, (42, 72, 85), .48)
-line(28, 88, 137, 88, (45, 74, 86), .38)
-line(342, 88, 452, 88, (45, 74, 86), .38)
-
-# Recessed logo plinths keep official marks crisp and legible.
+# Logo plinths are soft radial tonal pockets, NOT outlined rings. Team marks
+# will still be rendered sharply from the NHL SVGs in the dynamic sprite.
 for cx in (86, 394):
-    for y in range(103, 187):
-        for x in range(cx - 43, cx + 44):
-            if (x - cx)**2 + (y - 144)**2 < 42**2:
-                put(x, y, (16, 30, 42), .62)
-    ellipse(cx, 144, 43, 43, (49, 75, 85), .45)
-    ellipse(cx, 144, 40, 40, (19, 43, 56), .6)
-line(38, 194, 134, 194, (48, 78, 88), .45, 2)
-line(346, 194, 442, 194, (48, 78, 88), .45, 2)
+    soft_disc(cx, 144, 48, (30, 48, 58), .26)
 
-# Flat, high-contrast lower statistics plate, no busy circuitry.
-rounded(45, 217, 435, 270, 11, (11, 22, 31), (42, 70, 81), 1)
-rounded(172, 221, 308, 266, 8, (9, 20, 29), (37, 62, 71), 1)
-line(170, 226, 170, 261, (49, 71, 81), .6)
-line(309, 226, 309, 261, (49, 71, 81), .6)
+# The existing runtime team-primary accent bars at y=189 are retained.
+# One unified SOG / PP / status lower third, with only faint dividers.
+soft_plate(45, 217, 435, 270, 11, (11, 23, 32), .83, 10)
+line(168, 229, 168, 260, (53, 72, 78), .12)
+line(311, 229, 311, 260, (53, 72, 78), .12)
 
-# Compact, understated footer and follow affordance.
-rect(0, 285, 480, 320, (5, 12, 19), .57)
-line(0, 285, 480, 285, (28, 46, 55), .38)
-line(14, 315, 114, 315, (30, 66, 79), .24)
-line(366, 315, 466, 315, (30, 66, 79), .24)
-rounded(374, 4, 424, 46, 10, (14, 26, 36), (43, 70, 80), 1)
+# No framed bottom bar. A smooth vignette grounds the original GAMES,
+# page indicator and SETUP typography without any visible top border.
+for y in range(274, H):
+    fade = (y - 274) / float(H - 274)
+    rect(0, y, W, y + 1, (4, 10, 17), .32 * fade)
+
+# The top-right follow star remains interactive with its original hit region,
+# but it no longer sits in a bright, bordered rounded rectangle.
+soft_disc(399, 24, 28, (19, 35, 43), .24)
 
 # Full native RGB565 BIG ENDIAN. ESP32-S3 TFT_eSprite's framebuffer holds
 # byte-swapped RGB565: these bytes can be inflated directly, with no upscale
@@ -176,7 +187,7 @@ crc = zlib.crc32(raw) & 0xffffffff
 header = (
     "#pragma once\n"
     "// GENERATED by scripts/generate_s3_arena.py - do not edit.\n"
-    "// Phase 6B.1 native 480x320 RGB565BE - no scores or logos baked in.\n"
+    "// Phase 6B.2A de-boxed 480x320 RGB565BE - no scores or logos baked in.\n"
     "namespace S3ArenaEmbedded {\n"
     f"constexpr int SourceW={W};\n"
     f"constexpr int SourceH={H};\n"
