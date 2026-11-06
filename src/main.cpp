@@ -1490,9 +1490,30 @@ void saveSettings() {
   prefs.putUChar("timezone", cfg.timezone);
 }
 
+// An AP-connected device has already supplied the GlowDeck WPA2 hotspot
+// password. Skip a *second* browser login only for connections that actually
+// arrived on the SoftAP interface from its own subnet. Keep HTTP Basic auth
+// on the home-network STA interface; never trust an HTTP Host header alone.
+bool requestFromSetupAp() {
+  const IPAddress apIp = WiFi.softAPIP();
+  const IPAddress localIp = server.client().localIP();
+  const IPAddress remoteIp = server.client().remoteIP();
+  if (apIp == IPAddress(0, 0, 0, 0) || localIp != apIp ||
+      remoteIp == apIp) return false;
+  const IPAddress mask = WiFi.softAPSubnetMask();
+  for (uint8_t i = 0; i < 4; ++i) {
+    if ((remoteIp[i] & mask[i]) != (apIp[i] & mask[i])) return false;
+  }
+  return true;
+}
+bool hasDashboardAccess() {
+  return requestFromSetupAp() ||
+         server.authenticate("admin", cfg.adminPassword.c_str());
+}
 bool authorized() {
-  if (server.authenticate("admin", cfg.adminPassword.c_str())) return true;
-  server.requestAuthentication(BASIC_AUTH, "GlowDeck", "Sign in using admin and the password shown on the CYD.");
+  if (hasDashboardAccess()) return true;
+  server.requestAuthentication(BASIC_AUTH, "GlowDeck",
+      "Sign in as admin on home Wi-Fi, or connect to the GlowDeck setup hotspot for password-free dashboard access.");
   return false;
 }
 void sendJson(const JsonDocument &doc, int status = 200) {
@@ -4068,7 +4089,7 @@ void registerRoutes() {
     HTTPUpload &upload = server.upload();
     if (upload.status == UPLOAD_FILE_START) {
       goalUploadFinished = false;
-      goalUploadFailed = !server.authenticate("admin", cfg.adminPassword.c_str());
+      goalUploadFailed = !hasDashboardAccess();
       goalUploadError = goalUploadFailed ? "Unauthorized" : "";
       goalUploadBytes = 0;
       if (!goalUploadFailed) {
@@ -4116,7 +4137,7 @@ void registerRoutes() {
                 ok ? "Firmware accepted. Rebooting..." : "Firmware update failed");
     if (ok) rebootAt = millis() + 1000;
   }, []() {
-    if (!server.authenticate("admin", cfg.adminPassword.c_str())) return;
+    if (!hasDashboardAccess()) return;
     HTTPUpload &upload = server.upload();
     if (upload.status == UPLOAD_FILE_START) {
       Serial.printf("OTA upload: %s\n", upload.filename.c_str());
