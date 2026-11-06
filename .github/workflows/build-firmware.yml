@@ -96,6 +96,8 @@ jobs:
         run: pip install Pillow==11.3.0 CairoSVG==2.8.2
       - name: Generate embedded NHL team logos
         run: python scripts/generate_logos.py
+      - name: Test generated CYD/S3 official NHL logo assets and sprite renderer
+        run: python tests/test_logo_assets.py
       - name: Compile ESP32 CYD firmware
         run: pio run -e cyd
       - name: Compile Waveshare ESP32-S3 3.5-inch firmware
