@@ -5093,6 +5093,9 @@ void setup() {
   digitalWrite(PIN_BL, HIGH);
 #ifdef GLOWDECK_WAVESHARE_S3
   if (!tft.init()) Serial.println("[S3] Display init or PSRAM allocation failed");
+  Serial.printf("[S3] NHL embedded logos: %u teams, %ux%u SVG rasters, native sprite renderer\\n",
+                (unsigned)(sizeof(TEAM_LOGOS)/sizeof(TEAM_LOGOS[0])),
+                (unsigned)TEAM_LOGO_SIZE, (unsigned)TEAM_LOGO_SIZE);
   goalGif.beginStorage();
 #else
   tft.init();
