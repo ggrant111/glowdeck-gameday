@@ -102,7 +102,7 @@ inline Hit setupHitTest(int16_t x, int16_t y) {
   if(kSetupTest.contains(x,y)) return {Action::TEST,0};
   if(kSetupTouchCheck.contains(x,y)) return {Action::TOUCH_CHECK,0};
   if(kSetupColorMode.contains(x,y)) return {Action::COLOR_MODE,0};
-  if(kPrev.contains(x,y)) return {Action::BACK,0};
+  if(kPrev.contains(x,y)) return {Action::PREVIOUS,0}; // TODAY
   if(kGames.contains(x,y)) return {Action::GAMES,0};
   if(kNext.contains(x,y) || kMenu.contains(x,y)) return {Action::BACK,0};
   return {Action::NONE,0};
