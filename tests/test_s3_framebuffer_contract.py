@@ -28,7 +28,11 @@ for needle in required:
 
 for name in ("drawS3Stats", "drawS3Standings", "drawS3Scoreboard",
              "drawS3GamePicker", "drawS3EventStatic", "drawS3Setup"):
-    start=main.index("void " + name + "() {")
+    # Accept normal signatures with arguments, but skip forward declarations.
+    import re
+    match=re.search(r"void " + name + r"\\([^;\\n]*\\)\\s*\\{", main)
+    assert match, f"Missing renderer body: {name}"
+    start=match.start()
     body=main[start:main.index("\n}", start)]
     assert "tft.fillScreen(S3_BG);" in body, f"{name} must clear frame completely"
 
