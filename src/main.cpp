@@ -511,6 +511,7 @@ bool editArmedGame(uint32_t id,bool enable){
       scheduleWledRestoreAll();
       wledPriorityQueue.removeGame(id);
     }
+    for(auto &stopped:wledPpStoppedIds)if(stopped==id)stopped=0;
   }
   persistArmedGames();
   return true;
@@ -1113,6 +1114,7 @@ void prepareNewScoreboardDate(const String &today) {
     armedGames.clear();
     wledPriorityQueue.clear();
     for(auto &id:wledPpStoppedIds)id=0;
+    wledActiveGameId=0;
     saveSettings();
     stopRearLed();
     if (screen == Screen::STATS) screen = Screen::LIVE;
@@ -7512,6 +7514,8 @@ void registerRoutes() {
     if(!authorized())return;
     // Do not restart the same power play on the following NHL polling tick.
     wledPpManuallyStoppedGameId=selectedGameId;
+    suppressArmedPowerPlays();
+    wledPriorityQueue.clear();
     scheduleWledRestoreAll();
     StaticJsonDocument<96> response;
     response["ok"]=true;response["restoreRequested"]=true;
@@ -7562,6 +7566,8 @@ void registerRoutes() {
       // The ordinary WLED Stop & restore button must not restart the same PP
       // when its former 30-second suppression interval expires.
       wledPpManuallyStoppedGameId=selectedGameId;
+      suppressArmedPowerPlays();
+      wledPriorityQueue.clear();
       wledSuppressPpUntil = millis() + 30000UL;
       scheduleWledRestoreAll();
       tickRestores();
