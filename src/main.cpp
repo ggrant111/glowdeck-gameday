@@ -2023,8 +2023,9 @@ void startHorn(uint32_t eventSequence=0) {
 void startGameStartSound(uint32_t eventSequence) {
   GameEventLog::Entry *entry=gameEventHistory.find(eventSequence);
   if(entry){entry->audio=GameEventLog::Audio::HORN_DISABLED;
-            entry->audioSource=cfg.s3StartSound;entry->audioFallback=false;}
+            entry->audioFallback=false;}
 #ifdef GLOWDECK_WAVESHARE_S3
+  if(entry)entry->audioSource=cfg.s3StartSound;
   const uint8_t source=cfg.s3StartSound;
   if(!source)return;
   if(!s3Audio.ready() || !soundStorage.available(source)){
