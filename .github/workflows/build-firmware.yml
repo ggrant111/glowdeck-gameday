@@ -62,6 +62,8 @@ jobs:
           /tmp/glowdeck-celebration-test
       - name: Validate embedded web dashboard JavaScript
         run: python tests/check_web_ui.py
+      - name: Test arena web portal navigation, controls and centralized Test Lab
+        run: python tests/test_web_portal_ux.py
       - name: Test CYD team-color gradient and RGB565 display bounds
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_team_gradient.cpp -o /tmp/glowdeck-gradient-test
