@@ -34,6 +34,21 @@ assert "if(!hasPP)" in tick and "scheduleWledRestoreAll();" in tick
 assert "wledActiveGameId!=ppGameId" in tick
 assert "const bool ddpReleased=releaseWledDdp(i);" in main
 assert "suppressArmedPowerPlays();" in main
+# Event alerts must behave as temporary overlays, NOT carousel navigation.
+# Check both auto-expiration and the overlay-close touch path.
+assert "uint32_t overlayReturnHeldGameId=0;" in main
+assert "if(carouselHold.paused && !overlayReturnHeldGameId)" in main
+assert "overlayReturnHeldGameId=carouselHold.gameId;" in main
+assert "carouselHold.onFeedRefresh(!newDay);" in main
+assert "if(!overlayController.active() && overlayReturnHeldGameId)" in main
+assert "carouselHold.pin(overlayReturnHeldGameId);" in main
+assert "overlayReturnHeldGameId=0; // Explicit game selection" in main
+assert "overlayController.dismiss(millis());" in main
+# The whole touch function is reliable to inspect independently of #ifdef order.
+touch=main.split("void handleTouch() {",1)[1].split("  if (screen == Screen::LIVE) {",1)[0]
+assert "swallowLiveGesture=true;" in touch
+assert "overlayController.dismiss(millis());" in touch
+assert "cfg.cycleGames && !carouselHold.paused" in main
 assert "wledPpManuallyStoppedGameId" in main
 assert "void tickWledCelebrations()" in main
 assert "tickWledDdpStreams();" in main
