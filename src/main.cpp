@@ -1835,7 +1835,7 @@ void tickWledDiscovery(){
 void startHorn(uint32_t eventSequence=0) {
   GameEventLog::Entry *entry=gameEventHistory.find(eventSequence);
   if(entry) {
-    entry->audio=GameEventLog::Audio::DISABLED;
+    entry->audio=GameEventLog::Audio::HORN_DISABLED;
     entry->audioSource=0;
     entry->audioFallback=false;
   }
