@@ -76,6 +76,8 @@ jobs:
         run: python tests/test_s3_live_goal_horn_contract.py
       - name: Test combined goal celebration plays and reports the saved horn
         run: python tests/test_full_celebration_audio_contract.py
+      - name: Test independent S3 power-play WAV selection and live eligibility
+        run: python tests/test_s3_power_play_sound_contract.py
       - name: Test stable power-play event history
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_power_play_log_policy.cpp -o /tmp/glowdeck-pp-event-test
