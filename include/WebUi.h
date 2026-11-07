@@ -638,6 +638,8 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <h3>Sound library · goals &amp; power plays</h3>
 <p class="small muted">Upload up to three WAV clips. Goals keep their own built-in/custom horn selection. Separately assign a custom clip to verified followed power-play starts. An unset power-play slot means no PP announcement.</p>
 <p id="s3PpSoundStatus" class="small muted">Power-play announcement: disabled</p>
+<p id="s3StartSoundStatus" class="small muted">Game-start sound: slot 3</p>
+<div class="actions"><button type="button" id="s3StartSoundOff">Disable game-start audio</button></div>
 <div class="actions"><button type="button" id="s3PpSoundOff">Disable PP announcement</button></div>
 <p id="s3SoundLibraryStatus" class="small muted">Loading audio library...</p>
 <div class="actions"><button type="button" id="s3SoundBuiltInUse">Use built-in horn</button>
@@ -1070,9 +1072,10 @@ function createEventElement(row){
     sound.className="small";
     sound.style.marginTop="5px";
     const ppAudio=row.type==="Power play started"||row.type==="Power-play preview";
+    const startAudio=row.type==="Game started"||row.type==="Game-start preview";
     const source=row.audioSource>0?"Custom WAV slot "+row.audioSource:
       (ppAudio?"No PP WAV assigned":currentStatus?.audioSupported?"Built-in S3 horn":"CYD tone");
-    sound.textContent=(ppAudio?"Power-play audio: ":"Goal horn: ")+(row.audio||"Not recorded on this firmware")+
+    sound.textContent=(ppAudio?"Power-play audio: ":startAudio?"Game-start audio: ":"Goal horn: ")+(row.audio||"Not recorded on this firmware")+
       (row.audio&&row.audio!=="Not applicable"?" · "+source:"")+
       (row.audioFallback?" · selected WAV unavailable, built-in fallback":"");
     card.append(sound);
@@ -1232,6 +1235,7 @@ function renderStatus(){
     $("hornHelp").textContent="Live NHL goal horn: "+(s.hornEnabled?"ENABLED":"DISABLED")+
       " · Active sound: "+(Number(s.audioSelectedSource)>0?
         "custom WAV slot "+s.audioSelectedSource:"built-in horn")+
+      " · Game start: "+(Number(s.audioGameStartSource)>0?"slot "+s.audioGameStartSource:"off")+
       " · PP announcement: "+(Number(s.audioPowerPlaySource)>0?
         "slot "+s.audioPowerPlaySource:"off")+
       ". Preview works independently of this checkbox. Save goal-horn changes before live games.";
@@ -2425,6 +2429,10 @@ async function loadSoundLibrary(){
     "Live followed power plays: WAV slot "+lib.powerPlaySelected+" assigned":
     "Live followed power plays: announcement OFF. Assign a WAV below to enable.";
   $("s3PpSoundOff").disabled=!lib.powerPlaySelected;
+  $("s3StartSoundStatus").textContent=lib.gameStartSelected?
+    "Followed game start: WAV slot "+lib.gameStartSelected:
+    "Followed game start: sound OFF";
+  $("s3StartSoundOff").disabled=!lib.gameStartSelected;
   const host=$("s3SoundLibrarySlots");
   host.replaceChildren();
   (lib.clips||[]).forEach(c=>{
@@ -2470,6 +2478,16 @@ async function loadSoundLibrary(){
       message("Power-play announcement assigned to slot "+c.slot);
     });
     actions.append(ppSelect);
+    const startSelect=document.createElement("button");
+    startSelect.textContent=lib.gameStartSelected===c.slot?"Game-start selected":"Use for game start";
+    startSelect.disabled=!c.installed||lib.gameStartSelected===c.slot;
+    startSelect.onclick=()=>perform(async()=>{
+      await post("/api/audio/gamestart-select",{source:c.slot});
+      currentConfig.s3StartSound=c.slot;
+      await loadSoundLibrary();
+      message("Game-start sound assigned to slot "+c.slot);
+    });
+    actions.append(startSelect);
     const remove=document.createElement("button");
     remove.textContent="Delete";
     remove.disabled=!c.bytes;
@@ -2491,6 +2509,12 @@ $("s3SoundBuiltInUse").onclick=()=>perform(async()=>{
   currentConfig.s3Sound=0;
   await loadSoundLibrary();
   message("Built-in goal horn selected");
+});
+$("s3StartSoundOff").onclick=()=>perform(async()=>{
+  await post("/api/audio/gamestart-select",{source:0});
+  currentConfig.s3StartSound=0;
+  await loadSoundLibrary();
+  message("Game-start sound disabled");
 });
 $("s3PpSoundOff").onclick=()=>perform(async()=>{
   await post("/api/audio/powerplay-select",{source:0});
@@ -2596,7 +2620,7 @@ function fullPreview(event,side="home",team=""){
       "WLED "+(result.wledStarted?"started":"no controller accepted"),
       "Screen "+(result.overlayStarted?"started":"not enabled")
     ];
-    if(event==="goal"||event==="pp")parts.push((event==="pp"?"PP audio ":"Goal horn ")+(result.audioStarted
+    if(event==="goal"||event==="pp"||event==="start")parts.push((event==="pp"?"PP audio ":event==="start"?"Game-start audio ":"Goal horn ")+(result.audioStarted
       ?"playback started (speaker not verified)"
       :(result.audioStatus||"not started")));
     const description=event==="stop"?"Stop / restore requested":
