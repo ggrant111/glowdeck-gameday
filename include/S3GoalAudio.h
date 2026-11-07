@@ -330,6 +330,9 @@ class S3GoalAudio {
       ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
       uint32_t cursor=0;
       bool ok=true;
+      const char *failure="none";
+      esp_err_t lastI2sError=ESP_OK;
+      uint32_t writeRetries=0;
       const uint32_t started=millis();
       const bool test=self->activeClip_.load()==uint8_t(Clip::TEST_TONE);
       const bool custom=self->activeClip_.load()==uint8_t(Clip::CUSTOM);
@@ -343,6 +346,7 @@ class S3GoalAudio {
         if(!wav || !S3WavPolicy::parse(wav,meta) ||
            !decoder.begin(wav,meta)){
           ok=false;
+          failure="wav-open-or-parse";
           Serial.printf("[S3 WAV] failed to stream WAV slot %u\n",
                         unsigned(slot));
         }else frames=meta.outputFrames;
@@ -355,23 +359,39 @@ class S3GoalAudio {
         for(uint16_t i=0;i<count;++i){
           int16_t mono=0;
           if(custom){
-            if(!decoder.next(mono)){ok=false;break;}
+            if(!decoder.next(mono)){
+              ok=false;failure="wav-decode";break;
+            }
           }else mono=test?S3HornPolicy::diagnosticSample(cursor+i):
                            S3HornPolicy::sample(cursor+i);
           stereo[2*i]=mono;
           stereo[2*i+1]=mono;
         }
         if(!ok)break;
-        size_t written=0;
-        const esp_err_t result=i2s_write(I2S_NUM_0,stereo,
-                              size_t(count)*4,&written,pdMS_TO_TICKS(120));
-        if(result!=ESP_OK||written!=size_t(count)*4){
-          ok=false;
-          Serial.printf("[S3 Audio] I2S write failed: code=%d bytes=%u/%u frame=%lu\n",
-                        int(result),unsigned(written),unsigned(size_t(count)*4),
-                        (unsigned long)cursor);
-          break;
+        // Handle transient DMA starvation and short writes during live games.
+        const size_t total=size_t(count)*4;
+        size_t offset=0;
+        uint8_t stalled=0;
+        while(offset<total){
+          size_t written=0;
+          const esp_err_t result=i2s_write(I2S_NUM_0,
+                   reinterpret_cast<const uint8_t*>(stereo)+offset,
+                   total-offset,&written,pdMS_TO_TICKS(250));
+          lastI2sError=result;
+          if(written>total-offset){failure="i2s-invalid-count";ok=false;break;}
+          offset+=written;
+          if(result==ESP_OK && written>0){stalled=0;continue;}
+          ++writeRetries;
+          if(++stalled>=4){
+            ok=false;failure="i2s-stall";
+            Serial.printf("[S3 Audio] I2S stalled: code=%d bytes=%u/%u frame=%lu retries=%lu\n",
+                          int(result),unsigned(offset),unsigned(total),
+                          (unsigned long)cursor,(unsigned long)writeRetries);
+            break;
+          }
+          vTaskDelay(pdMS_TO_TICKS(2));
         }
+        if(!ok)break;
         cursor+=count;
         self->writtenFrames_.store(cursor);
       }
@@ -382,9 +402,10 @@ class S3GoalAudio {
       self->lastDurationMs_.store(millis()-started);
       self->lastStreamOk_.store(ok && cursor==frames);
       if(!ok)self->streamError_.store(true);
-      Serial.printf("[S3 Audio] %s stream %s, frames=%lu/%lu, elapsed=%lums\n",
+      Serial.printf("[S3 Audio] %s stream %s, reason=%s i2s=%d retries=%lu frames=%lu/%lu elapsed=%lums\n",
                     custom?"custom-wav":test?"test-tone":"goal-horn",
-                    ok?"complete":"FAILED",
+                    ok?"complete":"FAILED",failure,int(lastI2sError),
+                    (unsigned long)writeRetries,
                     (unsigned long)cursor,(unsigned long)frames,
                     (unsigned long)self->lastDurationMs_.load());
       self->playing_.store(false);
