@@ -2491,6 +2491,39 @@ void tickRestores() {
   }
 }
 
+// A WLED controller has one physical output. Before giving it to a
+// DIFFERENT game/event, release DDP and restore every pixel/segment changed
+// by the previous lease. Keep the ORIGINAL pre-GameDay snapshot for the final
+// restore, rather than snapshotting a different game's temporary effects.
+bool cleanWledLeaseForNextEvent(uint8_t slot){
+  if(slot>=MAX_WLED || !restoring[slot])return true;
+  if(!releaseWledDdp(slot)){
+    restoreAt[slot]=millis();
+    wledDeviceResult[slot]="DDP release failed; restore pending";
+    return false;
+  }
+  const bool unchanged=wledRestoreMapped[slot]&&wledTouchedSegments[slot]==0;
+  const String body=unchanged?String(""):
+      wledRestoreMapped[slot]
+        ? wledMappedRestoreBody(savedState[slot],wledTouchedSegments[slot])
+        : wledRestoreBody(savedState[slot]);
+  if(!unchanged && (body.isEmpty() ||
+      !postWled(savedWledIp[slot].length()?savedWledIp[slot]:cfg.wled[slot],body))){
+    restoreAt[slot]=millis();
+    wledDeviceResult[slot]="Previous game restore failed; retry scheduled";
+    return false;
+  }
+  markWledEvent(wledEventOwner[slot],slot,GameEventLog::Wled::SUPERSEDED);
+  wledEventOwner[slot]=0;
+  wledDeviceGameOwner[slot]=0;
+  wledTouchedSegments[slot]=0;
+  wledCurrentSceneSegments[slot]=0;
+  wledRestoredSceneSegments[slot]=0;
+  wledRestoreMapped[slot]=cfg.wledZoneEnabled[slot];
+  restoreAt[slot]=UINT32_MAX;
+  return true;
+}
+
 bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
                     uint32_t eventSequence,uint8_t scorerSide,uint32_t gameId) {
   if(gameId&&!isArmedGame(gameId))return false;
@@ -2550,9 +2583,10 @@ bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
   uint32_t longestSceneMs=0;
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     if (!prepared[i]) continue;
-    // The prior event might have been preempted before its own restore.
-    if (wledEventOwner[i] && wledEventOwner[i] != eventSequence)
-      markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::SUPERSEDED);
+    if(!cleanWledLeaseForNextEvent(i)){
+      markWledEvent(eventSequence,i,GameEventLog::Wled::COMMAND_FAILED);
+      continue; // Never paint over an un-restored stream or foreign scene.
+    }
     wledEventOwner[i] = eventSequence;
     // DDP realtime must relinquish ownership before a queued NHL event
     // attempts native JSON or a new stream on this same controller.
