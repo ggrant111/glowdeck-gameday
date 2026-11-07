@@ -4,8 +4,10 @@ ui=Path("include/WebUi.h").read_text()
 assert 'uint8_t s3StartSound = 3;' in s
 assert 'prefs.getUChar("s3StartSound",3)' in s
 assert 'server.on("/api/audio/gamestart-select", HTTP_POST' in s
-assert 'if(started && secondaryArmed)startGameStartSound(log.sequence);' in s
-assert 'transition==CelebrationEngine::Event::GAME_START && isArmedGame(g->id)' in s
+assert 'if(started)startGameStartSound(log.sequence);' in s
+assert 'if(secondaryArmed){' in s
+assert 'if(isArmedGame(g->id)){' in s
+assert 'if(transition==CelebrationEngine::Event::GAME_START)' in s
 assert 'startGameStartSound(logged.sequence);' in s
 assert 'startGameStartSound(previewRow.sequence);' in s
 assert 's3Audio.playSource(source)' in s
