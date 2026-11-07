@@ -5591,6 +5591,129 @@ void registerRoutes() {
     sendJson(doc);
   });
 #endif
+#ifdef GLOWDECK_WAVESHARE_S3
+  // Phase 7C S3 external case strip controls. Never shares CYD RGB pins
+  // or any WLED controller and never changes NHL state or the display.
+  server.on("/api/case-led", HTTP_GET, []() {
+    if(!authorized())return;
+    StaticJsonDocument<400> doc;
+    doc["supported"]=true;
+    doc["enabled"]=cfg.caseLedsEnabled;
+    doc["outputActive"]=caseLedDriver.enabled();
+    doc["physicalOutputVerified"]=false; // software cannot detect unbuilt strips
+    doc["homeSide"]="left";
+    doc["awaySide"]="right";
+    doc["homeGPIO"]=S3CaseLedDriver::kHomePin;
+    doc["awayGPIO"]=S3CaseLedDriver::kAwayPin;
+    doc["homeHeaderPin"]=14;
+    doc["awayHeaderPin"]=16;
+    doc["pixelsPerSide"]=cfg.casePixels;
+    doc["brightness"]=cfg.caseBrightness;
+    doc["goal"]=cfg.caseGoal;
+    doc["powerPlay"]=cfg.casePp;
+    doc["gameStart"]=cfg.caseStart;
+    doc["final"]=cfg.caseFinal;
+    doc["goalSeconds"]=cfg.caseGoalSeconds;
+    doc["homeEffect"]=int(caseLedFx.eventAt(
+        S3CaseLedPolicy::Side::HOME,millis()));
+    doc["awayEffect"]=int(caseLedFx.eventAt(
+        S3CaseLedPolicy::Side::AWAY,millis()));
+    sendJson(doc);
+  });
+  server.on("/api/case-led/config", HTTP_POST, []() {
+    if(!authorized())return;
+    StaticJsonDocument<512> request;
+    if(server.arg("plain").length()>512 ||
+       deserializeJson(request,server.arg("plain")))
+      return errorResponse("Invalid case LED settings JSON");
+    const bool enabled=request["enabled"]|cfg.caseLedsEnabled;
+    // Require explicit confirmation only on transitions from OFF to ON.
+    // No strip/data pin is initialized by default.
+    if(enabled && !cfg.caseLedsEnabled &&
+       !(request["wiredConfirmed"]|false))
+      return errorResponse("Confirm external 5V wiring and common GND before enabling",400);
+    const int count=request["pixelsPerSide"]|int(cfg.casePixels);
+    const int brightness=request["brightness"]|int(cfg.caseBrightness);
+    const int duration=request["goalSeconds"]|int(cfg.caseGoalSeconds);
+    if(count<1 || count>S3CaseLedPolicy::kMaxPixels)
+      return errorResponse("Select 1–16 LEDs per side",400);
+    if(brightness<1 || brightness>S3CaseLedPolicy::kMaxBrightness)
+      return errorResponse("Case brightness must be 1–128 (50% cap)",400);
+    if(duration<2 || duration>12)
+      return errorResponse("Case goal duration must be 2–12 seconds",400);
+    cfg.casePixels=uint8_t(count);
+    cfg.caseBrightness=uint8_t(brightness);
+    cfg.caseGoalSeconds=uint8_t(duration);
+    cfg.caseGoal=request["goal"]|cfg.caseGoal;
+    cfg.casePp=request["powerPlay"]|cfg.casePp;
+    cfg.caseStart=request["gameStart"]|cfg.caseStart;
+    cfg.caseFinal=request["final"]|cfg.caseFinal;
+    cfg.caseLedsEnabled=enabled;
+    if(!enabled)caseLedFx.stop();
+    caseLedDriver.enable(enabled);
+    prefs.putBool("caseOn",cfg.caseLedsEnabled);
+    prefs.putBool("caseGoal",cfg.caseGoal);
+    prefs.putBool("casePP",cfg.casePp);
+    prefs.putBool("caseStart",cfg.caseStart);
+    prefs.putBool("caseFinal",cfg.caseFinal);
+    prefs.putUChar("casePixels",cfg.casePixels);
+    prefs.putUChar("caseBri",cfg.caseBrightness);
+    prefs.putUChar("caseSec",cfg.caseGoalSeconds);
+    StaticJsonDocument<96> response;
+    response["ok"]=true;
+    response["enabled"]=cfg.caseLedsEnabled;
+    sendJson(response);
+  });
+  server.on("/api/case-led/test", HTTP_POST, []() {
+    if(!authorized())return;
+    if(!cfg.caseLedsEnabled || !caseLedDriver.enabled())
+      return errorResponse("Case LEDs disabled; complete wiring first",409);
+    StaticJsonDocument<192> request;
+    if(deserializeJson(request,server.arg("plain")))
+      return errorResponse("Invalid case LED test request");
+    const String mode=request["mode"]|String("goal");
+    const String side=request["side"]|String("home");
+    if(side!="home" && side!="away")
+      return errorResponse("Use home or away side",400);
+    if(mode!="goal" && mode!="pp" && mode!="start" &&
+       mode!="final" && mode!="red" && mode!="green" &&
+       mode!="blue" && mode!="off")
+      return errorResponse("Invalid case LED diagnostic effect",400);
+    const S3CaseLedPolicy::Side position=side=="home"
+        ?S3CaseLedPolicy::Side::HOME:S3CaseLedPolicy::Side::AWAY;
+    if(mode=="off"){
+      caseLedFx.stop();
+    }else{
+      const Game *preview=testMatchup();
+      const String guessed=preview
+          ?(side=="home"?preview->home:preview->away)
+          :(side=="home"?String("UTA"):String("BOS"));
+      String team=request["team"]|String("");
+      if(team.isEmpty())team=guessed;
+      uint32_t color=0;
+      if(mode=="red")color=0xFF0000;
+      else if(mode=="green")color=0x00FF00;
+      else if(mode=="blue")color=0x0000FF;
+      else if(!TeamPalette::find(team.c_str(),color))
+        return errorResponse("Unknown NHL team for case LED preview",400);
+      const S3CaseLedPolicy::Event event=
+          mode=="goal"?S3CaseLedPolicy::Event::GOAL:
+          mode=="pp"?S3CaseLedPolicy::Event::TEST_PP:
+          mode=="start"?S3CaseLedPolicy::Event::GAME_START:
+          mode=="final"?S3CaseLedPolicy::Event::FINAL:
+                        S3CaseLedPolicy::Event::TEST;
+      caseLedFx.trigger(position,event,color,millis(),
+                       mode=="goal"?uint32_t(cfg.caseGoalSeconds)*1000UL:0);
+    }
+    caseLedDriver.tick(millis(),caseLedFx,cfg.casePixels,cfg.caseBrightness);
+    StaticJsonDocument<128> response;
+    response["ok"]=true;
+    response["mode"]=mode;
+    response["side"]=side;
+    response["isolated"]=true;
+    sendJson(response);
+  });
+#endif
   // UI reads the same palette used for actual observed NHL goal colors.
   server.on("/api/rear/palette", HTTP_GET, []() {
     if (!authorized()) return;
