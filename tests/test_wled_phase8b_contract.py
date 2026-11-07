@@ -67,7 +67,7 @@ for x in ('if(restoring[slot]', 'if(!(state["on"]|false))',
           'restoreAt[slot]=millis()+1800UL',
           '"udpn"'):
     assert x in preview,x
-assert 'const bool armedForGoal = g.id == selectedGameId' in s
+assert 'const bool armedForGoal = isArmedGame(g.id)' in s
 assert 'if (armedForGoal) celebrate(teamRgb(scorer)' in s
 assert 'CelebrationEngine::eligible(cfg.wledEnabled[i], cfg.wledEvents[i], event)' in s
 assert 'const bool followed = rearFollows(g.id);' in s
