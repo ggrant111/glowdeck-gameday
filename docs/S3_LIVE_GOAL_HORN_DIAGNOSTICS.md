@@ -46,3 +46,23 @@ that an ES8311 speaker or a selected custom WAV played.
 Activity is session-only; older events collected before this update will not
 have audio outcomes. This is a diagnostic software change and does not claim
 a physical horn fix without real-device reproduction.
+
+## Full celebration rehearsal (Test Lab)
+
+The **Full celebration** goal preview now calls the same saved horn/selected
+WAV playback path as a real armed goal. Before this fix, it exercised only
+WLED, screen and rear LED output, so silence was expected.
+
+- In **Customize → Sound**, enable the goal horn and **Save settings**.
+  The status must say **Live NHL goal horn: ENABLED**.
+- In **Test Lab → Full celebration**, tap a goal preview. Its outcome now
+  includes **Horn**, separately from WLED and screen results.
+- **Playback started** is only evidence that audio was accepted for
+  streaming, not that the physical speaker produced sound.
+  Review **Activity → Goal preview → Goal horn** for the final stream status.
+- **Disabled in Sound settings**, **Audio device unavailable**, and
+  **Playback busy or in cooldown** explain a rejected horn request.
+  For completed-but-silent streams, use **Test speaker · 1 kHz** and
+  **Check audio diagnostics** to inspect the codec, amplifier and I2S.
+- Standalone WLED/screen/sound tests and non-goal previews stay independent;
+  the combined goal preview changes no NHL game/eligibility state.
