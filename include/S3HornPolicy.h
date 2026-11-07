@@ -40,7 +40,7 @@ inline int16_t sample(uint32_t frame) {
     env=((kFrames-frame)*1024UL)/kReleaseFrames;
   // Peak 10,000 PCM units, well below full scale. Hardware ES8311
   // volume is separately set to 50%, and the amplifier is off at idle.
-  return static_cast<int16_t>(sum*int32_t(env)*10000L/(32768L*1024L));
+  return static_cast<int16_t>((int64_t(sum)*int64_t(env)*10000LL)/(32768LL*1024LL));
 }
 inline bool canPlay(bool ready,bool playing,uint32_t now,uint32_t last,
                     bool everPlayed) {
