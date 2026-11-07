@@ -17,7 +17,9 @@ for value in (
     'wledStarted || rearStarted || overlayStarted || audioStarted',
 ):
     assert value in preview, value
-assert 'row.type==="Goal" || row.type==="Goal preview"' in ui
+assert 'const goalAudio=row.type==="Goal"||row.type==="Goal preview";' in ui
+assert 'const ppAudio=row.type==="Power play started"||row.type==="Power-play preview";' in ui
+assert 'row.audioExpectedFrames>0' in ui, "Live and test events share audio metrics"
 assert 'result.audioStatus||"not started"' in ui
 assert '"playback started (speaker not verified)"' in ui
 assert 'post("/api/wled/preview",{event,side,team,combined:true})' in ui
