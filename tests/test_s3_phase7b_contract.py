@@ -2,6 +2,7 @@
 """Phase 7B source contracts: three-slot LittleFS WAV, endpoint auth,
 NHL/WLED isolation, file safety, preferences and separate CYD output."""
 from pathlib import Path
+import re
 root=Path(__file__).resolve().parents[1]
 m=(root/"src/main.cpp").read_text()
 a=(root/"include/S3GoalAudio.h").read_text()
@@ -62,7 +63,7 @@ for path,verb in routes.items():
     start=f'server.on("{path}", {verb}, []() {{'
     assert start in m,path
     route=m.split(start,1)[1].split('server.on(',1)[0]
-    assert "if (!authorized())" in route,path
+    assert re.search(r"if\s*\(\s*!authorized\(\)\s*\)",route),path
     for forbidden in ("startWledEvent", "celebrate(", "queueGameOverlay(",
                       "addPreviewEvent(", "toggleGameFollow(", "drawS3ArenaScoreboard("):
         assert forbidden not in route,(path,forbidden)
