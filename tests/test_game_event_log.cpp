@@ -20,7 +20,7 @@ int main() {
   b.find(id)->audio=Audio::COMPLETED;
   assert(!strcmp(audioLabel(b.find(id)->audio),
                  "Stream completed (speaker not verified)"));
-  assert(!strcmp(audioLabel(Audio::DISABLED),
+  assert(!strcmp(audioLabel(Audio::HORN_DISABLED),
                  "Disabled in Sound settings"));
   assert(!strcmp(audioLabel(Audio::NOT_ARMED),
                  "Not armed for this game"));
