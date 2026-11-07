@@ -638,6 +638,188 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
+
+// Declarative portal layout. Reuse the original control nodes (and their IDs)
+// instead of cloning buttons or duplicating API handlers. Future modules only
+// need one mapping here and a destination in the accessible page shell.
+function mountPortalModules(){
+  const place=(id,destination)=>{
+    const node=$(id), slot=$(destination);
+    if(!node||!slot)throw new Error("Portal module missing: "+id+" → "+destination);
+    slot.appendChild(node);
+    return node;
+  };
+  const moveCard=(controlId,destination)=>{
+    const source=$(controlId);
+    if(!source)throw new Error("Missing existing control: "+controlId);
+    const card=source.closest(".card");
+    if(!card)throw new Error("Missing card for: "+controlId);
+    return place(card.id || (card.id="portal-card-"+controlId),destination);
+  };
+  const newCard=(heading,lead,destination)=>{
+    const card=document.createElement("div");
+    card.className="card";
+    const title=document.createElement("h2");title.textContent=heading;
+    const intro=document.createElement("p");intro.textContent=lead;
+    card.append(title,intro);
+    $(destination).append(card);
+    return card;
+  };
+  const transferRange=(first,last,dest)=>{
+    let n=first;
+    if(!n||!last)throw new Error("Portal setting group missing");
+    while(n){
+      const next=n.nextElementSibling;
+      dest.appendChild(n);
+      if(n===last)return;
+      n=next;
+    }
+    throw new Error("Portal setting group boundary not found");
+  };
+
+  // GAME PLAN / VISUALS: move originals, keeping every API binding intact.
+  moveCard("favoriteTeamGrid","mount-favorites");
+  moveCard("rearFollowedList","mount-favorites");
+  moveCard("cycleGames","mount-screen");
+  moveCard("overlayEnabled","mount-screen");
+  place("s3GoalGifCard","mount-screen");
+
+  // CELEBRATIONS: preferences are not simulations.
+  moveCard("wledGoalStyle","mount-wled");
+  moveCard("deviceList","mount-wled");
+  place("s3AudioCard","mount-audio");
+  moveCard("rearEnabled","mount-hardware");
+  place("s3CaseLedCard","mount-hardware");
+
+  // SYSTEM: network, maintenance and connection details, nothing celebratory.
+  moveCard("ssid","mount-network");
+  moveCard("bin","mount-maintenance");
+  moveCard("reboot","mount-maintenance");
+  moveCard("apName","mount-connection");
+
+  // The former "Celebration preferences" card mixed WLED gain, horn enable,
+  // screen inversion and the admin password. Split it into purposeful cards.
+  const original=$("brightness").closest(".card");
+  const gainCard=newCard("Celebration timing & intensity",
+    "Shared brightness and event duration for WLED celebrations.","mount-wled");
+  transferRange(document.querySelector('label[for="brightness"]'),
+                $("seconds"),gainCard);
+  const hornCard=newCard("Enable goal audio",
+    "Allow the onboard speaker to play the selected horn for eligible NHL goals.",
+    "mount-audio");
+  transferRange($("horn").closest(".toggle"),$("hornHelp"),hornCard);
+  const displayCard=newCard("Display color correction",
+    "Correct the panel's color inversion only if its colors are visibly wrong.",
+    "mount-screen");
+  const invert=$("screenInverted").closest(".toggle");
+  transferRange(invert,invert.nextElementSibling,displayCard);
+  const accessCard=newCard("Dashboard security",
+    "Set a new local dashboard password without exposing Wi-Fi credentials.",
+    "mount-network");
+  const passwordLabel=document.querySelector('label[for="adminPassword"]');
+  const finalHint=$("adminPassword").nextElementSibling;
+  transferRange(passwordLabel,finalHint,accessCard);
+  original.remove();
+
+  // TEST LAB: move the *actual* controls, not a second set of lookalikes.
+  // Screen tests are never mixed with live overlay configuration.
+  const screenLab=$("mount-lab-screen");
+  const screenActions=$("overlayTestGoal").closest(".actions");
+  place("overlayTestGoal" /* used below via parent; keep IDs stable */, "mount-lab-screen");
+  // Reinsert the relocated first button into its original action group;
+  // the whole group then travels intact to the Test Lab.
+  screenActions.prepend($("overlayTestGoal"));
+  screenLab.appendChild(screenActions);
+  const visualNote=screenActions.nextElementSibling;
+  if(visualNote&&visualNote.matches("p"))screenLab.appendChild(visualNote);
+  const gifPreview=$("goalGifPreview");
+  const gifRow=document.createElement("div");gifRow.className="actions";
+  const gifTitle=document.createElement("p");
+  gifTitle.className="small muted";
+  gifTitle.textContent="S3 goal GIF: preview the installed animation on the device.";
+  gifRow.appendChild(gifPreview);
+  screenLab.append(gifTitle,gifRow);
+
+  // WLED tests are physical outputs; keep stop/restore beside the action.
+  moveCard("wledTestGoalHome","mount-lab-wled");
+  const quick=newCard("Quick home / away color",
+    "Run a basic color test for the armed game without changing game selection.",
+    "mount-lab-wled");
+  const quickButtons=$("testHome").closest(".actions");
+  quick.appendChild(quickButtons);
+
+  // The CYD rear-RGB test set has three distinct old cards, now one area.
+  moveCard("rearTestHome","mount-lab-hardware");
+  moveCard("rearTeam","mount-lab-hardware");
+  moveCard("rearDiagRed","mount-lab-hardware");
+  moveCard("rearFullHome","mount-lab-full");
+  // The S3 speaker library stays in Customize for contextual audition.
+  // Dedicated sound tests and codec diagnostics belong here.
+  const audioLab=$("mount-lab-audio");
+  audioLab.appendChild($("s3AudioPreview").closest(".actions"));
+  audioLab.appendChild($("s3AudioDiagnostics"));
+
+  // S3 external case LEDs have their own, independent wiring diagnostics.
+  const caseLab=newCard("Waveshare case output tests",
+    "LEFT = HOME, RIGHT = AWAY. Only available after confirming LED wiring.",
+    "mount-lab-case");
+  const caseActions=document.querySelector(".s3-case-test").closest(".actions");
+  caseLab.appendChild(caseActions);
+
+  // Remove old duplicate Save buttons (retain IDs and JS handlers for
+  // existing regression tests); the new shell offers one consistent save.
+  ["saveDisplay","saveDevices","saveRear"].forEach(id=>{
+    $(id).closest(".actions").classList.add("legacy-save");
+  });
+  $("saveSettings").closest(".card").classList.add("legacy-save");
+}
+
+const PORTAL_ROUTES={
+  dashboard:{page:"dashboard"},games:{page:"games"},
+  customize:{page:"customize"},lab:{page:"lab"},device:{page:"device"},
+  events:{page:"events"},
+  display:{page:"customize",anchor:"zone-screen"},
+  devices:{page:"customize",anchor:"zone-wled"},
+  rear:{page:"customize",anchor:"zone-hardware"},
+  settings:{page:"device",anchor:"zone-network"},
+  firmware:{page:"device",anchor:"zone-maintenance"}
+};
+let portalDirty=false;
+function setPortalDirty(isDirty){
+  portalDirty=!!isDirty;
+  ["customizeSaveState","deviceSaveState"].forEach(id=>{
+    const node=$(id);
+    node.classList.toggle("is-dirty",portalDirty);
+    node.textContent=portalDirty?"Unsaved changes · select Save to apply":
+      "Settings saved on this device";
+  });
+  document.querySelector('[data-tab="customize"].tab')
+    .classList.toggle("has-dirty",portalDirty);
+}
+function trackPortalChanges(){
+  const stored=new Set([
+    "ssid","wifiPassword","adminPassword","brightness","seconds","horn",
+    "wledPP","wledGameStart","wledFinal","wledGoalStyle","favoriteSide",
+    "rearEnabled","rearGoal","rearPowerPlay","rearBrightness",
+    "rearGoalSeconds","screenInverted","overlayEnabled","overlayGoals",
+    "overlayPowerPlays","overlayStart","overlayFinal","overlayFlash",
+    "overlayLogos","displayAllLiveEvents","overlayGoalSeconds",
+    "overlayFinalSeconds","cycleGames","showStandings","cycleSeconds",
+    "displayTimezone"
+  ]);
+  ["customize","device"].forEach(panelId=>{
+    $(panelId).addEventListener("change",event=>{
+      const id=event.target.id||"";
+      if(stored.has(id)||/^(ip[0-3]|enabled[0-3]|event[0-3]_(goal|pp|start|final))$/.test(id))
+        setPortalDirty(true);
+    });
+    $(panelId).addEventListener("input",event=>{
+      const id=event.target.id||"";
+      if(stored.has(id)||/^ip[0-3]$/.test(id))setPortalDirty(true);
+    });
+  });
+}
+
 let currentConfig = null, currentStatus = null, currentGames = [], noticeTimeout;
 let rearPalette = [];
 let gameFilter="all", favoriteTeamDraftMask=0;
