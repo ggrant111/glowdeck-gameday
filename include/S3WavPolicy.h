@@ -12,6 +12,7 @@ constexpr uint32_t kMaxBytes=768UL*1024UL;
 constexpr uint32_t kMaxDurationMs=10000UL;
 constexpr uint32_t kMaxHeaderScan=4096UL;
 constexpr uint32_t kOutputRate=48000UL;
+constexpr size_t kInputBufferBytes=512; // 128 stereo PCM frames per flash read
 struct Info {
   uint32_t dataOffset=0, dataBytes=0, sampleRate=0, frames=0, outputFrames=0;
   uint32_t durationMs=0;
@@ -102,6 +103,7 @@ class Stream {
   bool begin(Reader &file,const Info &meta){
     if(!meta.valid || !file.seek(meta.dataOffset))return false;
     f_=&file;meta_=meta;phase_=0;inputIndex_=0;outputIndex_=0;
+    buffered_=0;bufferPos_=0;consumedBytes_=0;
     if(!nextInput(current_))return false;
     if(meta.frames>1) {
       if(!nextInput(next_))return false;
@@ -134,18 +136,31 @@ class Stream {
  private:
   bool nextInput(int16_t &result){
     if(!f_ || inputIndex_>=meta_.frames)return false;
-    uint8_t pcm[4]={};
     const size_t n=meta_.channels*2U;
-    if(f_->read(pcm,n)!=n)return false;
+    if(bufferPos_+n>buffered_){
+      const uint32_t remain=meta_.dataBytes-consumedBytes_;
+      if(remain<n)return false;
+      // 512 is divisible by 2/4; each flash read holds whole PCM
+      // samples, avoiding 48,000 tiny LittleFS reads per second.
+      const size_t count=remain<kInputBufferBytes?remain:kInputBufferBytes;
+      if(f_->read(buffer_,count)!=count)return false;
+      consumedBytes_+=count;
+      buffered_=count;
+      bufferPos_=0;
+    }
+    const uint8_t *pcm=buffer_+bufferPos_;
     if(meta_.channels==1)result=readPcm16(pcm);
     else result=static_cast<int16_t>(
         (int32_t(readPcm16(pcm))+int32_t(readPcm16(pcm+2)))/2);
+    bufferPos_+=n;
     ++inputIndex_;
     return true;
   }
   Reader *f_=nullptr;
   Info meta_{};
-  uint32_t inputIndex_=0,outputIndex_=0,phase_=0;
+  uint32_t inputIndex_=0,outputIndex_=0,phase_=0,consumedBytes_=0;
+  size_t buffered_=0,bufferPos_=0;
+  uint8_t buffer_[kInputBufferBytes]={};
   int16_t current_=0,next_=0;
 };
 } // namespace S3WavPolicy
