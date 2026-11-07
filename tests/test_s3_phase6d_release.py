@@ -22,11 +22,18 @@ for flag in ("GLOWDECK_S3_PHASE6_LIVE=1","GLOWDECK_S3_PHASE6C_UI=1"):
 # After an overlay expires or changes queue priority, draw() must restore the
 # exact same screen and re-present it, rather than partial-paint stale pixels.
 ended=main.index("if (overlayController.tick(millis()))")
-expired=main[ended:ended+330]
+# The event-completion path now restores the user-held game before repainting.
+# Inspect the COMPLETE recovery block, not an arbitrary 330-character slice:
+# a longer, correct hold-restoration path must not fail this release gate.
+recovery_end=main.index(
+    "if (!overlayController.active() && screen == Screen::LIVE",ended)
+expired=main[ended:recovery_end]
 assert "lastCarouselAdvance = millis();" in expired
 assert "overlayLastFrame = 0;" in expired
 assert "partialLiveUpdate = false;" in expired
 assert "needsDraw = true;" in expired
+assert "carouselHold.pin(overlayReturnHeldGameId);" in expired
+assert "if(!overlayController.active() && overlayReturnHeldGameId)" in expired
 assert "if (!overlayController.active() && screen == Screen::LIVE" in main
 
 # Manual close and invalid GIF must also route through a full-scene recovery.
