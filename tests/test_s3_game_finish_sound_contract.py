@@ -5,6 +5,10 @@ policy=Path("include/S3WavPolicy.h").read_text()
 storage=Path("include/S3SoundStorage.h").read_text()
 assert "kSlots=4" in policy
 assert 'case 4:return "/sound4.wav";' in storage
+# Verify that the actual HTTP upload parser accepts Slot 4 (not just the UI/policy).
+assert 'slotArg=="4"?4:0' in s
+assert 'Select sound slot 1 through 4' in s
+assert 'Select sound slot 1 through 3' not in s
 assert 'uint8_t s3FinishSound = 4;' in s
 assert 'prefs.getUChar("s3FinishSound",4)' in s
 assert 'server.on("/api/audio/gamefinish-select", HTTP_POST' in s
