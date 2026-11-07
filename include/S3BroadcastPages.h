@@ -95,11 +95,23 @@ void drawS3CFooter(const char *left,const char *center,const char *right,
   tft.drawFastHLine(18,278,444,S3C_RAIL);
   // Floating labels sit inside the UNCHANGED three capacitive touch targets.
   tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(S3C_MUTED);
-  tft.drawString(left,a.x+a.w/2,a.y+a.h/2,2);
-  tft.drawString(right,c.x+c.w/2,c.y+c.h/2,2);
-  tft.setTextColor(activeCenter?0xFE60:S3C_ACCENT);
-  tft.drawString(center,b.x+b.w/2,b.y+b.h/2,2);
+  const auto drawAction=[&](const char* label,int16_t x,uint16_t color){
+    if(!strcmp(label,"PREV"))
+      GameDayIcons::draw(tft,GameDayIcons::Kind::PREVIOUS,x,296,19,color);
+    else if(!strcmp(label,"NEXT"))
+      GameDayIcons::draw(tft,GameDayIcons::Kind::NEXT,x,296,19,color);
+    else if(!strcmp(label,"GAMES")||!strcmp(label,"ALL GAMES"))
+      GameDayIcons::draw(tft,GameDayIcons::Kind::GAMES,x,296,19,color);
+    else if(!strcmp(label,"SETUP"))
+      GameDayIcons::draw(tft,GameDayIcons::Kind::SETUP,x,296,19,color);
+    else {
+      tft.setTextColor(color);
+      tft.drawString(label,x,296,2);
+    }
+  };
+  drawAction(left,a.x+a.w/2,S3C_MUTED);
+  drawAction(right,c.x+c.w/2,S3C_MUTED);
+  drawAction(center,b.x+b.w/2,activeCenter?0xFE60:S3C_ACCENT);
   tft.setTextDatum(TL_DATUM);
 }
 
