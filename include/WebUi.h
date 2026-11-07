@@ -749,8 +749,8 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <div id="lab-audio" class="portal-zone" data-platform="s3"><div class="zone-heading"><span class="zone-number">02</span><div><h3>Speaker &amp; sound</h3><p>Hear the selected horn, verify the test tone, inspect ES8311 diagnostics.</p></div></div><div class="card lab-card" id="mount-lab-audio"></div></div>
 <div id="lab-wled" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>WLED controller tests</h3><p>Real color/effect commands are sent to opted-in controllers on your local network.</p></div></div><div id="mount-lab-wled"></div>
 <div class="card" id="wledDdpTestCard">
-<h2>Real-time DDP streaming · Phase 8D</h2>
-<p>Optional real-time animations on a <strong>dedicated full-strip controller</strong>. DDP may override all pixels, including WLED segments, so shared or partially assigned controllers use native JSON instead.</p>
+<h2>Light streaming diagnostics</h2>
+<p>Already set up your controller? Run a three-second light check here. For first-time setup, go to <strong>Customize → WLED → Set up light streaming</strong>. Streaming temporarily controls the whole dedicated WLED strip.</p>
 <label for="wledDdpLabSlot">DDP-enabled WLED controller</label>
 <select id="wledDdpLabSlot" aria-label="Select DDP controller for isolated test"></select>
 <div class="actions">
@@ -1863,7 +1863,7 @@ async function refreshDdpTestStatus(){
   $("wledDdpLabStatus").textContent=
     (data.enabled?"DDP enabled":"DDP disabled")+
     " · "+data.fps+" FPS · "+(data.running?"STREAMING":"Idle")+
-    " · "+data.pixels+" LEDs · "+data.chunksPerFrame+" chunks/frame"+
+    " · "+(data.pixels||"—")+" LEDs · "+(data.chunksPerFrame||"—")+" chunks/frame"+
     " · "+data.frames+" frames / "+data.packets+" packets · "+data.mode;
 }
 $("wledDdpLabSlot").onchange=()=>perform(refreshDdpTestStatus);
@@ -1927,10 +1927,13 @@ async function openWledDdpSettings(slot,host){
     meta.append(make("span","",data.ip||"No saved IP"));
   }
   check.append(meta);
-  const state=make("div","wled-quick-state",data.reason);
+  const state=make("div","wled-quick-state",data.ddpEnabled&&data.ready?
+    "Streaming is already enabled. You can test or change it below.":data.reason);
   state.dataset.ready=String(!!data.ready);
   state.setAttribute("role","status");
   check.append(state);
+  if(data.ddpEnabled&&data.ready)
+    check.append(make("p","small muted","Current configuration will be preserved unless you choose a different zone mode."));
   const recheck=make("button","ghost","Recheck connection");
   recheck.type="button";
   recheck.onclick=()=>perform(()=>openWledDdpSettings(slot,host));
@@ -2011,6 +2014,8 @@ async function openWledDdpSettings(slot,host){
       currentConfig.wled[slot].zoneEnabled=true;
       currentConfig.wled[slot].ddpFps=result.fps;
       currentConfig.wled[slot].enabled=true;
+      data.ddpEnabled=true;data.mappingEnabled=true;
+      off.disabled=false;
       const participation=$("enabled"+slot);
       if(participation)participation.checked=true;
       const open=$("wledDdpOpen"+slot);
