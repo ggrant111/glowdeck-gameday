@@ -5286,6 +5286,188 @@ void registerRoutes() {
     response["volume"]=s3Audio.volume();
     sendJson(response);
   });
+  // Phase 7B.1/7B.2 — authenticated S3 sound library. Fixed slot names
+  // and bounded PCM WAV parsing avoid arbitrary paths or untrusted codecs.
+  server.on("/api/audio/library", HTTP_GET, []() {
+    if (!authorized()) return;
+    DynamicJsonDocument doc(1800);
+    doc["supported"]=true;
+    doc["storageReady"]=soundStorage.mounted();
+    doc["selected"]=s3Audio.selectedSource();
+    doc["slots"]=S3WavPolicy::kSlots;
+    doc["maxFileBytes"]=S3WavPolicy::kMaxBytes;
+    doc["totalBytes"]=soundStorage.totalBytes();
+    doc["usedBytes"]=soundStorage.usedBytes();
+    JsonArray clips=doc.createNestedArray("clips");
+    for(uint8_t slot=1;slot<=S3WavPolicy::kSlots;++slot){
+      S3WavPolicy::Info m;
+      const bool valid=soundStorage.inspect(slot,m);
+      JsonObject clip=clips.createNestedObject();
+      clip["slot"]=slot;
+      clip["installed"]=valid;
+      clip["name"]=prefs.getString(("s3Name"+String(slot)).c_str(),
+                                   "Custom sound "+String(slot));
+      clip["bytes"]=soundStorage.bytes(slot);
+      if(valid){
+        clip["durationMs"]=m.durationMs;
+        clip["sampleRate"]=m.sampleRate;
+        clip["channels"]=m.channels;
+        clip["bits"]=m.bits;
+      }
+    }
+    if(doc.overflowed())return errorResponse("Sound library response too large",503);
+    sendJson(doc);
+  });
+  server.on("/api/audio/select", HTTP_POST, []() {
+    if (!authorized())return;
+    if(s3Audio.playing() || s3Audio.storageBusy())
+      return errorResponse("Finish current playback or upload first",409);
+    StaticJsonDocument<96> request;
+    if(deserializeJson(request,server.arg("plain")))
+      return errorResponse("Invalid sound selection JSON");
+    if(!request.containsKey("source") || !request["source"].is<int>())
+      return errorResponse("Select an integer source 0 through 3");
+    const int source=request["source"].as<int>();
+    if(source<0 || source>S3WavPolicy::kSlots)
+      return errorResponse("Sound source out of range");
+    S3WavPolicy::Info m;
+    if(source && !soundStorage.inspect(uint8_t(source),m))
+      return errorResponse("That custom sound is missing or invalid",400);
+    cfg.s3Sound=uint8_t(source);
+    s3Audio.setSelectedSource(cfg.s3Sound);
+    prefs.putUChar("s3Sound",cfg.s3Sound);
+    StaticJsonDocument<96> response;
+    response["ok"]=true;
+    response["selected"]=cfg.s3Sound;
+    sendJson(response);
+  });
+  server.on("/api/audio/delete", HTTP_POST, []() {
+    if(!authorized())return;
+    if(s3Audio.playing() || s3Audio.storageBusy())
+      return errorResponse("Finish playback/upload before deleting sound",409);
+    StaticJsonDocument<96> request;
+    if(deserializeJson(request,server.arg("plain")))
+      return errorResponse("Invalid sound deletion JSON");
+    if(!request.containsKey("slot") || !request["slot"].is<int>())
+      return errorResponse("Provide a sound slot number");
+    const int slot=request["slot"].as<int>();
+    if(slot<1 || slot>S3WavPolicy::kSlots)
+      return errorResponse("Invalid sound slot");
+    if(!soundStorage.mounted())return errorResponse("Flash storage unavailable",503);
+    if(!soundStorage.remove(uint8_t(slot)))
+      return errorResponse("Could not delete WAV file",500);
+    prefs.remove(("s3Name"+String(slot)).c_str());
+    if(cfg.s3Sound==slot){
+      cfg.s3Sound=0; // built-in safety fallback
+      s3Audio.setSelectedSource(0);
+      prefs.putUChar("s3Sound",0);
+    }
+    StaticJsonDocument<96> response;
+    response["ok"]=true;
+    response["selected"]=cfg.s3Sound;
+    sendJson(response);
+  });
+  server.on("/api/audio/upload", HTTP_POST, []() {
+    if (!authorized()){
+      soundUpload.close();
+      LittleFS.remove(S3SoundStorage::kTemp);
+      s3Audio.setStorageBusy(false);
+      return;
+    }
+    soundUpload.close();
+    if(soundUploadFailed || !soundUploadFinished){
+      LittleFS.remove(S3SoundStorage::kTemp);
+      s3Audio.setStorageBusy(false);
+      return errorResponse(soundUploadError.length()?soundUploadError.c_str():
+                           "WAV upload missing or incomplete",400);
+    }
+    File candidate=LittleFS.open(S3SoundStorage::kTemp,"r");
+    S3WavPolicy::Info meta;
+    const bool valid=candidate && S3WavPolicy::parse(candidate,meta);
+    candidate.close();
+    if(!valid){
+      LittleFS.remove(S3SoundStorage::kTemp);
+      s3Audio.setStorageBusy(false);
+      return errorResponse("Use PCM 16-bit WAV, mono/stereo, 8–48kHz, max 768KB/10s",400);
+    }
+    if(!soundStorage.install(soundUploadSlot)){
+      LittleFS.remove(S3SoundStorage::kTemp);
+      s3Audio.setStorageBusy(false);
+      return errorResponse("Unable to install WAV; check available flash space",500);
+    }
+    prefs.putString(("s3Name"+String(soundUploadSlot)).c_str(),soundUploadTitle);
+    s3Audio.setStorageBusy(false);
+    StaticJsonDocument<192> response;
+    response["ok"]=true;
+    response["slot"]=soundUploadSlot;
+    response["name"]=soundUploadTitle;
+    response["bytes"]=soundUploadBytes;
+    response["durationMs"]=meta.durationMs;
+    sendJson(response);
+  }, []() {
+    HTTPUpload &upload=server.upload();
+    if(upload.status==UPLOAD_FILE_START){
+      soundUpload.close();
+      soundUploadFailed=!hasDashboardAccess();
+      soundUploadError=soundUploadFailed?"Unauthorized":"";
+      soundUploadFinished=false;
+      soundUploadBytes=0;
+      soundUploadSlot=uint8_t(server.arg("slot").toInt());
+      soundUploadTitle="";
+      const String filename=upload.filename;
+      const int dot=filename.lastIndexOf('.');
+      const String base=dot>0?filename.substring(0,dot):filename;
+      for(unsigned i=0;i<base.length() && soundUploadTitle.length()<24;++i){
+        const char c=base[i];
+        if((c>='a'&&c<='z')||(c>='A'&&c<='Z')||
+           (c>='0'&&c<='9')||c==' '||c=='-'||c=='_')
+          soundUploadTitle+=c;
+      }
+      soundUploadTitle.trim();
+      if(soundUploadTitle.isEmpty())
+        soundUploadTitle="Custom sound "+String(soundUploadSlot);
+      if(!soundUploadFailed){
+        if(!S3WavPolicy::validSlot(soundUploadSlot)){
+          soundUploadError="Select sound slot 1 through 3";
+          soundUploadFailed=true;
+        }else if(!soundStorage.mounted()){
+          soundUploadError="Sound storage not available";
+          soundUploadFailed=true;
+        }else if(s3Audio.playing() || s3Audio.storageBusy()){
+          soundUploadError="Finish playback or other upload first";
+          soundUploadFailed=true;
+        }else{
+          s3Audio.setStorageBusy(true);
+          LittleFS.remove(S3SoundStorage::kTemp);
+          soundUpload=LittleFS.open(S3SoundStorage::kTemp,"w");
+          if(!soundUpload){
+            soundUploadError="Cannot open temporary WAV file";
+            soundUploadFailed=true;
+          }
+        }
+      }
+    }else if(upload.status==UPLOAD_FILE_WRITE){
+      if(!soundUploadFailed){
+        if(upload.currentSize>S3WavPolicy::kMaxBytes-soundUploadBytes ||
+           soundUpload.write(upload.buf,upload.currentSize)!=upload.currentSize){
+          soundUploadError="WAV exceeds 768KB or flash write failed";
+          soundUploadFailed=true;
+        }else soundUploadBytes+=upload.currentSize;
+      }
+    }else if(upload.status==UPLOAD_FILE_END){
+      soundUpload.close();
+      soundUploadFinished=!soundUploadFailed && soundUploadBytes>=44;
+      if(!soundUploadFinished && soundUploadError.isEmpty())
+        soundUploadError="Incomplete WAV";
+    }else if(upload.status==UPLOAD_FILE_ABORTED){
+      soundUpload.close();
+      soundUploadError="WAV upload aborted";
+      soundUploadFailed=true;
+      soundUploadFinished=false;
+      LittleFS.remove(S3SoundStorage::kTemp);
+      s3Audio.setStorageBusy(false);
+    }
+  });
   // GET gives observable I2C codec registers, expander state and actual
   // I2S write results. A READY flag by itself does NOT prove speaker audio.
   server.on("/api/audio/diagnostics", HTTP_GET, []() {
