@@ -502,7 +502,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 </div>
 </div>
 <div class="card"><h2>Full celebration preview</h2>
-<p class="small muted">Run the rear CYD RGB LED, opted-in WLED devices and the animated 320×240 overlay using the same NHL team color. Each enabled output runs independently.</p>
+<p class="small muted">Run the selected WLED controllers and screen overlay together. The CYD rear RGB participates when enabled; Waveshare S3 case LEDs use their separate hardware test. No manual preview creates a genuine NHL goal.</p>
 <div class="actions">
 <button id="rearFullHome">Celebrate home goal</button>
 <button id="rearFullAway">Celebrate away goal</button>
@@ -643,7 +643,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <div id="zone-wled" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>WLED celebrations</h3><p>Configure controllers, effects and event permissions.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-wled">Test WLED</button></div><div id="mount-wled"></div></div>
 <div id="zone-audio" class="portal-zone"><div class="zone-heading"><span class="zone-number">04</span><div><h3>Sound &amp; horns</h3><p>Enable the onboard horn, manage custom WAV sounds and adjust output level.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-audio">Audio tests</button></div><div id="mount-audio"></div></div>
 <div id="zone-hardware" class="portal-zone"><div class="zone-heading"><span class="zone-number">05</span><div><h3>On-device LED hardware</h3><p>CYD rear RGB or Waveshare S3 left/home and right/away case lighting.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-hardware">LED tests</button></div><div id="mount-hardware"></div></div>
-<div class="save-dock" role="region" aria-label="Save settings"><span class="save-indicator" id="customizeSaveState">Change a setting, then save to your device</span><button type="button" class="primary" id="portalSave">Save all settings</button></div>
+<div class="save-dock" role="region" aria-label="Save shared settings"><span class="save-indicator" id="customizeSaveState">Display, WLED, horn and CYD options save together. Volume, WAV library, favorites and case LEDs have their own Apply controls.</span><button type="button" class="primary" id="portalSave">Save settings</button></div>
 </section>
 <section id="lab" class="panel" aria-labelledby="labTitle">
 <div class="section-intro"><div class="eyebrow">SAFE PREVIEW &amp; DIAGNOSTICS</div>
@@ -782,7 +782,9 @@ function mountPortalModules(){
     "Run a basic color test for the armed game without changing game selection.",
     "mount-lab-wled");
   const quickButtons=$("testHome").closest(".actions");
+  const quickNote=quickButtons.nextElementSibling;
   quick.appendChild(quickButtons);
+  if(quickNote&&quickNote.matches("p"))quick.appendChild(quickNote);
 
   // The CYD rear-RGB test set has three distinct old cards, now one area.
   moveCard("rearTestHome","mount-lab-hardware");
@@ -826,8 +828,10 @@ function setPortalDirty(isDirty){
   ["customizeSaveState","deviceSaveState"].forEach(id=>{
     const node=$(id);
     node.classList.toggle("is-dirty",portalDirty);
-    node.textContent=portalDirty?"Unsaved changes · select Save to apply":
-      "Settings saved on this device";
+    node.textContent=portalDirty?"Unsaved changes · select Save settings":
+      id==="customizeSaveState"?
+        "Shared settings saved · audio volume, favorite teams, WAV and case LEDs have their own Apply buttons":
+        "Network and dashboard settings saved on this device";
   });
   document.querySelector('[data-tab="customize"].tab')
     .classList.toggle("has-dirty",portalDirty);
