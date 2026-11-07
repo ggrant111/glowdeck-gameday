@@ -14,6 +14,7 @@
 #include "GoalGifPlayer.h"
 #include "S3NativeLayout.h"
 #include "S3ArenaBackground.h"
+#include "S3BroadcastGameState.h"
 #else
 #include <XPT2046_Touchscreen.h>
 #endif
@@ -3154,61 +3155,157 @@ void drawS3ArenaFitted(const String &value,int16_t x,int16_t y,
 // Phase 6B Arena Broadcast: the asset is a static arena template,
 // while logos, numbers, clock, PP and touch targets remain live GameDay data.
 // The transparent NHL logo pixels are composited into TFT_eSprite.
+// Phase 6B.2B: one state-aware readout renderer for full and partial frames.
+// All dynamic pixels stay inside the two dirty rectangles. They are restored
+// from the cached RGB565 image before drawing, so FUT->LIVE->INT->FINAL never
+// leaks stale VS, PP/EN, clocks or shots into another broadcast state.
 void drawS3ArenaReadout(const Game &g) {
   if(!s3Arena.ready())return;
   const auto top=S3NativeLayout::kBroadcastReadoutTop;
   const auto bottom=S3NativeLayout::kBroadcastReadoutBottom;
   s3Arena.restoreRegion(tft,top.x,top.y,top.w,top.h);
   s3Arena.restoreRegion(tft,bottom.x,bottom.y,bottom.w,bottom.h);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(WHITE);
-  String clock=broadcastTime(g);
-  if(clock.length()>24)clock=clock.substring(0,24);
-  drawS3ArenaFitted(clock,240,68,167,clock.length()>17?2:4,WHITE);
-  if(gameIsLive(g)) {
-    tft.fillCircle(162,69,3,0xF124);
-    tft.setTextColor(0xF97E);
-    tft.drawString("LIVE",240,92,1);
-  } else {
-    tft.setTextColor(S3_AQUA);
-    tft.drawString(gameIsFuture(g)?"UPCOMING":"FINAL",240,92,1);
+
+  const S3Broadcast::View view=S3Broadcast::resolve(
+      g.state.c_str(),g.intermission,g.awayScore,g.homeScore);
+  String headline;
+  String badge;
+  uint16_t badgeColor=S3_AQUA;
+  switch(view.phase) {
+    case S3Broadcast::Phase::UPCOMING:
+      headline=formattedStart(g.startUTC);
+      badge="UPCOMING";
+      break;
+    case S3Broadcast::Phase::LIVE:
+      headline=broadcastTime(g);
+      badge="LIVE";
+      badgeColor=0xF9C3;
+      break;
+    case S3Broadcast::Phase::INTERMISSION:
+      headline="END OF "+String(S3Broadcast::periodName(g.period,
+                                                       g.periodType.c_str()));
+      badge="INTERMISSION";
+      break;
+    case S3Broadcast::Phase::FINAL:
+      headline="GAME COMPLETE";
+      badge=S3Broadcast::finalStatus(g.periodType.c_str(),
+                                    g.state.c_str());
+      badgeColor=0xC618;
+      break;
+    default:
+      headline=gameStatus(g);
+      badge="GAME STATUS";
+      break;
   }
-  if(gameIsFuture(g)) {
+
+  tft.setTextDatum(MC_DATUM);
+  // Pick the font by rendered pixel width; long period/status strings are
+  // never silently clipped on the physical 480x320 broadcast panel.
+  const uint8_t headlineFont=tft.textWidth(headline,4)>170?2:4;
+  drawS3ArenaFitted(headline,240,68,170,headlineFont,WHITE);
+  if(view.phase==S3Broadcast::Phase::LIVE)
+    tft.fillCircle(171,92,3,0xF124);
+  drawS3ArenaFitted(badge,240,92,168,
+                    badge.length()>14?1:2,badgeColor);
+
+  if(view.showScore) {
+    const bool wide=g.awayScore>9 || g.homeScore>9;
+    const int savedScale=wide?1:2;
     tft.setTextColor(WHITE);
-    tft.drawString("VS",240,143,4);
-  } else {
-    tft.setTextColor(WHITE);
-    const bool doubleDigit=g.awayScore>9||g.homeScore>9;
-    tft.setTextSize(doubleDigit?1:2);
+    tft.setTextSize(savedScale);
     tft.drawString(String(g.awayScore),204,147,4);
     tft.drawString(String(g.homeScore),276,147,4);
     tft.setTextSize(1);
     tft.setTextColor(S3_MUTED);
     tft.drawString("-",240,149,4);
-  }
-  tft.setTextColor(S3_MUTED);
-  tft.drawString("SOG",115,228,1);
-  tft.drawString("SOG",365,228,1);
-  tft.setTextColor(WHITE);
-  tft.drawString(g.awayShots>=0?String(g.awayShots):String("--"),
-                 115,247,4);
-  tft.drawString(g.homeShots>=0?String(g.homeShots):String("--"),
-                 365,247,4);
-  if(gameIsLive(g) && !g.intermission) {
-    const bool ppFresh=g.ppDataKnown &&
-       uint32_t(millis()-g.ppUpdatedAt)<45000UL && g.ppSide!=0;
-    const bool emptyFresh=g.emptyNetKnown &&
-       uint32_t(millis()-g.emptyNetUpdatedAt)<45000UL &&
-       g.emptyNetSide!=0;
-    if(ppFresh || emptyFresh) {
-      tft.setTextColor(ppFresh?0xFDA6:S3_AQUA);
-      const String label=ppFresh?"POWER PLAY":"EMPTY NET";
-      tft.drawString(label,240,236,2);
-      tft.setTextColor(S3_MUTED);
-      const String team=ppFresh?(g.ppSide==1?g.home:g.away):
-        (g.emptyNetSide==1?g.home:g.away);
-      tft.drawString(team,240,256,1);
+    // A final winner is a result, never a guess during a live/intermission
+    // game. Distinguish SO/OT in the badge and mark the winner discreetly.
+    if(view.phase==S3Broadcast::Phase::FINAL && view.winnerSide) {
+      const int lineX=view.winnerSide==2?182:260;
+      const uint16_t winnerColor=to565(teamRgb(
+          view.winnerSide==2?g.away:g.home));
+      tft.fillRoundRect(lineX,185,38,3,1,winnerColor);
     }
+  } else {
+    tft.setTextColor(WHITE);
+    tft.drawString(view.phase==S3Broadcast::Phase::UPCOMING?"VS":"NHL",
+                   240,147,4);
+  }
+
+  if(view.showSeasonRecord) {
+    // Pregame never displays meaningless SOG/PP "--" placeholders. Reuse
+    // the existing per-game NHL season-record cache, with no new requests.
+    const CarouselStats *cached=nullptr;
+    for(uint8_t i=0;i<gameCount;++i) {
+      if(games[i].id==g.id && carouselStats[i].id==g.id &&
+         carouselStats[i].loaded) {
+        cached=&carouselStats[i];
+        break;
+      }
+    }
+    tft.setTextColor(S3_MUTED);
+    tft.drawString("SEASON W-L-OT",240,229,2);
+    const bool hasAway=cached && cached->recordAway.length() &&
+                       cached->recordAway!="--";
+    const bool hasHome=cached && cached->recordHome.length() &&
+                       cached->recordHome!="--";
+    if(hasAway || hasHome) {
+      drawS3ArenaFitted(hasAway?cached->recordAway:String("N/A"),
+                        115,252,95,2,WHITE);
+      drawS3ArenaFitted(hasHome?cached->recordHome:String("N/A"),
+                        365,252,95,2,WHITE);
+    } else {
+      tft.setTextColor(S3_MUTED);
+      tft.drawString("RECORDS PENDING",240,254,1);
+    }
+  } else if(view.showShots) {
+    tft.setTextColor(S3_MUTED);
+    tft.drawString("SOG",115,229,1);
+    tft.drawString("SOG",365,229,1);
+    tft.setTextColor(WHITE);
+    tft.drawString(g.awayShots>=0?String(g.awayShots):String("--"),
+                   115,250,4);
+    tft.drawString(g.homeShots>=0?String(g.homeShots):String("--"),
+                   365,250,4);
+
+    if(view.showSpecialTeams) {
+      const uint32_t now=millis();
+      const bool ppFresh=g.ppDataKnown && g.ppSide!=0 &&
+          uint32_t(now-g.ppUpdatedAt)<45000UL;
+      const bool enFresh=g.emptyNetKnown && g.emptyNetSide!=0 &&
+          uint32_t(now-g.emptyNetUpdatedAt)<45000UL;
+      if(ppFresh || enFresh) {
+        const String ppTeam=g.ppSide==1?g.home:g.away;
+        const String enTeam=g.emptyNetSide==3?String("BOTH"):
+                             g.emptyNetSide==1?g.home:g.away;
+        if(ppFresh && enFresh) {
+          drawS3ArenaFitted("PP "+ppTeam,240,237,130,2,0xFDA6);
+          drawS3ArenaFitted("EN "+enTeam,240,257,130,1,S3_AQUA);
+        } else if(ppFresh) {
+          drawS3ArenaFitted("POWER PLAY",240,237,132,2,0xFDA6);
+          drawS3ArenaFitted(ppTeam,240,257,132,2,WHITE);
+        } else {
+          drawS3ArenaFitted("EMPTY NET",240,237,132,2,S3_AQUA);
+          drawS3ArenaFitted(enTeam,240,257,132,2,WHITE);
+        }
+      }
+    } else if(view.phase==S3Broadcast::Phase::INTERMISSION) {
+      tft.setTextColor(S3_AQUA);
+      tft.drawString("INTERMISSION",240,245,1);
+    } else if(view.phase==S3Broadcast::Phase::FINAL) {
+      if(view.winnerSide) {
+        tft.setTextColor(S3_MUTED);
+        tft.drawString("WINNER",240,237,1);
+        drawS3ArenaFitted(view.winnerSide==2?g.away:g.home,
+                          240,254,129,2,WHITE);
+      } else {
+        tft.setTextColor(S3_MUTED);
+        tft.drawString("GAME COMPLETE",240,245,1);
+      }
+    }
+  } else {
+    tft.setTextColor(S3_MUTED);
+    tft.drawString("AWAITING NHL UPDATE",240,245,1);
   }
   tft.setTextDatum(TL_DATUM);
 }
