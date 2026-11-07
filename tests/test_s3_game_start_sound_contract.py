@@ -15,3 +15,7 @@ assert '"/api/audio/gamestart-select"' in ui
 assert '"Use for game start"' in ui
 assert 'Game-start audio: ' in ui
 print("PASS game start WAV contract")
+assert 'id="rearFullStart"' in ui
+assert '$("rearFullStart").onclick=()=>fullPreview("start","home");' in ui
+assert 'startGameStartSound(previewRow.sequence);' in s
+assert 'audioStarted = previewRow.audio == GameEventLog::Audio::STARTED;' in s
