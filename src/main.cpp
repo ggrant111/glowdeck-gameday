@@ -3232,6 +3232,10 @@ void drawS3ArenaReadout(const Game &g,uint8_t mask=S3BroadcastFrame::BOTH) {
 
   const S3Broadcast::View view=S3Broadcast::resolve(
       g.state.c_str(),g.intermission,g.awayScore,g.homeScore);
+  // Bottom-only refreshes must not inherit TL_DATUM from the last frame.
+  // Set deterministic font state for either independent dirty rectangle.
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextSize(1);
   if(mask&S3BroadcastFrame::TOP){
   String headline;
   String badge;
