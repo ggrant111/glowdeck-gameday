@@ -16,6 +16,7 @@
 #include "S3ArenaBackground.h"
 #include "S3BroadcastGameState.h"
 #include "S3BroadcastDataPolicy.h"
+#include "S3BroadcastFramePolicy.h"
 #else
 #include <XPT2046_Touchscreen.h>
 #endif
@@ -208,6 +209,9 @@ S3ArenaBackground s3Arena;
 #if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
 uint32_t s3BroadcastRenderedGameId=0;
 uint8_t s3BroadcastRenderedStatus=0;
+S3BroadcastFrame::Snapshot s3BroadcastLastFrame;
+uint32_t s3PerfReportedAt=0, s3PerfFullFrames=0, s3PerfPartialFrames=0;
+uint32_t s3PerfSkippedFrames=0, s3PerfTransferBytes=0, s3PerfMaxTransferMs=0;
 #endif
 GoalGifPlayer goalGif;
 uint32_t gifOverlayStart = 0;
@@ -3175,15 +3179,60 @@ void drawS3ArenaStatusLine(const Game &g,const String &label,
 // All dynamic pixels stay inside the two dirty rectangles. They are restored
 // from the cached RGB565 image before drawing, so FUT->LIVE->INT->FINAL never
 // leaks stale VS, PP/EN, clocks or shots into another broadcast state.
-void drawS3ArenaReadout(const Game &g) {
+// Track only the data that appears in each of the two existing LCD regions.
+// All fields are hashed in place; this is no additional canvas or heap copy.
+S3BroadcastFrame::Snapshot captureS3ArenaFrame(const Game &g,uint32_t now){
+  S3BroadcastFrame::Snapshot frame;
+  frame.valid=true;
+  frame.gameId=g.id;
+  uint32_t top=S3BroadcastFrame::kFNVOffset;
+  S3BroadcastFrame::mixText(top,g.state.c_str());
+  S3BroadcastFrame::mixText(top,g.startUTC.c_str());
+  S3BroadcastFrame::mixText(top,g.clock.c_str());
+  S3BroadcastFrame::mixText(top,g.periodType.c_str());
+  S3BroadcastFrame::mixNumber(top,g.period);
+  S3BroadcastFrame::mixNumber(top,g.intermission);
+  S3BroadcastFrame::mixNumber(top,uint32_t(g.awayScore));
+  S3BroadcastFrame::mixNumber(top,uint32_t(g.homeScore));
+  frame.top=top;
+
+  uint32_t bottom=S3BroadcastFrame::kFNVOffset;
+  const S3Broadcast::Phase phase=S3Broadcast::classify(
+      g.state.c_str(),g.intermission);
+  const S3Broadcast::SpecialTeams special=S3Broadcast::specialTeams(
+      phase,g.ppDataKnown,g.ppSide,g.ppUpdatedAt,
+      g.emptyNetKnown,g.emptyNetSide,g.emptyNetUpdatedAt,now);
+  S3BroadcastFrame::mixNumber(bottom,uint32_t(phase));
+  S3BroadcastFrame::mixNumber(bottom,uint32_t(g.awayShots));
+  S3BroadcastFrame::mixNumber(bottom,uint32_t(g.homeShots));
+  S3BroadcastFrame::mixNumber(bottom,special.signature());
+  if(phase==S3Broadcast::Phase::UPCOMING){
+    // Pregame records can arrive via the existing stats prefetch without
+    // a new NHL scoreboard. Only records for this game may influence the key.
+    for(uint8_t i=0;i<gameCount;++i){
+      if(games[i].id==g.id && carouselStats[i].id==g.id &&
+         carouselStats[i].loaded){
+        S3BroadcastFrame::mixText(bottom,carouselStats[i].recordAway.c_str());
+        S3BroadcastFrame::mixText(bottom,carouselStats[i].recordHome.c_str());
+        break;
+      }
+    }
+  }
+  frame.bottom=bottom;
+  return frame;
+}
+void drawS3ArenaReadout(const Game &g,uint8_t mask=S3BroadcastFrame::BOTH) {
   if(!s3Arena.ready())return;
   const auto top=S3NativeLayout::kBroadcastReadoutTop;
   const auto bottom=S3NativeLayout::kBroadcastReadoutBottom;
-  s3Arena.restoreRegion(tft,top.x,top.y,top.w,top.h);
-  s3Arena.restoreRegion(tft,bottom.x,bottom.y,bottom.w,bottom.h);
+  if(mask&S3BroadcastFrame::TOP)
+    s3Arena.restoreRegion(tft,top.x,top.y,top.w,top.h);
+  if(mask&S3BroadcastFrame::BOTTOM)
+    s3Arena.restoreRegion(tft,bottom.x,bottom.y,bottom.w,bottom.h);
 
   const S3Broadcast::View view=S3Broadcast::resolve(
       g.state.c_str(),g.intermission,g.awayScore,g.homeScore);
+  if(mask&S3BroadcastFrame::TOP){
   String headline;
   String badge;
   uint16_t badgeColor=S3_AQUA;
@@ -3247,7 +3296,9 @@ void drawS3ArenaReadout(const Game &g) {
     tft.drawString(view.phase==S3Broadcast::Phase::UPCOMING?"VS":"NHL",
                    240,147,4);
   }
+  } // TOP only: clock, header and score
 
+  if(mask&S3BroadcastFrame::BOTTOM){
   if(view.showSeasonRecord) {
     // Pregame never displays meaningless SOG/PP "--" placeholders. Reuse
     // the existing per-game NHL season-record cache, with no new requests.
@@ -3325,15 +3376,19 @@ void drawS3ArenaReadout(const Game &g) {
     tft.setTextColor(S3_MUTED);
     tft.drawString("AWAITING NHL UPDATE",240,245,1);
   }
+  } // BOTTOM only: season records, SOG and verified PP/EN
+  if(mask&S3BroadcastFrame::TOP){
   // Entire main scoreboard now opens Stats with a short tap. Keep this
   // low-contrast hint inside the existing top dirty rectangle.
   tft.setTextColor(S3_MUTED);
   tft.drawString("TAP FOR STATS",240,195,1);
+  }
   const S3Broadcast::SpecialTeams visibleStatus=S3Broadcast::specialTeams(
       view.phase,g.ppDataKnown,g.ppSide,g.ppUpdatedAt,
       g.emptyNetKnown,g.emptyNetSide,g.emptyNetUpdatedAt,millis());
   s3BroadcastRenderedGameId=g.id;
   s3BroadcastRenderedStatus=visibleStatus.signature();
+  s3BroadcastLastFrame=captureS3ArenaFrame(g,millis());
   tft.setTextDatum(TL_DATUM);
 }
 // A freestanding follow star for the de-boxed Phase 6B.2A broadcast page.
@@ -5620,6 +5675,7 @@ void loop() {
 #ifdef GLOWDECK_WAVESHARE_S3
   bool displayChanged = false;
   bool s3ScoreOnlyFrame = false;
+  uint8_t s3PartialMask=S3BroadcastFrame::BOTH;
 #endif
   if (needsDraw) {
     partialLiveUpdate = false;
@@ -5652,26 +5708,57 @@ void loop() {
     if (tft.nativeLayout()) {
       const LiveCarousel::Page page=currentCarouselPage();
 #if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
-      if(s3Arena.ready())
-        drawS3ArenaReadout(games[page.kind==LiveCarousel::Kind::GAME
-                           ? page.index:featuredIndex % gameCount]);
-      else
+      if(s3Arena.ready()){
+        const Game &g=games[page.kind==LiveCarousel::Kind::GAME
+                            ? page.index:featuredIndex % gameCount];
+        const auto next=captureS3ArenaFrame(g,millis());
+        // A game switch always repaints logos/footer; it cannot be handled
+        // by readout-only rectangles. Ordinary updates use only changed bits.
+        if(S3BroadcastFrame::needsFullScene(s3BroadcastLastFrame,next)){
+          drawS3ArenaScoreboard(g);
+          displayChanged=true;
+        } else {
+          s3PartialMask=S3BroadcastFrame::changed(s3BroadcastLastFrame,next);
+          if(s3PartialMask){
+            drawS3ArenaReadout(g,s3PartialMask);
+            s3ScoreOnlyFrame=true;
+            displayChanged=true;
+          }else{
+            ++s3PerfSkippedFrames;
+          }
+        }
+      } else
 #endif
         drawS3Readout(games[page.kind==LiveCarousel::Kind::GAME
                            ? page.index:featuredIndex % gameCount]);
-      // Only opaque readout plates changed. Avoid retransmitting official
-      // NHL logos, header, gradient and footer navigation over the SPI bus.
-      s3ScoreOnlyFrame = true;
+      // Phase 6B.4: do not override the exact partial/full/unchanged
+      // decision made above. The Phase 5 fallback still uses both plates.
+#if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
+      if(!s3Arena.ready()){
+        s3ScoreOnlyFrame=true;
+        displayChanged=true;
+      }
+#else
+      s3ScoreOnlyFrame=true;
+      displayChanged=true;
+#endif
     } else {
       drawLiveReadout(games[featuredIndex % gameCount]);
+      displayChanged=true;
     }
-    displayChanged = true;
 #else
     drawLiveReadout(games[featuredIndex % gameCount]);
 #endif
   }
 #ifdef GLOWDECK_WAVESHARE_S3
   if (displayChanged) {
+    const uint32_t transferStarted=millis();
+    uint32_t bytesSent=S3BroadcastFrame::kFullBytes;
+    if(s3ScoreOnlyFrame && !overlayController.active())
+      bytesSent=s3Arena.ready()?
+          S3BroadcastFrame::transferBytes(s3PartialMask):
+          uint32_t(S3Raster::kClockScore.w*S3Raster::kClockScore.h*2+
+                   S3Raster::kShots.w*S3Raster::kShots.h*2);
     if (s3ScoreOnlyFrame && !overlayController.active()) {
       // Two small SPI transfers instead of the full 480x320 (~300 KiB).
       // Full redraws always transmit all pixels, so changing away from
@@ -5680,8 +5767,10 @@ void loop() {
       if(s3Arena.ready()){
         const auto top=S3NativeLayout::kBroadcastReadoutTop;
         const auto bottom=S3NativeLayout::kBroadcastReadoutBottom;
-        tft.presentRegion(top.x,top.y,top.w,top.h);
-        tft.presentRegion(bottom.x,bottom.y,bottom.w,bottom.h);
+        if(s3PartialMask&S3BroadcastFrame::TOP)
+          tft.presentRegion(top.x,top.y,top.w,top.h);
+        if(s3PartialMask&S3BroadcastFrame::BOTTOM)
+          tft.presentRegion(bottom.x,bottom.y,bottom.w,bottom.h);
       } else
 #endif
       {
@@ -5693,6 +5782,31 @@ void loop() {
     } else {
       tft.present();
     }
+#if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
+    if(s3Arena.ready()){
+      if(s3ScoreOnlyFrame)++s3PerfPartialFrames;
+      else ++s3PerfFullFrames;
+      s3PerfTransferBytes+=bytesSent;
+      const uint32_t elapsed=millis()-transferStarted;
+      if(elapsed>s3PerfMaxTransferMs)s3PerfMaxTransferMs=elapsed;
+      if(uint32_t(millis()-s3PerfReportedAt)>=60000UL){
+        Serial.printf("[S3 6B.4] full=%lu partial=%lu skipped=%lu SPI~%luB "
+                      "maxTransfer=%lums freePSRAM=%uB\n",
+                      (unsigned long)s3PerfFullFrames,
+                      (unsigned long)s3PerfPartialFrames,
+                      (unsigned long)s3PerfSkippedFrames,
+                      (unsigned long)s3PerfTransferBytes,
+                      (unsigned long)s3PerfMaxTransferMs,
+                      unsigned(ESP.getFreePsram()));
+        s3PerfReportedAt=millis();
+        s3PerfFullFrames=0;
+        s3PerfPartialFrames=0;
+        s3PerfSkippedFrames=0;
+        s3PerfTransferBytes=0;
+        s3PerfMaxTransferMs=0;
+      }
+    }
+#endif
   }
 #endif
   // Update one optional pregame conference record after the current frame
