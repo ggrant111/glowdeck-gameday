@@ -144,9 +144,10 @@ assert "drawFollowStar(g,399,24,S3_BG);" not in source
 # Accent bars and original dynamic labels remain outside the PNG.
 assert "tft.fillRoundRect(36,189,105,3,1,away);" in source
 assert "tft.fillRoundRect(339,189,105,3,1,home);" in source
-# Regression for reported 2/3 armed-game bug: the tiny "A" above the star
-# formerly reset text alignment to TL_DATUM. That leaked into footer text,
-# shifting GAMES and clipping SETUP on that slide, while others stayed centered.
+# Regression for the formerly shifted armed-game footer:
+# follow/arm drawing must preserve the caller's datum, and the new footer
+# must render its five icon-only controls at stable native pixel coordinates
+# without relying on the previous text alignment.
 star = source.split("void drawS3ArenaFollowStar(const Game &g)", 1)[1].split(
     "void drawS3ArenaScoreboard(const Game &g)", 1)[0]
 assert "const uint8_t previousDatum=tft.getTextDatum();" in star
@@ -157,14 +158,32 @@ footer = source.split("void drawS3ArenaScoreboard(const Game &g)", 1)[1].split(
     "drawS3ArenaReadout(g);", 1)[0]
 assert "drawS3ArenaFollowStar(g);" in footer
 footer = footer.split("drawS3ArenaFollowStar(g);", 1)[1]
-# Coordinates are relative to the display edges, not dependent on the
-# current text datum. Both are 16px inset and vertically center-aligned.
-assert 'tft.setTextDatum(ML_DATUM);\n  tft.drawString("GAMES",16,300,2);' in footer
-assert 'tft.setTextDatum(MR_DATUM);\n  tft.drawString("SETUP",464,300,2);' in footer
+assert 'GameDayIcons::Kind::GAMES,37,300,18' in footer
+assert 'GameDayIcons::Kind::PREVIOUS,120,300,20' in footer
+assert 'GameDayIcons::Kind::PLAY:' in footer
+assert 'GameDayIcons::Kind::PAUSE,240,301,20' in footer
+assert 'GameDayIcons::Kind::NEXT,360,300,20' in footer
+assert 'GameDayIcons::Kind::SETUP,443,300,20' in footer
 assert 'tft.setTextDatum(MC_DATUM);' in footer
-assert 'String(carouselPageCount()),240,300,1);' in footer
-assert footer.index('tft.setTextDatum(ML_DATUM);') < footer.index('tft.setTextDatum(MR_DATUM);')
-assert footer.index('tft.setTextDatum(MR_DATUM);') < footer.index('tft.setTextDatum(MC_DATUM);')
+assert 'String(carouselPageCount()),240,279,1);' in footer
 assert 'tft.setTextDatum(TL_DATUM);' in footer
+assert footer.index('tft.setTextDatum(MC_DATUM);') < footer.index('tft.setTextDatum(TL_DATUM);')
+# Check draw regions against the exact 480x320 S3 touch geometry, so
+# shifting an icon cannot silently leave its clickable area behind.
+layout = (ROOT / "include" / "S3NativeLayout.h").read_text()
+expected = [
+    ("kBroadcastGames", 0, 272, 75, 48, 37, 300),
+    ("kBroadcastPrev", 85, 272, 70, 48, 120, 300),
+    ("kBroadcastPause", 202, 272, 76, 48, 240, 301),
+    ("kBroadcastNext", 325, 272, 70, 48, 360, 300),
+    ("kBroadcastSettings", 405, 272, 75, 48, 443, 300),
+]
+for name, x, y, w, h, cx, cy in expected:
+    assert re.search(
+        rf"constexpr Rect {name}=\\{{{x},{y},{w},{h}\\}};", layout
+    ), name
+    assert x <= cx < x+w and y <= cy < y+h, name
+assert '"GAMES",16,300' not in footer
+assert '"SETUP",464,300' not in footer
 print(f"PASS Phase 6B.2A + stable armed/unarmed footer: 480x320 native RGB565, {len(compressed)} B compressed, "
       f"dark mean RGB={tuple(round(v,1) for v in mean)}, CRC={crc:08X}")
