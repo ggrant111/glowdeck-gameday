@@ -136,6 +136,10 @@ assert "extra_scripts = pre:scripts/generate_s3_arena.py" in config
 assert "-D GLOWDECK_S3_PHASE6_LIVE=1" in config
 assert "void drawS3ArenaFollowStar(const Game &g)" in source
 assert "drawS3ArenaFollowStar(g);" in source
+# Hero logos are 96px centered on native S3 plinths, not enlarged 80px rasters.
+assert "drawTeamLogo(tft,g.away,38,96,96);" in source
+assert "drawTeamLogo(tft,g.home,346,96,96);" in source
+assert source.index("drawTeamLogo(tft,g.home,346,96,96);") < source.index("tft.fillRoundRect(36,189,105,3,1,away);")
 assert "drawFollowStar(g,399,24,S3_BG);" not in source
 # Accent bars and original dynamic labels remain outside the PNG.
 assert "tft.fillRoundRect(36,189,105,3,1,away);" in source
