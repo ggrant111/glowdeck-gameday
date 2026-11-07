@@ -5270,6 +5270,7 @@ void registerRoutes() {
     doc["codecReset"]=p.codecReset;
     doc["codecMute"]=p.codecMute;
     doc["codecVolume"]=p.codecVolume;
+    doc["volumePercent"]=s3Audio.volume();
     doc["codecId1"]=p.codecId1;
     doc["codecId2"]=p.codecId2;
     doc["expanderRead"]=p.expanderRead;
