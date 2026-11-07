@@ -3345,17 +3345,57 @@ void pollNhl() {
       const bool started = CelebrationEngine::isPregame(watch.state) &&
           CelebrationEngine::isLive(observed.state.c_str());
       if (started || ended) {
-        const String representative = ended
-          ? (observed.homeScore > observed.awayScore ? observed.home : observed.away)
-          : DisplayEventPolicy::isFavorite(cfg.favoriteTeams, observed.away.c_str())
-            ? observed.away : observed.home;
-        const GameEventLog::Type type = started
-          ? GameEventLog::Type::GAME_START : GameEventLog::Type::FINAL_WIN;
-        const EventOverlay::Kind kind = started
-          ? EventOverlay::Kind::GAME_START : EventOverlay::Kind::FINAL_WIN;
-        GameEventLog::Entry &log=addGameEvent(observed,type,representative,0);
+        const bool secondaryArmed=isArmedGame(observed.id);
+        const String representative = secondaryArmed
+          ? (cfg.favoriteSide==0?observed.home:observed.away)
+          : ended
+            ? (observed.homeScore>observed.awayScore?
+               observed.home:observed.away)
+            : DisplayEventPolicy::isFavorite(cfg.favoriteTeams,
+                                             observed.away.c_str())
+              ? observed.away:observed.home;
+        const bool homeWon=observed.homeScore>observed.awayScore;
+        const bool favoredWon=cfg.favoriteSide==0?homeWon:!homeWon;
+        const CelebrationEngine::Event event=started
+            ? CelebrationEngine::Event::GAME_START
+            : secondaryArmed && !favoredWon
+              ? CelebrationEngine::Event::FINAL_LOSS
+              : CelebrationEngine::Event::FINAL_WIN;
+        const GameEventLog::Type logType=started
+            ? GameEventLog::Type::GAME_START
+            : event==CelebrationEngine::Event::FINAL_LOSS
+              ? GameEventLog::Type::FINAL_LOSS
+              : GameEventLog::Type::FINAL_WIN;
+        const EventOverlay::Kind kind=started
+            ? EventOverlay::Kind::GAME_START
+            : event==CelebrationEngine::Event::FINAL_LOSS
+              ? EventOverlay::Kind::FINAL_LOSS
+              : EventOverlay::Kind::FINAL_WIN;
+        GameEventLog::Entry &log=addGameEvent(observed,logType,representative,0);
         log.rear=GameEventLog::Rear::NOT_SELECTED;
         queueGameOverlay(&observed,kind,representative,log.sequence,true);
+        if(secondaryArmed){
+#ifdef GLOWDECK_WAVESHARE_S3
+          if(cfg.caseLedsEnabled && cfg.caseStart && started) {
+            caseLedFx.trigger(S3CaseLedPolicy::Side::HOME,
+                S3CaseLedPolicy::Event::GAME_START,
+                teamRgb(observed.home),millis());
+            caseLedFx.trigger(S3CaseLedPolicy::Side::AWAY,
+                S3CaseLedPolicy::Event::GAME_START,
+                teamRgb(observed.away),millis());
+          }else if(cfg.caseLedsEnabled && cfg.caseFinal && ended &&
+                   observed.homeScore!=observed.awayScore){
+            const bool winnerHome=observed.homeScore>observed.awayScore;
+            caseLedFx.trigger(winnerHome?S3CaseLedPolicy::Side::HOME:
+                S3CaseLedPolicy::Side::AWAY,S3CaseLedPolicy::Event::FINAL,
+                teamRgb(winnerHome?observed.home:observed.away),millis());
+          }
+#endif
+          if(started?cfg.wledGameStart:cfg.wledFinal)
+            queueArmedWledEvent(event,teamRgb(representative),
+                                log.sequence,WledZonePolicy::kUnknownSide,
+                                observed.id);
+        }
       }
     }
     EventOverlay::copy(watch.state,observed.state.c_str(),sizeof(watch.state));
@@ -3404,19 +3444,9 @@ void pollNhl() {
 #endif
       const bool enabled = transition == CelebrationEngine::Event::GAME_START
                            ? cfg.wledGameStart : cfg.wledFinal;
-      if (enabled) {
-        const uint32_t teamColor = teamRgb(fav);
-        if (wledActiveEvent == CelebrationEngine::Event::GOAL) {
-          queuedWledEvent = transition;
-          queuedWledColor = teamColor;
-          queuedWledLogSeq = logged.sequence;
-          for (uint8_t i = 0; i < MAX_WLED; ++i)
-            if (wledParticipates(i, transition))
-              markWledEvent(logged.sequence, i, GameEventLog::Wled::PENDING);
-        } else {
-          startWledEvent(transition, teamColor, logged.sequence);
-        }
-      }
+      if(enabled)queueArmedWledEvent(transition,teamRgb(fav),
+                                     logged.sequence,
+                                     WledZonePolicy::kUnknownSide,g->id);
     }
     previousHome = g->homeScore;
     previousAway = g->awayScore;
