@@ -6069,6 +6069,159 @@ void registerRoutes() {
     response["maxSegments"]=info.maxSegments;
     sendJson(response);
   });
+  server.on("/api/wled/segments", HTTP_GET, []() {
+    if(!authorized())return;
+    const String index=server.arg("slot");
+    if(index.length()!=1 || index[0]<'0' || index[0]>'7')
+      return errorResponse("Specify a WLED slot 0–7",400);
+    const uint8_t slot=uint8_t(index[0]-'0');
+    if(cfg.wled[slot].isEmpty())return errorResponse("Save a WLED IP first",400);
+    const String snapshot=getWledState(cfg.wled[slot]);
+    if(snapshot.isEmpty())return errorResponse("WLED controller offline or JSON unavailable",503);
+    DynamicJsonDocument filter(640);
+    JsonObject shape=filter["seg"][0].to<JsonObject>();
+    for(const char *k:{"id","start","stop","len","n","on","sel","fx","bri"})
+      shape[k]=true;
+    filter["on"]=true;
+    DynamicJsonDocument state(4608);
+    if(deserializeJson(state,snapshot,DeserializationOption::Filter(filter)))
+      return errorResponse("Unsupported WLED segment state",503);
+    DynamicJsonDocument response(3800);
+    response["ok"]=true;
+    response["slot"]=slot;
+    response["ip"]=cfg.wled[slot];
+    response["name"]=cfg.wledName[slot];
+    response["controllerOn"]=state["on"]|false;
+    response["mappingEnabled"]=cfg.wledZoneEnabled[slot];
+    response["maxManagedSegments"]=WledZonePolicy::kMaxSegments;
+    JsonArray rows=response.createNestedArray("segments");
+    JsonArray segments=state["seg"].as<JsonArray>();
+    for(uint8_t i=0;i<segments.size() &&
+        i<WledZonePolicy::kMaxSegments;++i){
+      JsonObject seg=segments[i];
+      const int id=seg["id"]|(int)i;
+      const int begin=seg["start"]|0;
+      int end=seg["stop"]|0;
+      if(end<=begin)end=begin+(seg["len"]|0);
+      if(!WledZonePolicy::validSegment(id)||end<=begin)continue;
+      JsonObject row=rows.createNestedObject();
+      row["id"]=id;row["start"]=begin;row["stop"]=end;
+      row["name"]=String(seg["n"]|String("Segment "+String(id)));
+      row["enabled"]=seg["on"]|true;
+      row["selected"]=seg["sel"]|false;
+      row["role"]=uint8_t(WledZonePolicy::role(cfg.wledZoneMap[slot],uint8_t(id)));
+    }
+    response["count"]=rows.size();
+    response["truncated"]=segments.size()>WledZonePolicy::kMaxSegments;
+    if(response.overflowed())
+      return errorResponse("Segment inventory exceeds device memory",503);
+    sendJson(response);
+  });
+  server.on("/api/wled/segment-config", HTTP_POST, []() {
+    if(!authorized())return;
+    const String raw=server.arg("plain");
+    if(raw.length()>1600)return errorResponse("Segment mapping request too large",400);
+    DynamicJsonDocument request(1900);
+    if(deserializeJson(request,raw))
+      return errorResponse("Invalid segment mapping JSON",400);
+    if(!request["slot"].is<int>() || !request["enabled"].is<bool>() ||
+       !request["roles"].is<JsonArray>())
+      return errorResponse("Supply slot, enabled, and roles array",400);
+    const int slot=request["slot"].as<int>();
+    if(!WledDiscoveryPolicy::validSlot(slot) || cfg.wled[slot].isEmpty())
+      return errorResponse("Configure a saved WLED controller first",400);
+    if(restoring[slot] || wledActiveEvent!=CelebrationEngine::Event::NONE)
+      return errorResponse("Stop celebration and restore lights before editing zones",409);
+    const bool enabled=request["enabled"].as<bool>();
+    JsonArray roles=request["roles"].as<JsonArray>();
+    if(roles.size()>WledZonePolicy::kMaxSegments)
+      return errorResponse("Maximum 16 segment roles",400);
+    uint32_t packed=0;
+    uint16_t used=0;
+    bool assigned=false;
+    for(JsonVariant item:roles){
+      if(!item["id"].is<int>()||!item["role"].is<int>())
+        return errorResponse("Each role needs integer id and role",400);
+      const int id=item["id"].as<int>(),role=item["role"].as<int>();
+      if(!WledZonePolicy::validSegment(id) ||
+         !WledZonePolicy::validRole(role) || (used & (1U<<id)))
+        return errorResponse("Invalid or repeated segment role",400);
+      used|=uint16_t(1U<<id);
+      packed=WledZonePolicy::assign(packed,uint8_t(id),
+                                   WledZonePolicy::Role(role));
+      if(role)assigned=true;
+    }
+    if(enabled&&!assigned)
+      return errorResponse("Assign at least one segment before enabling zone control",400);
+    cfg.wledZoneMap[slot]=packed;
+    cfg.wledZoneEnabled[slot]=enabled;
+    prefs.putUInt(("zoneMap"+String(slot)).c_str(),packed);
+    prefs.putBool(("zoneOn"+String(slot)).c_str(),enabled);
+    StaticJsonDocument<144> response;
+    response["ok"]=true;response["slot"]=slot;
+    response["enabled"]=enabled;response["assigned"]=__builtin_popcount(packed);
+    sendJson(response);
+  });
+  server.on("/api/wled/segment-test", HTTP_POST, []() {
+    if(!authorized())return;
+    StaticJsonDocument<128> request;
+    if(deserializeJson(request,server.arg("plain")) ||
+       !request["slot"].is<int>()||!request["id"].is<int>())
+      return errorResponse("Supply integer slot and segment ID",400);
+    const int slot=request["slot"].as<int>();
+    const int id=request["id"].as<int>();
+    if(!WledDiscoveryPolicy::validSlot(slot)||
+       !WledZonePolicy::validSegment(id)||cfg.wled[slot].isEmpty())
+      return errorResponse("Invalid saved controller or segment",400);
+    if(restoring[slot] || wledActiveEvent!=CelebrationEngine::Event::NONE)
+      return errorResponse("Finish WLED celebration/restore before segment test",409);
+    const String original=getWledState(cfg.wled[slot]);
+    if(original.isEmpty())
+      return errorResponse("Cannot snapshot WLED before identifying segment",503);
+    DynamicJsonDocument filter(512);
+    filter["on"]=true;
+    JsonObject shape=filter["seg"][0].to<JsonObject>();
+    for(const char *k:{"id","start","stop","len"})shape[k]=true;
+    DynamicJsonDocument state(3072);
+    if(deserializeJson(state,original,DeserializationOption::Filter(filter)))
+      return errorResponse("Cannot parse WLED segment list",503);
+    if(!(state["on"]|false))
+      return errorResponse("Switch this WLED device on first; segment preview will not wake unrelated LEDs",409);
+    bool exists=false;
+    JsonArray segs=state["seg"].as<JsonArray>();
+    for(uint8_t i=0;i<segs.size() && i<WledZonePolicy::kMaxSegments;++i){
+      JsonObject row=segs[i];
+      const int sid=row["id"]|(int)i;
+      const int begin=row["start"]|0;
+      const int end=row["stop"]|0;
+      if(sid==id && (end>begin||(row["len"]|0)>0)){exists=true;break;}
+    }
+    if(!exists)return errorResponse("Segment not present in current WLED layout",404);
+    DynamicJsonDocument command(256);
+    command["udpn"]["nn"]=true;command["transition"]=0;
+    JsonObject segment=command["seg"][0].to<JsonObject>();
+    segment["id"]=id;segment["on"]=true;segment["bri"]=110;
+    segment["fx"]=0;segment["pal"]=0;
+    JsonArray primary=segment["col"][0].to<JsonArray>();
+    primary.add(255);primary.add(255);primary.add(255);
+    String body;serializeJson(command,body);
+    savedState[slot]=original;
+    savedWledIp[slot]=cfg.wled[slot];
+    wledRestoreMapped[slot]=true; // preview always restores targeted segment
+    wledTouchedSegments[slot]=uint16_t(1U<<id);
+    wledEventOwner[slot]=0; // manual identify is not an NHL goal
+    restoring[slot]=true;
+    restoreRetries[slot]=0;
+    restoreAt[slot]=millis()+1800UL;
+    const bool applied=postWled(cfg.wled[slot],body);
+    if(!applied)restoreAt[slot]=millis();
+    wledDeviceResult[slot]=applied?"Identifying segment":"Segment test failed; restoring";
+    StaticJsonDocument<128> response;
+    response["ok"]=applied;
+    response["slot"]=slot;response["id"]=id;
+    response["durationMs"]=1800;
+    sendJson(response);
+  });
   server.on("/api/wled/preview", HTTP_POST, []() {
     if (!authorized()) return;
     StaticJsonDocument<256> request;
