@@ -9,7 +9,7 @@ static const char WEB_UI[] PROGMEM = R"GLOWDECK(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0a141c">
-<title>GlowDeck GameDay | CYD</title>
+<title>GlowDeck GameDay | Command Center</title>
 <style>
 :root{color-scheme:dark;--bg:#071117;--panel:#11232b;--panel2:#172e36;--edge:#2a4751;--primary:#31837a;--active:#66d6c0;--text:#f2f7f8;--muted:#aec2c8;--amber:#ffcc72;--danger:#f39c91;--shadow:0 15px 45px #0003}
 *{box-sizing:border-box}
@@ -102,26 +102,114 @@ header{padding:19px 17px}
 .row{grid-template-columns:1fr}
 }
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}button{transition:none}}
+/* Phase 7D – arena-inspired desktop/mobile command center.
+   Shared team palette accent, broadcast scoreboard, clear setup/test separation. */
+:root{--bg:#070e18;--panel:#101d2a;--panel2:#172b3b;--edge:#2b4052;--primary:#287a79;--active:#70d9e8;--text:#edf7fd;--muted:#a4b9c7;--amber:#f4c979;--shadow:0 12px 38px #020a14aa;--hud:#79d6eb}
+body{background:radial-gradient(ellipse 840px 370px at 70% -100px,#173c4b 0%,transparent 73%),linear-gradient(180deg,#081420 0%,#070e18 50%,#091521 100%);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+header{padding:24px clamp(17px,4vw,48px);background:linear-gradient(103deg,#0b2633,#101825 65%,#0b2331);border-bottom:1px solid #365068;position:relative}
+header:after{content:"";position:absolute;bottom:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--active),transparent 55%,#f2b86d)}
+.brandlock,.header-controls{display:flex;align-items:center;gap:15px}
+.brandmark{width:54px;height:54px;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:.95;transform:skew(-8deg);border:2px solid #76d5e2;background:linear-gradient(145deg,#204357,#0b2331);border-radius:12px;box-shadow:0 0 22px #4db6bf22}
+.brandmark span{font-size:19px;font-weight:950;letter-spacing:-.08em}
+.brandmark span:last-child{color:#7bdbdf}
+.brand-dot{font-size:9px;color:var(--amber);vertical-align:middle}
+.header-copy{margin:1px 0;font-size:12px;color:#acc7d1}
+.platform-tag{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:850;letter-spacing:.07em;border:1px solid #3a6572;background:#1b3946;padding:7px 11px;border-radius:99px;color:#beeef2;white-space:nowrap}
+main{max-width:1360px;grid-template-columns:225px minmax(0,1fr)}
+.tabs{background:linear-gradient(180deg,#10202d,#0b1b27);border:1px solid #314c5a;border-radius:16px}
+.tab{font-weight:680;min-height:53px;gap:10px}
+.tab.selected{background:linear-gradient(90deg,#234f61,#1c454e);border-color:#508b9a;box-shadow:inset 3px 0 #88e3ed}
+.nav-glyph{font-size:19px;line-height:1;width:23px;color:#82bfc9;text-align:center;flex:none}
+.tab.selected .nav-glyph{color:#fff}
+.nav-hint{margin-left:auto;font-size:9px;font-weight:800;letter-spacing:.08em;opacity:.65}
+.rail-footer{border-top:1px solid var(--edge);margin-top:7px;padding-top:15px}
+.card{background:linear-gradient(156deg,#142a3a,#0d1d2b 75%);border-color:#2c4657;border-radius:15px;box-shadow:0 7px 24px #0004}
+.card.hero{background:linear-gradient(117deg,#153449,#102836 53%,#0d1c29);border-color:#46768a;position:relative;overflow:hidden}
+.card.hero:after{content:"";position:absolute;pointer-events:none;inset:0;background:repeating-linear-gradient(0deg,transparent 0px,transparent 31px,#83c9de09 32px),linear-gradient(135deg,#78d4e40c,transparent 55%);opacity:.9}
+.card.hero>*{position:relative;z-index:1}
+.card.hero .kicker{color:#8ad8ed}
+.card h2{color:#f5faff}
+.stat{background:#0b1c2c;border-color:#274353}
+.stat b{color:#f2f9ff;font-variant-numeric:tabular-nums}
+.stat span{color:#9bb5c3}
+button{border-radius:9px;background:#1d3545;border-color:#416172}
+button:hover{background:#28485d;border-color:#74cede}
+button.primary,button.selected{background:linear-gradient(145deg,#246f75,#1c5a69);border-color:#64b5c1}
+input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
+:focus-visible{outline:3px solid #8ce9ef;outline-offset:3px}
+.section-intro{padding-top:8px}
+.section-intro h2{font-weight:850;letter-spacing:-.035em}
+.section-intro p{max-width:810px}
+.subnav{display:flex;flex-wrap:wrap;gap:8px;padding:11px;background:#0b1a28;border:1px solid var(--edge);border-radius:12px;margin:0 0 22px}
+.subnav button{min-height:38px;padding:7px 12px;background:transparent;border:1px solid transparent;font-size:12px;color:#b8d5dd}
+.subnav button:hover,.subnav button.active{background:#224151;border-color:#426778;color:#f1fdff}
+.portal-zone{scroll-margin-top:20px;margin:27px 0 32px}
+.zone-heading{display:flex;align-items:center;gap:14px;padding:0 0 13px;border-bottom:1px solid #34566a;margin:0 0 16px}
+.zone-heading h3{margin:0 0 2px;font-size:19px;letter-spacing:-.02em}
+.zone-heading p{margin:0;font-size:13px}
+.zone-number{flex:none;display:grid;place-items:center;width:39px;height:39px;border:1px solid #467d8b;background:#193649;color:#86dce7;border-radius:10px;font-weight:900;font-size:15px}
+.zone-heading .compact-link{margin-left:auto;min-height:36px;font-size:12px;white-space:nowrap}
+.lab-notice{display:flex;align-items:flex-start;gap:13px;padding:17px 20px;margin:0 0 19px;background:#122b3b;border:1px solid #437083;border-radius:13px}
+.lab-notice p{margin:5px 0 0;font-size:13px}
+.lab-status-dot{flex:none;width:12px;height:12px;background:#f5c56a;border:3px solid #624d2d;border-radius:50%;margin-top:6px}
+.lab-card{min-height:88px}
+.save-dock{position:sticky;bottom:12px;z-index:4;display:flex;align-items:center;justify-content:space-between;gap:15px;background:#142b3aed;backdrop-filter:blur(16px);border:1px solid #46788b;padding:12px 17px;border-radius:13px;box-shadow:0 12px 38px #0009}
+.save-indicator{color:#bdd3df;font-size:12px}
+.save-indicator.is-dirty{color:#fbd18b;font-weight:800}
+.legacy-save{display:none!important}
+.lab-card .actions{margin:7px 0}
+.lab-card button{min-height:40px}
+#audioLabProbe{white-space:pre-wrap}
+#lab-hardware .portal-zone{margin:0}
+#lab-hardware .card{margin-bottom:12px}
+.portal-zone [data-platform="s3"][hidden]{display:none!important}
+#customize .hint,#device .hint{border-left-color:#5c9caa}
+@media(max-width:850px){
+ .tabs{background:#091a27fa}
+ .tab{min-height:46px}
+ .tab .nav-hint{display:none}
+ .nav-glyph{font-size:16px;width:18px}
+ .portal-zone{scroll-margin-top:88px}
+ .save-dock{bottom:9px}
+}
+@media(max-width:650px){
+ header{padding:16px}
+ .top{align-items:flex-start;gap:10px}
+ .brandmark{width:39px;height:43px;min-width:39px}
+ .brandmark span{font-size:15px}
+ .brandlock{gap:9px}
+ .header-copy{display:none}
+ .header-controls{flex-direction:column;align-items:flex-end;gap:4px}
+ .platform-tag{font-size:9px;padding:4px 7px}
+ .status{font-size:10px;padding:5px 9px}
+ .zone-heading{flex-wrap:wrap;gap:9px}
+ .zone-heading .compact-link{margin-left:48px}
+ .subnav{overflow-x:auto;flex-wrap:nowrap;scrollbar-width:thin}
+ .subnav button{white-space:nowrap}
+ .save-dock{padding:10px 12px}
+ .save-dock button{white-space:nowrap}
+}
 </style>
 </head>
 <body>
 <header>
 <div class="top">
-<div><div class="eyebrow">GLOWDECK · GAME CENTER</div><h1>GameDay</h1><p>Every game. Your favorite moments. Your lights.</p></div>
-<div id="connection" class="status">Connecting</div>
+<div class="brandlock"><div class="brandmark" aria-hidden="true"><span>G</span><span>D</span></div>
+<div><div class="eyebrow">GLOWDECK <span class="brand-dot">◆</span> GAMEDAY</div>
+<h1>Command Center</h1><p class="header-copy">Broadcast control for every puck drop, goal and celebration.</p></div></div>
+<div class="header-controls"><span class="platform-tag" id="platformTag">DETECTING DEVICE</span><div id="connection" class="status">Connecting</div></div>
 </div>
 </header>
 <main>
 <nav class="tabs" aria-label="GameDay navigation">
-<div class="rail-note"><span class="kicker">CONTROL CENTER</span><p class="small">This device · your local network</p></div>
-<button class="tab selected" data-tab="dashboard" aria-current="page">Overview</button>
-<button class="tab" data-tab="games">Live games</button>
-<button class="tab" data-tab="display">Favorites &amp; alerts</button>
-<button class="tab" data-tab="devices">WLED celebrations</button>
-<button class="tab" data-tab="rear">Rear RGB LED</button>
-<button class="tab" data-tab="events">Activity</button>
-<button class="tab" data-tab="settings">Device settings</button>
-<button class="tab" data-tab="firmware">Firmware update</button>
+<div class="rail-note"><span class="kicker">GAME DAY CONTROL</span><p class="small">Your local command station</p></div>
+<button class="tab selected" data-tab="dashboard" aria-current="page"><span class="nav-glyph" aria-hidden="true">▦</span><span>Overview</span></button>
+<button class="tab" data-tab="games"><span class="nav-glyph" aria-hidden="true">◉</span><span>Live games</span></button>
+<button class="tab" data-tab="customize"><span class="nav-glyph" aria-hidden="true">◈</span><span>Customize</span><span class="nav-hint">SETUP</span></button>
+<button class="tab" data-tab="lab"><span class="nav-glyph" aria-hidden="true">⚡</span><span>Test Lab</span><span class="nav-hint">PREVIEW</span></button>
+<button class="tab" data-tab="device"><span class="nav-glyph" aria-hidden="true">⚙</span><span>Device</span></button>
+<button class="tab" data-tab="events"><span class="nav-glyph" aria-hidden="true">≡</span><span>Activity</span></button>
+<div class="rail-note rail-footer"><span class="kicker">LOCAL DEVICE</span><p class="small">Changes stay on this GameDay controller. No cloud account required.</p></div>
 </nav>
 <section id="dashboard" class="panel active">
 <div class="section-intro"><div class="eyebrow">LIVE CONTROL CENTER</div><h2>Your game day at a glance</h2><p>Scores, favorites and celebrations—without changing what your lights are following.</p></div>
@@ -498,6 +586,52 @@ header{padding:19px 17px}
 <p class="small muted">Initial installation still requires USB. This update control works only when you use the project's OTA-capable partition layout.</p></div>
 <div class="card"><h2>Troubleshooting</h2><p>For boot loops, first flash the basic diagnostic firmware in the documentation. Touch calibration can be started from the CYD's SETUP screen. Watch serial output at 115200 baud.</p>
 <div class="actions"><button id="reboot">Restart device</button></div></div>
+</section>
+<section id="customize" class="panel" aria-labelledby="customizeTitle">
+<div class="section-intro"><div class="eyebrow">MAKE GAMEDAY YOURS</div>
+<h2 id="customizeTitle">Customize the experience</h2>
+<p>Set what appears on screen, which games matter, and how your connected lights and speaker celebrate. Nothing on this page starts a test.</p></div>
+<div class="subnav" aria-label="Customize sections">
+<button type="button" data-jump="zone-favorites">Favorites</button>
+<button type="button" data-jump="zone-screen">Screen</button>
+<button type="button" data-jump="zone-wled">WLED</button>
+<button type="button" data-jump="zone-audio">Sound</button>
+<button type="button" data-jump="zone-hardware">On-device LEDs</button>
+</div>
+<div id="zone-favorites" class="portal-zone"><div class="zone-heading"><span class="zone-number">01</span><div><h3>Favorites &amp; following</h3><p>Choose priority teams and games without changing the armed WLED matchup.</p></div></div><div id="mount-favorites"></div></div>
+<div id="zone-screen" class="portal-zone"><div class="zone-heading"><span class="zone-number">02</span><div><h3>Scoreboard &amp; alerts</h3><p>Rotation, team logos, goal screen and game-day display preferences.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-screen">Screen tests</button></div><div id="mount-screen"></div></div>
+<div id="zone-wled" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>WLED celebrations</h3><p>Configure controllers, effects and event permissions.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-wled">Test WLED</button></div><div id="mount-wled"></div></div>
+<div id="zone-audio" class="portal-zone"><div class="zone-heading"><span class="zone-number">04</span><div><h3>Sound &amp; horns</h3><p>Enable the onboard horn, manage custom WAV sounds and adjust output level.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-audio">Audio tests</button></div><div id="mount-audio"></div></div>
+<div id="zone-hardware" class="portal-zone"><div class="zone-heading"><span class="zone-number">05</span><div><h3>On-device LED hardware</h3><p>CYD rear RGB or Waveshare S3 left/home and right/away case lighting.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-hardware">LED tests</button></div><div id="mount-hardware"></div></div>
+<div class="save-dock" role="region" aria-label="Save settings"><span class="save-indicator" id="customizeSaveState">Change a setting, then save to your device</span><button type="button" class="primary" id="portalSave">Save all settings</button></div>
+</section>
+<section id="lab" class="panel" aria-labelledby="labTitle">
+<div class="section-intro"><div class="eyebrow">SAFE PREVIEW &amp; DIAGNOSTICS</div>
+<h2 id="labTitle">Test Lab</h2>
+<p>One place to verify colors, sounds, screen events and connected lights. These are manual tests; they do not create an actual NHL score.</p></div>
+<div class="lab-notice"><span class="lab-status-dot" aria-hidden="true"></span><div><strong>Know what you're testing</strong><p>Screen and speaker previews are local. WLED previews send real commands to selected devices and restore previous states when supported. External case lights only respond after you enable their wiring.</p></div></div>
+<div class="subnav" aria-label="Test Lab sections">
+<button type="button" data-jump="lab-screen">Screen</button>
+<button type="button" data-jump="lab-audio">Audio</button>
+<button type="button" data-jump="lab-wled">WLED</button>
+<button type="button" data-jump="lab-hardware">LED hardware</button>
+<button type="button" data-jump="lab-full">Full celebration</button>
+</div>
+<div id="lab-screen" class="portal-zone"><div class="zone-heading"><span class="zone-number">01</span><div><h3>Screen &amp; scoreboard</h3><p>Preview NHL goal, power-play and final overlays without switching games.</p></div></div><div class="card lab-card" id="mount-lab-screen"></div></div>
+<div id="lab-audio" class="portal-zone" data-platform="s3"><div class="zone-heading"><span class="zone-number">02</span><div><h3>Speaker &amp; sound</h3><p>Hear the selected horn, verify the test tone, inspect ES8311 diagnostics.</p></div></div><div class="card lab-card" id="mount-lab-audio"></div></div>
+<div id="lab-wled" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>WLED controller tests</h3><p>Real color/effect commands are sent to opted-in controllers on your local network.</p></div></div><div id="mount-lab-wled"></div></div>
+<div id="lab-hardware" class="portal-zone"><div class="zone-heading"><span class="zone-number">04</span><div><h3>LED hardware channels</h3><p>Confirm individual outputs and team colors before live events.</p></div></div><div id="mount-lab-hardware"></div><div id="mount-lab-case" data-platform="s3"></div></div>
+<div id="lab-full" class="portal-zone"><div class="zone-heading"><span class="zone-number">05</span><div><h3>Full celebration rehearsal</h3><p>Check the combined celebration, then restore devices to their prior state.</p></div></div><div id="mount-lab-full"></div></div>
+</section>
+<section id="device" class="panel" aria-labelledby="deviceTitle">
+<div class="section-intro"><div class="eyebrow">SYSTEM &amp; MAINTENANCE</div>
+<h2 id="deviceTitle">Device settings</h2>
+<p>Wi-Fi, dashboard access, firmware, connection information and diagnostics. Your game-day effects live under Customize.</p></div>
+<div class="subnav" aria-label="Device sections"><button type="button" data-jump="zone-network">Network &amp; access</button><button type="button" data-jump="zone-maintenance">Firmware &amp; maintenance</button><button type="button" data-jump="zone-connection">Device information</button></div>
+<div id="zone-network" class="portal-zone"><div class="zone-heading"><span class="zone-number">01</span><div><h3>Network &amp; access</h3><p>Connect the device to your Wi-Fi and manage the local dashboard login.</p></div></div><div id="mount-network"></div></div>
+<div id="zone-maintenance" class="portal-zone"><div class="zone-heading"><span class="zone-number">02</span><div><h3>Firmware &amp; maintenance</h3><p>Install verified S3 or CYD firmware for your specific board and restart safely.</p></div></div><div id="mount-maintenance"></div></div>
+<div id="zone-connection" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>Connection information</h3><p>Useful identifiers and local network diagnostics.</p></div></div><div id="mount-connection"></div></div>
+<div class="save-dock" role="region" aria-label="Save device settings"><span class="save-indicator" id="deviceSaveState">Network and access changes need to be saved</span><button type="button" class="primary" id="deviceSave">Save device settings</button></div>
 </section>
 </main>
 <div id="notice" role="status" aria-live="polite"></div>
