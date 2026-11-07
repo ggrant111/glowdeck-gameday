@@ -3398,10 +3398,15 @@ void drawScoreboardHeader(const Game &g) {
                  gameIsFuture(g) ? "NEXT" : "FINAL", 81, 16, 2);
   if (gameIsLive(g)) tft.fillCircle(56, 16, 2, WHITE);
   drawFollowStar(g);
+  // All page controls are compact vector symbols, outside the live score.
+  GameDayIcons::draw(tft,GameDayIcons::Kind::PREVIOUS,184,16,12,WHITE);
+  GameDayIcons::draw(tft,carouselHold.paused?GameDayIcons::Kind::PLAY:
+      GameDayIcons::Kind::PAUSE,208,16,12,carouselHold.paused?ICE_BLUE:WHITE);
+  GameDayIcons::draw(tft,GameDayIcons::Kind::NEXT,232,16,12,WHITE);
   tft.setTextColor(ICE_TEXT, ARENA_BLACK);
-  tft.drawString(String(carouselSlide + 1) + "/" + String(carouselPageCount()), 228, 16, 2);
-  tft.setTextColor(WiFi.status() == WL_CONNECTED ? ICE_BLUE : ORANGE, ARENA_BLACK);
-  tft.drawString(WiFi.status() == WL_CONNECTED ? "WiFi" : "AP", 281, 16, 2);
+  tft.drawString(carouselHold.paused?"HELD":String(carouselSlide+1)+"/"+
+                 String(carouselPageCount()),265,16,1);
+  tft.fillCircle(291,16,3,WiFi.status()==WL_CONNECTED?ICE_BLUE:ORANGE);
   // Small menu glyph replaces the former three large navigation buttons.
   tft.drawFastHLine(305, 9, 10, WHITE);
   tft.drawFastHLine(305, 15, 10, WHITE);
@@ -3862,11 +3867,17 @@ void drawS3Nav(const char *label) {
   tft.fillRoundRect(prev.x,prev.y,prev.w,prev.h,8,S3_NAV);
   tft.fillRoundRect(next.x,next.y,next.w,next.h,8,S3_NAV);
   tft.fillRoundRect(all.x,all.y,all.w,all.h,8,S3_CARD);
-  tft.setTextColor(WHITE,S3_NAV);
-  tft.drawString("< PREV",prev.x+prev.w/2,prev.y+prev.h/2,2);
-  tft.drawString("NEXT >",next.x+next.w/2,next.y+next.h/2,2);
-  tft.setTextColor(S3_AQUA,S3_CARD);
-  tft.drawString(label,all.x+all.w/2,all.y+all.h/2,2);
+  GameDayIcons::draw(tft,GameDayIcons::Kind::PREVIOUS,
+      prev.x+prev.w/2,prev.y+prev.h/2,20,WHITE);
+  GameDayIcons::draw(tft,GameDayIcons::Kind::NEXT,
+      next.x+next.w/2,next.y+next.h/2,20,WHITE);
+  if(String(label)=="ALL GAMES" || String(label)=="GAMES")
+    GameDayIcons::draw(tft,GameDayIcons::Kind::GAMES,
+        all.x+all.w/2,all.y+all.h/2,20,S3_AQUA);
+  else {
+    tft.setTextColor(S3_AQUA,S3_CARD);
+    tft.drawString(label,all.x+all.w/2,all.y+all.h/2,2);
+  }
   tft.setTextDatum(TL_DATUM);
 }
 void drawS3Header(const Game *g,const String &title) {
@@ -4236,20 +4247,19 @@ void drawS3ArenaScoreboard(const Game &g) {
   drawS3ArenaFitted(g.home,392,204,100,4,WHITE);
   // Frameless follow/arm indicator, original touch target unchanged.
   drawS3ArenaFollowStar(g);
-  // Explicit footer datums ensure pixel-identical navigation on every
-  // slide, whether the game is followed, armed or unselected. Anchor both
-  // corner labels 16px from their respective screen edges.
-  tft.setTextColor(S3_MUTED);
-  tft.setTextDatum(ML_DATUM);
-  tft.drawString("GAMES",16,300,2);
-  tft.setTextDatum(MR_DATUM);
-  tft.drawString("SETUP",464,300,2);
-  if(carouselPageCount()>1) {
-    tft.setTextColor(S3_AQUA);
-    tft.setTextDatum(MC_DATUM);
-    tft.drawString(String(carouselSlide+1)+"/"+
-                   String(carouselPageCount()),240,300,1);
-  }
+  // Five native touch icons: games, previous, pause/play, next, setup.
+  // No logo, scoreboard or shot-stat region is covered by the controls.
+  GameDayIcons::draw(tft,GameDayIcons::Kind::GAMES,37,300,18,S3_MUTED);
+  GameDayIcons::draw(tft,GameDayIcons::Kind::PREVIOUS,120,300,20,S3_MUTED);
+  GameDayIcons::draw(tft,carouselHold.paused?GameDayIcons::Kind::PLAY:
+      GameDayIcons::Kind::PAUSE,240,301,20,
+      carouselHold.paused?S3_AQUA:WHITE);
+  GameDayIcons::draw(tft,GameDayIcons::Kind::NEXT,360,300,20,S3_MUTED);
+  GameDayIcons::draw(tft,GameDayIcons::Kind::SETUP,443,300,20,S3_MUTED);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(carouselHold.paused?S3_AQUA:S3_MUTED);
+  tft.drawString(carouselHold.paused?"HELD":String(carouselSlide+1)+"/"+
+                 String(carouselPageCount()),240,279,1);
   tft.setTextDatum(TL_DATUM);
   drawS3ArenaReadout(g);
 }
@@ -5237,6 +5247,15 @@ void handleS3NativeTouch(bool pressed) {
         s3ReturnFromSetup=Screen::LIVE;
         screen=Screen::SETUP;
         break;
+      case S3NativeLayout::Action::PREVIOUS:
+        if(carouselPageCount()>1)advanceCarousel(-1);
+        break;
+      case S3NativeLayout::Action::NEXT:
+        if(carouselPageCount()>1)advanceCarousel(1);
+        break;
+      case S3NativeLayout::Action::PAUSE:
+        toggleCarouselHold();
+        break;
       case S3NativeLayout::Action::DETAILS:
         if(page.index<gameCount)showDetail(games[page.index].id);
         break;
@@ -5357,7 +5376,16 @@ void handleTouch() {
                      gestureStartX,gestureStartY,gestureEndX,gestureEndY)) {
         const Game &g=games[currentCarouselPage().index];
         setGameFollow(g.id,!rearFollows(g.id));
-      } else if (gestureStartY <= 35 && gestureStartX >= 263) {
+      } else if (gestureStartY <= 32 && gestureStartX >= 177 &&
+                 gestureStartX <= 244 && showingGamePage()) {
+        if (gestureStartX < 196) {
+          if(carouselPageCount()>1)advanceCarousel(-1);
+        } else if (gestureStartX < 220) {
+          toggleCarouselHold();
+        } else if (carouselPageCount()>1) {
+          advanceCarousel(1);
+        }
+      } else if (gestureStartY <= 35 && gestureStartX >= 303) {
         screen = Screen::GAMES; // Menu is available on every slide.
       } else if (!showingSummaryPage() && carouselPageCount() > 1 &&
                  gestureStartY >= 213 && gestureStartX < 58) {
