@@ -6595,7 +6595,7 @@ void registerRoutes() {
     if(deserializeJson(request,server.arg("plain")))
       return errorResponse("Invalid sound selection JSON");
     if(!request.containsKey("source") || !request["source"].is<int>())
-      return errorResponse("Select an integer source 0 through 3");
+      return errorResponse("Select an integer source 0 through 4");
     const int source=request["source"].as<int>();
     if(source<0 || source>S3WavPolicy::kSlots)
       return errorResponse("Sound source out of range");
@@ -6641,7 +6641,7 @@ void registerRoutes() {
     if(deserializeJson(request,server.arg("plain")))
       return errorResponse("Invalid game-start sound JSON");
     if(!request.containsKey("source") || !request["source"].is<int>())
-      return errorResponse("Source must be an integer 0 through 3");
+      return errorResponse("Source must be an integer 0 through 4");
     const int source=request["source"].as<int>();
     if(source<0 || source>S3WavPolicy::kSlots)
       return errorResponse("Game-start slot out of range");
@@ -6662,7 +6662,7 @@ void registerRoutes() {
     if(deserializeJson(request,server.arg("plain")))
       return errorResponse("Invalid PP sound selection JSON");
     if(!request.containsKey("source") || !request["source"].is<int>())
-      return errorResponse("Select an integer source 0 through 3");
+      return errorResponse("Select an integer source 0 through 4");
     const int source=request["source"].as<int>();
     if(source<0 || source>S3WavPolicy::kSlots)
       return errorResponse("PP sound slot out of range");
