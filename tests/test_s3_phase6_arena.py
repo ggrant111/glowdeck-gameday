@@ -179,9 +179,8 @@ expected = [
     ("kBroadcastSettings", 405, 272, 75, 48, 443, 300),
 ]
 for name, x, y, w, h, cx, cy in expected:
-    assert re.search(
-        rf"constexpr Rect {name}=\\{{{x},{y},{w},{h}\\}};", layout
-    ), name
+    rect_declaration = f"constexpr Rect {name}=" + "{" + f"{x},{y},{w},{h}" + "};"
+    assert rect_declaration in layout, name
     assert x <= cx < x+w and y <= cy < y+h, name
 assert '"GAMES",16,300' not in footer
 assert '"SETUP",464,300' not in footer
