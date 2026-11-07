@@ -8204,7 +8204,7 @@ void tickEventAudit(){
     if(fingerprint==e->serialFingerprint)continue;
     e->serialFingerprint=fingerprint;
     Serial.printf("[EVENT AUDIT] #%lu type=%s game=%lu %s@%s team=%s"
-                  " score=%u-%u period=%u preview=%u rear=%s\\n",
+                  " score=%u-%u period=%u preview=%u rear=%s\n",
       (unsigned long)e->sequence,GameEventLog::typeLabel(e->type),
       (unsigned long)e->gameId,e->away,e->home,e->team,
       unsigned(e->awayScore),unsigned(e->homeScore),
@@ -8213,7 +8213,7 @@ void tickEventAudit(){
     Serial.printf("[EVENT AUDIT] #%lu audio=%s source=%u fallback=%u"
                   " frames=%lu/%lu elapsed=%lums peak=%lu retries=%lu"
                   " i2sCode=%ld readOffset=%lu volume=%u ampVerified=%u"
-                  " failure=%s speakerVerified=NO\\n",
+                  " failure=%s speakerVerified=NO\n",
       (unsigned long)e->sequence,GameEventLog::audioLabel(e->audio),
       unsigned(e->audioSource),unsigned(e->audioFallback),
       (unsigned long)e->audioFrames,(unsigned long)e->audioExpectedFrames,
@@ -8225,7 +8225,7 @@ void tickEventAudit(){
     for(uint8_t i=0;i<MAX_WLED;++i){
       if(e->wled[i]==GameEventLog::Wled::NA &&
          !(e->wledAcknowledgedMask&(1U<<i)))continue;
-      Serial.printf("[EVENT AUDIT] #%lu WLED%u=%s commandAccepted=%u\\n",
+      Serial.printf("[EVENT AUDIT] #%lu WLED%u=%s commandAccepted=%u\n",
         (unsigned long)e->sequence,unsigned(i+1),
         GameEventLog::wledLabel(e->wled[i]),
         unsigned((e->wledAcknowledgedMask&(1U<<i))!=0));
