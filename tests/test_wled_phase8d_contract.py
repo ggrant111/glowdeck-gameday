@@ -54,10 +54,20 @@ for required in (
   "if(sendWledDdpFrame(i,millis()))",
   "tickWledDdpStreams();",
   "if(!restoring[i] || wledDdp[i].active || !wledRestoreMapped[i]",
-  "if (!restoring[i] || wledDdp[i].active ||",
   "wledDdp[i].status=\"Disabled: controller IP changed\"",
 ):
     assert required in s,required
+
+# During native JSON phase updates, a controller owned by an active DDP
+# session must always be skipped. Check the relevant branch semantically,
+# rather than requiring one particular whitespace style in the condition.
+import re
+phase=s.split("void tickWledCelebrations() {",1)[1].split(
+    "// Compact score/state fingerprint:",1)[0]
+assert re.search(
+    r"if\s*\(\s*!restoring\[i\]\s*\|\|\s*wledDdp\[i\]\.active\s*\|\|",
+    phase), "DDP realtime controllers must not receive native JSON phase writes"
+assert 'wledEffectBody(savedState[i],wledActiveEvent,' in phase
 for route,method in (
   ("/api/wled/ddp","GET"),
   ("/api/wled/ddp/config","POST"),
