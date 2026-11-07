@@ -11,7 +11,7 @@ for required in (
  "kSceneCount=kEvents*kZones","kInherit=255",
  "kBlobBytes=3+kSceneCount*kSceneBytes+4",
  "kAllowedFx[]={0,2,3,12,17,23,28}",
- "duration==0 ||","scene.duration<=30",
+ "duration==0 ||","duration<=30",
  "if(scene.fx==kInherit||scene.colorMode==kAuto)",
  "Scene staged[kSceneCount]","if(want!=stored)return false",
  "for(uint8_t i=0;i<kSceneCount;++i)scenes[i]=staged[i]",
