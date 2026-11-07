@@ -1854,11 +1854,11 @@ void startHorn(uint32_t eventSequence=0) {
   // Phase 7A/7B: real goals use the persisted WAV choice. The preview is
   // independent and is deliberately allowed even when cfg.horn is OFF.
   if(!s3Audio.play()){
-    const bool busy=s3Audio.playing() || s3Audio.storageBusy();
+    const bool busy=s3Audio.busyOrCoolingDown();
     if(entry)entry->audio=busy?GameEventLog::Audio::BUSY:
                                     GameEventLog::Audio::UNAVAILABLE;
     Serial.printf("[Goal Horn] play refused: %s (selected slot=%u)\n",
-                  busy?"busy/uploading":s3Audio.error(),
+                  busy?"busy, cooldown or uploading":s3Audio.error(),
                   unsigned(source));
     return;
   }
