@@ -12,7 +12,9 @@
    The live check reports LED count, chunk count and an actionable issue if
    setup cannot proceed. This check sends no pixel data or WLED commands.
 3. Pick **Both teams · entire strip (recommended)** for a straightforward
-   strip. Home-only and Away-only are available. If zone roles already exist,
+   strip. The triggering NHL team's primary color is the default for goals,
+   power plays, starts and finishes; white requires an explicit scene setting.
+   Home-only and Away-only are available. If zone roles already exist,
    **Keep my existing segment assignments** is the default.
 4. Pick 10, 15, or 20 FPS. For 1,000+ pixels, 10 FPS is recommended; the
    saved FPS remains selected for previously configured controllers.
