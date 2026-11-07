@@ -11,11 +11,11 @@ each existing segment to one of three celebration zones.
 
 - **HOME** — only home goals / home PP; matching home team color.
 - **AWAY** — only away goals / away PP; matching away team color.
-- **NEUTRAL** — optional white goal accents or soft PP pulses for both teams.
+- **NEUTRAL** — either team's goals and power plays use the triggering team's primary color by default. An explicitly configured White scene remains white.
 - **UNASSIGNED** — **never intentionally modified** by mapped GameDay effects.
 
 For GAME START and FINAL, all assigned zones can participate; HOME and
-AWAY use their respective NHL team's primary color, NEUTRAL uses white.
+AWAY use their respective NHL team's primary color; NEUTRAL uses the triggering/event team's color by default.
 The NHL arm/goal filter remains exactly the same: only the armed game
 triggers WLED and its configured team-side restrictions still apply.
 
