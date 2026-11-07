@@ -7753,11 +7753,12 @@ void registerRoutes() {
                                        overlayKind, previewTeam, previewRow.sequence);
     // Full rehearsal can exercise the goal horn OR PP announcement, while
     // remaining a PREVIEW event that changes no NHL eligibility or follow state.
-    if(combined && event == CelebrationEngine::Event::GOAL)
+    if (combined && event == CelebrationEngine::Event::GOAL) {
       startHorn(previewRow.sequence);
-    else if(combined && event == CelebrationEngine::Event::POWER_PLAY)
+    } else if (combined && event == CelebrationEngine::Event::POWER_PLAY) {
       startPowerPlaySound(previewRow.sequence);
-    audioStarted=previewRow.audio==GameEventLog::Audio::STARTED;
+    }
+    audioStarted = previewRow.audio == GameEventLog::Audio::STARTED;
     StaticJsonDocument<512> response;
     response["event"] = CelebrationEngine::label(wledActiveEvent);
     response["devices"] = wledEligibleCount(event == CelebrationEngine::Event::NONE
