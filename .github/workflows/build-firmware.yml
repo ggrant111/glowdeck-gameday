@@ -159,6 +159,8 @@ jobs:
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_wled_phase8d_ddp.cpp -o /tmp/wled8d
           /tmp/wled8d
           python tests/test_wled_phase8d_contract.py
+      - name: Test WLED Phase 8E guided Quick Setup, safety and usability
+        run: python tests/test_wled_phase8e_quick_setup_contract.py
       - name: Test S3 Phase 5 framebuffer and dirty-region geometry
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_raster_geometry.cpp -o /tmp/glowdeck-s3-raster-test
