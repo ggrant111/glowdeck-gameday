@@ -31,7 +31,7 @@ for required in (
   "bool prepareWledDdp(","bool sendWledDdpFrame(",
   "bool releaseWledDdp(","void tickWledDdpStreams()",
   "if(info.live||info.rgbw||info.ledCount>WledDdpPolicy::kMaxPixels)",
-  "if(!cfg.wledDdpEnabled[slot]",
+  "!cfg.wledDdpEnabled[slot]",
   "event==CelebrationEngine::Event::POWER_PLAY",
   "WledDdpPolicy::validate(layout,uint8_t(event),scorerSide)",
   'wledDdp[slot].status="Native JSON (different zone durations)"',
