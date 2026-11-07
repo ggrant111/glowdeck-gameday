@@ -503,14 +503,14 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <div class="toggle" style="margin-top:13px"><input id="wledFinal" type="checkbox"><label for="wledFinal">Final win/loss effects</label></div>
 <p class="small muted">Goal priority overrides power-play effects, then the pulse resumes if the advantage is still active. When an effect ends, each controller returns to its previous WLED state. WLED's own UDP broadcasting is suppressed for these commands so non-participating devices are not accidentally included.</p>
 </div>
-<div class="card"><h2>Discover &amp; connect WLED devices</h2>
-<p>Find WLED controllers on this Wi-Fi network, verify their identity and choose which ones participate. Up to eight saved devices. Existing configured devices are retained; discovered devices are never enabled automatically.</p>
+<div class="card"><h2>Find &amp; add WLED devices</h2>
+<p>Connect up to eight WLED controllers. Select <strong>Find WLED devices</strong> to look for controllers advertising themselves on your local network, then choose <strong>Add to GameDay</strong> and <strong>Save settings</strong>. If a device is not found, enter its IP below. Nothing is enabled automatically.</p>
 <div class="actions">
-<button type="button" id="wledScan">Scan Wi-Fi for WLED</button>
+<button type="button" class="primary" id="wledScan">Find WLED devices</button>
 <input type="text" id="wledManualIp" inputmode="decimal" placeholder="Manual IPv4 · 192.168.1.71" aria-label="Manual WLED local IP address">
 <button type="button" id="wledManualCheck">Verify IP</button>
 </div>
-<p class="small muted" id="wledScanStatus" role="status">No discovery run yet. WLED must be on the same Wi-Fi subnet; manual entry remains available.</p>
+<p class="small muted" id="wledScanStatus" role="status">Ready to search. WLED and GameDay must be on the same local network with mDNS discovery allowed; you can always enter an IP manually.</p>
 <div id="wledDiscovered" aria-live="polite"></div>
 </div>
 <div class="card"><h2>Saved WLED controllers</h2>
@@ -728,7 +728,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 </div>
 <div id="zone-favorites" class="portal-zone"><div class="zone-heading"><span class="zone-number">01</span><div><h3>Favorites &amp; following</h3><p>Choose priority teams and games without changing the armed WLED matchup.</p></div></div><div id="mount-favorites"></div></div>
 <div id="zone-screen" class="portal-zone"><div class="zone-heading"><span class="zone-number">02</span><div><h3>Scoreboard &amp; alerts</h3><p>Rotation, team logos, goal screen and game-day display preferences.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-screen">Screen tests</button></div><div id="mount-screen"></div></div>
-<div id="zone-wled" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>WLED celebrations</h3><p>Configure controllers, effects and event permissions.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-wled">Test WLED</button></div><div id="mount-wled"></div></div>
+<div id="zone-wled" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>WLED lights &amp; celebrations</h3><p>Find and add controllers, set their effects, and enable optional real-time streaming.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-wled">Test WLED</button></div><div id="mount-wled"></div></div>
 <div id="zone-audio" class="portal-zone"><div class="zone-heading"><span class="zone-number">04</span><div><h3>Sound &amp; horns</h3><p>Enable the onboard horn, manage custom WAV sounds and adjust output level.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-audio">Audio tests</button></div><div id="mount-audio"></div></div>
 <div id="zone-hardware" class="portal-zone"><div class="zone-heading"><span class="zone-number">05</span><div><h3>On-device LED hardware</h3><p>CYD rear RGB or Waveshare S3 left/home and right/away case lighting.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-hardware">LED tests</button></div><div id="mount-hardware"></div></div>
 <div class="save-dock" role="region" aria-label="Save shared settings"><span class="save-indicator" id="customizeSaveState">Display, WLED, horn and CYD options save together. Volume, WAV library, favorites and case LEDs have their own Apply controls.</span><button type="button" class="primary" id="portalSave">Save settings</button></div>
@@ -824,7 +824,9 @@ function mountPortalModules(){
   moveCard("overlayEnabled","mount-screen");
   place("s3GoalGifCard","mount-screen");
 
-  // CELEBRATIONS: preferences are not simulations.
+  // CELEBRATIONS: discovery must be visibly mounted before saved devices.
+  // Phase 7D previously left this card in the hidden #devices legacy panel.
+  moveCard("wledScan","mount-wled");
   moveCard("wledGoalStyle","mount-wled");
   moveCard("deviceList","mount-wled");
   place("s3AudioCard","mount-audio");
@@ -1512,7 +1514,7 @@ function renderDiscoveredWled(report){
     const name=document.createElement("strong");
     name.textContent=device.name||"WLED";
     const state=document.createElement("span");state.className="small muted";
-    state.textContent=device.online?"Verified WLED":"Offline / not verified";
+    state.textContent=device.online?"WLED found":"Offline / not verified";
     header.append(name,state);row.append(header);
     const detail=document.createElement("p");detail.className="small muted";
     detail.textContent=device.ip+" · "+
@@ -1529,9 +1531,12 @@ function renderDiscoveredWled(report){
     host.append(row);
   });
   $("wledScanStatus").textContent=report.scanning?
-    "Checking local WLEDs "+(report.checked||0)+" / "+(report.candidateCount||0)+"…":
+    "Searching WLED devices "+(report.checked||0)+" / "+(report.candidateCount||0)+"…":
     report.complete?
-      (report.found||0)+" verified device(s) · "+(report.error||"Scan complete"):
+      (report.found||0)+" WLED device(s) found. "+
+      ((report.found||0)?"Select Add to GameDay, then Save settings.":
+        "If your device isn't listed, enter its IP manually or check mDNS on your Wi-Fi.")+
+      (report.error?" "+report.error:""):
       "Ready to discover. "+(report.error||"");
 }
 $("wledScan").onclick=()=>perform(async()=>{
