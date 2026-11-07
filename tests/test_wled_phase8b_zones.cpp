@@ -49,8 +49,12 @@ int main(){
   const uint32_t home=0x135724,away=0xA05912;
   assert(zoneColor(HOME,1,home,home,away)==home);
   assert(zoneColor(AWAY,1,away,home,away)==away);
-  assert(zoneColor(NEUTRAL,1,home,home,away)==0xFFFFFF);
-  assert(zoneColor(NEUTRAL,2,home,home,away)==0xAABBC8);
+  // Neutral / "Both teams" strips take the event team's primary color.
+  // This applies to native JSON and DDP, which share zoneColor().
+  for(uint8_t event=1;event<=5;++event){
+    assert(zoneColor(NEUTRAL,event,home,home,away)==home);
+    assert(zoneColor(NEUTRAL,event,away,home,away)==away);
+  }
   assert(zoneColor(HOME,3,away,home,away)==home);
   assert(zoneColor(AWAY,3,home,home,away)==away);
   assert(zoneColor(HOME,4,away,home,away)==home);
