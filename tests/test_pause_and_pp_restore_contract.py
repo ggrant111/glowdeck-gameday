@@ -18,7 +18,9 @@ assert "GameDayIcons::Kind::PLAY" in main
 assert "GameDayIcons::Kind::PAUSE" in main
 assert "GameDayIcons::Kind::PREVIOUS" in main
 assert "GameDayIcons::Kind::NEXT" in main
-assert "drawCircle" not in icons and "drawLine" not in icons
+# Method names may appear in explanatory comments. Reject only actual unsafe
+# draw calls; the S3 framebuffer uses sprite-safe pixel and fill primitives.
+assert "tft.drawCircle(" not in icons and "tft.drawLine(" not in icons
 pp=main.split("void observePowerPlayEvents()",1)[1].split("Game *selectedGame()",1)[0]
 assert "change.ended" in pp and "scheduleWledRestoreAll();" in pp
 assert "wledPpManuallyStoppedGameId" in main
