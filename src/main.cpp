@@ -1892,13 +1892,41 @@ String wledRestoreBody(const String &original) {
   return body;
 }
 
+// 8C scenes are only evaluated AFTER the existing NHL arm/role policy.
+const WledScenePolicy::Scene &wledScene(uint8_t slot,
+    CelebrationEngine::Event event,WledZonePolicy::Role role){
+  static const WledScenePolicy::Scene fallback;
+  const int index=WledScenePolicy::index(uint8_t(event),uint8_t(role));
+  return slot<MAX_WLED && index>=0?
+    cfg.wledScenes[slot][index]:fallback;
+}
+uint32_t wledSceneDuration(uint8_t slot,
+    CelebrationEngine::Event event,WledZonePolicy::Role role){
+  return WledScenePolicy::durationMs(wledScene(slot,event,role),
+    uint8_t(event),CelebrationEngine::duration(event,cfg.seconds));
+}
+uint32_t wledSceneMaxDuration(uint8_t slot,
+     CelebrationEngine::Event event,uint16_t mask){
+  const uint32_t legacy=CelebrationEngine::duration(event,cfg.seconds);
+  if(!cfg.wledZoneEnabled[slot])return legacy;
+  uint32_t longest=0;
+  for(uint8_t id=0;id<WledZonePolicy::kMaxSegments;++id){
+    if(!(mask&(uint16_t(1U)<<id)))continue;
+    const WledZonePolicy::Role role=
+      WledZonePolicy::role(cfg.wledZoneMap[slot],id);
+    const uint32_t duration=wledSceneDuration(slot,event,role);
+    if(duration>longest)longest=duration;
+  }
+  return longest;
+}
+
 // Native JSON effects always target WLED's EXISTING segment IDs.
 // When mapping is enabled there is intentionally NO legacy segment-0 fallback.
 // No start/stop/len/sel fields are written: this never reshapes WLED segments.
 String wledEffectBody(const String &snapshot,
                       CelebrationEngine::Event event,uint32_t color,
                       uint8_t phase,uint8_t slot,uint8_t scorerSide,
-                      uint16_t &touched) {
+                      uint16_t &touched,uint16_t skipSegments=0) {
   touched=0;
   DynamicJsonDocument filter(384);
   filter["on"]=true;
@@ -1938,15 +1966,25 @@ String wledEffectBody(const String &snapshot,
        (stop<=first && len<=0))continue;
     if(!WledZonePolicy::target(mapped,cfg.wledZoneMap[slot],uint8_t(id),
          uint8_t(event),scorerSide))continue;
+    if(mapped && (skipSegments&(uint16_t(1U)<<id)))continue;
     const WledZonePolicy::Role zone=
       WledZonePolicy::role(cfg.wledZoneMap[slot],uint8_t(id));
-    const uint32_t rgb=mapped?
+    const WledScenePolicy::Scene &scene=wledScene(slot,event,zone);
+    const CelebrationEngine::Effect chosen=mapped?
+        WledScenePolicy::effect(scene,effect):effect;
+    const uint32_t defaultRgb=mapped?
         WledZonePolicy::zoneColor(zone,uint8_t(event),color,homeRgb,awayRgb):
         color;
+    const uint32_t zoneTeamRgb=zone==WledZonePolicy::HOME?homeRgb:
+       zone==WledZonePolicy::AWAY?awayRgb:color;
+    const uint32_t rgb=mapped?
+        WledScenePolicy::rgb(scene,defaultRgb,zoneTeamRgb):color;
     JsonObject out=segments.createNestedObject();
     out["id"]=id;out["on"]=true;
-    if(mapped)out["bri"]=cfg.brightness; // segment only, not global
-    out["fx"]=effect.fx;out["sx"]=effect.speed;out["ix"]=effect.intensity;
+    if(mapped)out["bri"]=cfg.brightness; // original 8B default
+    if(mapped && scene.fx!=WledScenePolicy::kInherit)
+      out["bri"]=scene.brightness;
+    out["fx"]=chosen.fx;out["sx"]=chosen.speed;out["ix"]=chosen.intensity;
     out["pal"]=0;
     JsonArray cols=out.createNestedArray("col");
     JsonArray primary=cols.createNestedArray();
