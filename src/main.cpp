@@ -7313,6 +7313,9 @@ void registerRoutes() {
                         previewType, previewTeam);
     bool wledStarted = false, rearStarted = false, overlayStarted = false;
     if (event == CelebrationEngine::Event::NONE) {
+      // The ordinary WLED Stop & restore button must not restart the same PP
+      // when its former 30-second suppression interval expires.
+      wledPpManuallyStoppedGameId=selectedGameId;
       wledSuppressPpUntil = millis() + 30000UL;
       scheduleWledRestoreAll();
       tickRestores();
