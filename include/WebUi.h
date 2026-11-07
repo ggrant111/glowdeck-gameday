@@ -265,7 +265,15 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 .wled-scene-field select{width:100%}
 .wled-scene-field input[type=color]{width:100%;height:40px;padding:3px}
 @media(max-width:620px){.wled-scene-builder{padding:10px}
-  .wled-scene-grid{grid-template-columns:minmax(0,1fr)}}</style>
+  .wled-scene-grid{grid-template-columns:minmax(0,1fr)}}/* Phase 8D — optional exclusive DDP controls, not a second dashboard. */
+.wled-ddp-host{margin:5px 0 14px}
+.wled-ddp-panel{padding:15px;border:1px solid #466a7c;border-radius:12px;
+  background:linear-gradient(140deg,#102b39,#0c1d29)}
+.wled-ddp-panel h4{margin:0 0 7px;color:#bcecf5;font-size:17px}
+.wled-ddp-panel .wled-scene-warning{margin:12px 0}
+#wledDdpTestCard{border-left:3px solid #6bd5df}
+#wledDdpLabSlot{max-width:460px}
+@media(max-width:620px){.wled-ddp-panel{padding:11px}}</style>
 </head>
 <body>
 <header>
@@ -490,7 +498,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <p>Assign a friendly name, adjust the IP, enable the controller and choose which NHL events it receives. Discovered controllers are OFF until you opt in and save.</p>
 <div id="deviceList"></div>
 <div class="actions"><button class="primary" id="saveDevices">Save celebration settings</button></div>
-<p class="small muted">A controller without a zone map keeps the existing whole-controller celebration behavior. Use <strong>Manage segments</strong> to identify its physical LED ranges and opt into Home, Away or Neutral zones. Unassigned segments are never changed by mapped celebrations. DDP is reserved for Phase 8D.</p>
+<p class="small muted">A controller without a zone map keeps the existing whole-controller celebration behavior. Use <strong>Manage segments</strong> to identify its physical LED ranges and opt into Home, Away or Neutral zones. Unassigned segments are never changed by mapped JSON celebrations. <strong>DDP streaming is optional</strong> and requires a dedicated controller with complete pixel coverage; all other situations automatically use native JSON.</p>
 </div>
 <div class="card"><h2>Preview celebrations</h2>
 <p>Test all opted-in controllers at once, without waiting for a game. The selected game's team colors are used, or Utah's color when no game is armed.</p>
@@ -720,7 +728,19 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 </div>
 <div id="lab-screen" class="portal-zone"><div class="zone-heading"><span class="zone-number">01</span><div><h3>Screen &amp; scoreboard</h3><p>Preview NHL goal, power-play and final overlays without switching games.</p></div></div><div class="card lab-card" id="mount-lab-screen"></div></div>
 <div id="lab-audio" class="portal-zone" data-platform="s3"><div class="zone-heading"><span class="zone-number">02</span><div><h3>Speaker &amp; sound</h3><p>Hear the selected horn, verify the test tone, inspect ES8311 diagnostics.</p></div></div><div class="card lab-card" id="mount-lab-audio"></div></div>
-<div id="lab-wled" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>WLED controller tests</h3><p>Real color/effect commands are sent to opted-in controllers on your local network.</p></div></div><div id="mount-lab-wled"></div></div>
+<div id="lab-wled" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>WLED controller tests</h3><p>Real color/effect commands are sent to opted-in controllers on your local network.</p></div></div><div id="mount-lab-wled"></div>
+<div class="card" id="wledDdpTestCard">
+<h2>Real-time DDP streaming · Phase 8D</h2>
+<p>Optional real-time animations on a <strong>dedicated full-strip controller</strong>. DDP may override all pixels, including WLED segments, so shared or partially assigned controllers use native JSON instead.</p>
+<label for="wledDdpLabSlot">DDP-enabled WLED controller</label>
+<select id="wledDdpLabSlot" aria-label="Select DDP controller for isolated test"></select>
+<div class="actions">
+<button type="button" id="wledDdpLabRun" class="primary">Test DDP for 3 seconds</button>
+<button type="button" id="wledDdpLabStop">Emergency stop &amp; restore WLED</button>
+<button type="button" id="wledDdpLabRefresh">Refresh stream status</button>
+</div>
+<p id="wledDdpLabStatus" class="small muted" role="status">DDP is OFF by default. Enable exclusive streaming per controller in Customize → WLED.</p>
+</div></div>
 <div id="lab-hardware" class="portal-zone"><div class="zone-heading"><span class="zone-number">04</span><div><h3>LED hardware channels</h3><p>Confirm individual outputs and team colors before live events.</p></div></div><div id="mount-lab-hardware"></div><div id="mount-lab-case" data-platform="s3"></div></div>
 <div id="lab-full" class="portal-zone"><div class="zone-heading"><span class="zone-number">05</span><div><h3>Full celebration rehearsal</h3><p>Check the combined celebration, then restore devices to their prior state.</p></div></div><div id="mount-lab-full"></div></div>
 </section>
@@ -1419,6 +1439,18 @@ function renderDevices(){
     sceneButton.textContent="Celebration scene builder";
     const sceneHost=document.createElement("div");
     sceneHost.className="wled-scene-host";
+    const ddpButton=document.createElement("button");
+    ddpButton.type="button";ddpButton.className="ghost";
+    ddpButton.textContent=device.ddpEnabled?
+      "Real-time DDP · ON":"Real-time DDP · OFF";
+    const ddpHost=document.createElement("div");ddpHost.className="wled-ddp-host";
+    ddpButton.onclick=()=>perform(async()=>{
+      if(currentConfig.wled[i].ip!==$("ip"+i).value.trim())
+        throw Error("Save this controller IP before changing DDP settings");
+      if(!currentConfig.wled[i].ip)
+        throw Error("Save the controller before configuring DDP");
+      await openWledDdpSettings(i,ddpHost);
+    });
     sceneButton.onclick=()=>perform(async()=>{
       if(currentConfig.wled[i].ip!==$("ip"+i).value.trim())
         throw Error("Save this controller IP before editing scenes");
@@ -1426,9 +1458,11 @@ function renderDevices(){
         throw Error("Save a WLED controller before creating celebration scenes");
       await openWledSceneBuilder(i,sceneHost);
     });
-    card.append(result,manage,sceneButton,zones,sceneHost);list.append(card);
+    card.append(result,manage,sceneButton,ddpButton,zones,sceneHost,ddpHost);
+    list.append(card);
   });
   renderWledControllerResults();
+  renderDdpTestOptions();
 }
 function availableWledSlot(ip){
   const saved=currentConfig?.wled||[];
@@ -1783,6 +1817,119 @@ async function openWledSceneBuilder(slot,host){
     await openWledSceneBuilder(slot,host);
   });
   draw();
+}
+function renderDdpTestOptions(){
+  const select=$("wledDdpLabSlot");
+  const previous=select.value;select.replaceChildren();
+  const list=currentConfig?.wled||[];
+  list.forEach((d,i)=>{
+    if(!d.ip)return;
+    const option=document.createElement("option");option.value=String(i);
+    option.textContent="Controller "+(i+1)+" · "+(d.name||d.ip)+
+      (d.ddpEnabled?" · DDP ON":" · DDP OFF");
+    select.append(option);
+  });
+  if(Array.from(select.options).some(x=>x.value===previous))select.value=previous;
+  $("wledDdpLabRun").disabled=select.options.length===0;
+}
+async function refreshDdpTestStatus(){
+  const slot=Number($("wledDdpLabSlot").value);
+  if(!Number.isInteger(slot) || !currentConfig?.wled?.[slot]?.ip){
+    $("wledDdpLabStatus").textContent="Add a saved WLED controller to test DDP.";
+    return;
+  }
+  const data=await api("/api/wled/ddp?slot="+slot);
+  $("wledDdpLabRun").disabled=!data.enabled;
+  $("wledDdpLabStatus").textContent=
+    (data.enabled?"DDP enabled":"DDP disabled")+
+    " · "+data.fps+" FPS · "+(data.running?"STREAMING":"Idle")+
+    " · "+data.pixels+" LEDs · "+data.frames+" frames · "+data.mode;
+}
+$("wledDdpLabSlot").onchange=()=>perform(refreshDdpTestStatus);
+$("wledDdpLabRefresh").onclick=()=>perform(refreshDdpTestStatus);
+$("wledDdpLabRun").onclick=()=>perform(async()=>{
+  const slot=Number($("wledDdpLabSlot").value);
+  if(!Number.isInteger(slot))throw Error("Select a saved WLED controller");
+  if(!confirm("This sends real DDP data to EVERY pixel on your "+
+              "dedicated WLED controller for 3 seconds, then restores its "+
+              "prior native settings. Continue?"))return;
+  const result=await post("/api/wled/ddp/test",{slot});
+  if(!result.ok)throw Error("DDP could not start; restore requested");
+  message("DDP test started · 3 seconds · controller "+(slot+1));
+  await refreshDdpTestStatus();
+});
+$("wledDdpLabStop").onclick=()=>perform(async()=>{
+  await post("/api/wled/ddp/stop",{});
+  message("Emergency WLED restore requested. Check stream status shortly.");
+  await refreshDdpTestStatus();
+});
+async function openWledDdpSettings(slot,host){
+  host.replaceChildren();
+  const data=await api("/api/wled/ddp?slot="+slot);
+  const box=document.createElement("div");box.className="wled-ddp-panel";
+  const heading=document.createElement("h4");
+  heading.textContent="DDP streaming · controller "+(slot+1);
+  const intro=document.createElement("p");intro.className="small muted";
+  intro.textContent="DDP v1 RGB24 · UDP 4048. This mode is only for a "+
+    "dedicated controller where every LED belongs to an assigned Home, "+
+    "Away or Neutral zone. Maximum 300 LEDs and two concurrent streams. "+
+    "Home/Away goal layouts that would overwrite the other team fall "+
+    "back to safe native JSON automatically.";
+  const status=document.createElement("p");status.className="small muted";
+  status.textContent=data.mode;
+  const toggle=document.createElement("input");toggle.type="checkbox";
+  toggle.id="ddpOptIn"+slot;toggle.checked=!!data.enabled;
+  const label=document.createElement("label");label.htmlFor=toggle.id;
+  label.textContent="Enable exclusive DDP output for this controller";
+  const toggleWrap=document.createElement("div");toggleWrap.className="toggle";
+  toggleWrap.append(toggle,label);
+  const fps=document.createElement("select");
+  fps.setAttribute("aria-label","DDP frames per second");
+  [10,15,20].forEach(n=>{
+    const option=document.createElement("option");
+    option.value=String(n);option.textContent=n+" FPS";fps.append(option);
+  });
+  fps.value=String(data.fps||15);
+  const fpsWrap=sceneControl("DDP frame rate",fps);
+  const warning=document.createElement("p");warning.className="wled-scene-warning";
+  warning.textContent="When DDP is active, all pixels on this WLED may "+
+    "be temporarily replaced. Do NOT enable on shared ambient lights, "+
+    "RGBW strips or a device with uncovered/unassigned LED ranges. "+
+    "Power plays use native JSON. Stopping DDP explicitly releases "+
+    "realtime mode before restoring previous WLED settings.";
+  const buttons=document.createElement("div");buttons.className="actions";
+  const save=document.createElement("button");save.type="button";
+  save.className="primary";save.textContent="Save DDP preference";
+  save.onclick=()=>perform(async()=>{
+    let confirmed=false;
+    if(toggle.checked && !data.enabled){
+      confirmed=confirm("Confirm this WLED controller is DEDICATED "+
+        "exclusively to GameDay real-time streaming. All LEDs may be "+
+        "replaced by a DDP frame. Other users/apps or unassigned pixels "+
+        "must NOT rely on this controller. Enable DDP?");
+      if(!confirmed){toggle.checked=false;return;}
+    } else if(toggle.checked)confirmed=true;
+    const result=await post("/api/wled/ddp/config",{
+      slot,enabled:toggle.checked,fps:Number(fps.value),
+      exclusiveConfirmed:confirmed
+    });
+    currentConfig.wled[slot].ddpEnabled=!!result.enabled;
+    currentConfig.wled[slot].ddpFps=result.fps;
+    message(result.enabled?"DDP enabled for dedicated controller":
+                           "Native JSON mode retained; DDP disabled");
+    renderDdpTestOptions();
+    await openWledDdpSettings(slot,host);
+  });
+  const link=document.createElement("button");link.type="button";
+  link.textContent="Open Test Lab → WLED";
+  link.onclick=()=>{
+    $("wledDdpLabSlot").value=String(slot);
+    tab("lab","lab-wled");
+    perform(refreshDdpTestStatus);
+  };
+  buttons.append(save,link);
+  box.append(heading,intro,status,toggleWrap,fpsWrap,warning,buttons);
+  host.append(box);
 }
 function renderWledControllerResults(){
   if(!currentStatus)return;
