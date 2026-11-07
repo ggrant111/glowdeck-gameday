@@ -1944,6 +1944,45 @@ uint8_t activeDdpCount(){
   for(uint8_t i=0;i<MAX_WLED;++i)if(wledDdp[i].active)++active;
   return active;
 }
+// Shared, read-only WLED geometry parser. Quick Setup uses this to check
+// strip coverage without changing a controller's existing WLED segments.
+bool readWledDdpLayout(const String &snapshot,uint16_t pixels,
+                       uint32_t zoneMap,uint8_t overrideRole,
+                       WledDdpPolicy::Layout &layout,String &reason){
+  DynamicJsonDocument filter(384);
+  filter["on"]=true;
+  JsonObject shape=filter["seg"][0].to<JsonObject>();
+  shape["id"]=true;shape["start"]=true;shape["stop"]=true;shape["len"]=true;
+  DynamicJsonDocument state(3072);
+  if(deserializeJson(state,snapshot,DeserializationOption::Filter(filter))){
+    reason="Unable to read WLED LED segments";return false;
+  }
+  if(!(state["on"]|false)){reason="Turn this WLED device on first";return false;}
+  JsonArray segments=state["seg"].as<JsonArray>();
+  if(segments.isNull()||segments.size()==0||
+     segments.size()>WledDdpPolicy::kMaxRanges){
+    reason="WLED needs 1–16 existing LED segments";return false;
+  }
+  layout=WledDdpPolicy::Layout();
+  layout.pixels=pixels;
+  for(uint8_t j=0;j<segments.size();++j){
+    JsonObject seg=segments[j];
+    const int id=seg["id"]|(int)j;
+    const int first=seg["start"]|0;
+    int last=seg["stop"]|0;
+    if(last<=first)last=first+(seg["len"]|0);
+    if(!WledZonePolicy::validSegment(id)||first<0||last<0||
+       first>65535||last>65535){
+      reason="WLED segment has an invalid LED range";return false;
+    }
+    WledDdpPolicy::Range &range=layout.ranges[layout.count++];
+    range.start=uint16_t(first);range.stop=uint16_t(last);
+    range.id=uint8_t(id);
+    range.role=overrideRole?overrideRole:
+      WledZonePolicy::role(zoneMap,uint8_t(id));
+  }
+  return true;
+}
 bool prepareWledDdp(uint8_t slot,CelebrationEngine::Event event,
                     uint32_t color,uint8_t scorerSide,
                     const String &snapshot,WledDdpSession &plan){
@@ -1970,38 +2009,12 @@ bool prepareWledDdp(uint8_t slot,CelebrationEngine::Event event,
                  "Native JSON (over "+String(WledDdpPolicy::kMaxPixels)+" LEDs)";
     return false;
   }
-  DynamicJsonDocument filter(384);
-  filter["on"]=true;
-  JsonObject slice=filter["seg"][0].to<JsonObject>();
-  slice["id"]=true;slice["start"]=true;slice["stop"]=true;slice["len"]=true;
-  DynamicJsonDocument state(3072);
-  if(deserializeJson(state,snapshot,DeserializationOption::Filter(filter))||
-     !(state["on"]|false)){
-    wledDdp[slot].status="Native JSON (WLED off or bad snapshot)";
-    return false;
-  }
   WledDdpPolicy::Layout layout;
-  layout.pixels=info.ledCount;
-  JsonArray segments=state["seg"].as<JsonArray>();
-  if(segments.isNull()||segments.size()>WledDdpPolicy::kMaxRanges){
-    wledDdp[slot].status="Native JSON (unsupported WLED segments)";
+  String layoutReason;
+  if(!readWledDdpLayout(snapshot,info.ledCount,cfg.wledZoneMap[slot],0,
+                        layout,layoutReason)){
+    wledDdp[slot].status="Native JSON ("+layoutReason+")";
     return false;
-  }
-  for(uint8_t j=0;j<segments.size();++j){
-    JsonObject seg=segments[j];
-    const int id=seg["id"]|(int)j;
-    const int first=seg["start"]|0;
-    int end=seg["stop"]|0;
-    if(end<=first)end=first+(seg["len"]|0);
-    if(!WledZonePolicy::validSegment(id)||first<0||end<0||
-       first>65535||end>65535){
-      wledDdp[slot].status="Native JSON (invalid segment geometry)";
-      return false;
-    }
-    WledDdpPolicy::Range &range=layout.ranges[layout.count++];
-    range.start=uint16_t(first);range.stop=uint16_t(end);
-    range.id=uint8_t(id);
-    range.role=WledZonePolicy::role(cfg.wledZoneMap[slot],uint8_t(id));
   }
   const WledDdpPolicy::Fail safety=
       WledDdpPolicy::validate(layout,uint8_t(event),scorerSide);
@@ -6834,6 +6847,172 @@ void registerRoutes() {
     result["maxStreams"]=WledDdpPolicy::kMaxConcurrent;
     result["ddpPort"]=WledDdpPolicy::kPort;
     result["livePPUsesJson"]=true;
+    sendJson(result);
+  });
+  // Phase 8E Quick Setup: informative preflight, never changes NVS or LEDs.
+  server.on("/api/wled/ddp/setup", HTTP_GET, []() {
+    if(!authorized())return;
+    const String input=server.arg("slot");
+    if(input.length()!=1||input[0]<'0'||input[0]>'7')
+      return errorResponse("Select a saved WLED controller",400);
+    const uint8_t slot=uint8_t(input[0]-'0');
+    StaticJsonDocument<640> result;
+    result["slot"]=slot;
+    result["name"]=cfg.wledName[slot];
+    result["ip"]=cfg.wled[slot];
+    result["configured"]=!cfg.wled[slot].isEmpty();
+    result["enabled"]=cfg.wledEnabled[slot];
+    result["mappingEnabled"]=cfg.wledZoneEnabled[slot];
+    result["ddpEnabled"]=cfg.wledDdpEnabled[slot];
+    result["fps"]=cfg.wledDdpFps[slot];
+    result["maxPixels"]=WledDdpPolicy::kMaxPixels;
+    result["ready"]=false;
+    String reason="Save a controller address first";
+    WledScanEntry info;
+    if(cfg.wled[slot].isEmpty()){
+      // No network operations for unsaved controllers.
+    }else if(restoring[slot]||wledDdp[slot].active||
+             wledActiveEvent!=CelebrationEngine::Event::NONE){
+      reason="Celebration active; stop and restore before setup";
+    }else if(!probeWledInfo(cfg.wled[slot],info)){
+      reason="WLED not reachable. Check Wi-Fi and its IP address";
+    }else{
+      result["online"]=true;
+      result["pixels"]=info.ledCount;
+      result["chunks"]=WledDdpPolicy::packetCount(info.ledCount);
+      result["rgbw"]=info.rgbw;
+      const String snapshot=getWledState(cfg.wled[slot]);
+      WledDdpPolicy::Layout layout;
+      if(info.live){
+        reason="Another realtime stream is active. Stop it in WLED first";
+      }else if(info.rgbw){
+        reason="RGBW LEDs are not supported by GameDay DDP; use native WLED";
+      }else if(info.ledCount>WledDdpPolicy::kMaxPixels){
+        reason="Strip exceeds 4096 RGB LEDs; use native WLED";
+      }else if(snapshot.isEmpty()){
+        reason="Cannot read WLED state. Check network connection";
+      }else if(!readWledDdpLayout(snapshot,info.ledCount,0,
+                                  WledZonePolicy::NEUTRAL,layout,reason)){
+        // Geometry helper supplies an actionable explanation.
+      }else{
+        result["segments"]=layout.count;
+        const WledDdpPolicy::Fail resultCode=WledDdpPolicy::validate(
+          layout,uint8_t(CelebrationEngine::Event::GAME_START),
+          WledZonePolicy::kUnknownSide);
+        if(resultCode!=WledDdpPolicy::OK){
+          reason=String(WledDdpPolicy::reason(resultCode))+
+                 ". Fix WLED segments so all LEDs are covered exactly once";
+        }else if(activeDdpCount()>=WledDdpPolicy::kMaxConcurrent){
+          reason="Two DDP streams are already in use. Try again later";
+        }else{
+          result["ready"]=true;
+          reason="Compatible. Choose a team zone and confirm to enable";
+        }
+      }
+    }
+    result["reason"]=reason;
+    sendJson(result);
+  });
+  // One confirmed operation replaces manual segment-role save, device enable
+  // and DDP opt-in. WLED segment bounds/effects are never written or altered.
+  server.on("/api/wled/ddp/quick-setup", HTTP_POST, []() {
+    if(!authorized())return;
+    StaticJsonDocument<256> request;
+    const String body=server.arg("plain");
+    if(body.length()>256||deserializeJson(request,body)||
+       !request["slot"].is<int>()||!request["mode"].is<int>()||
+       !request["fps"].is<int>())
+      return errorResponse("Choose controller, zone mode and frame rate",400);
+    const int slot=request["slot"].as<int>();
+    const int mode=request["mode"].as<int>();
+    const int fps=request["fps"].as<int>();
+    if(!WledDiscoveryPolicy::validSlot(slot)||mode<0||mode>3||
+       !WledDdpPolicy::validFps(fps)||cfg.wled[slot].isEmpty())
+      return errorResponse("Invalid WLED controller or Quick Setup choice",400);
+    if(!(request["exclusiveConfirmed"]|false))
+      return errorResponse("Confirm that this WLED controller is dedicated to GameDay",400);
+    if(restoring[slot]||wledDdp[slot].active||
+       wledActiveEvent!=CelebrationEngine::Event::NONE)
+      return errorResponse("Stop and restore active celebrations before configuring",409);
+    if(mode==0&&!cfg.wledZoneEnabled[slot])
+      return errorResponse("Existing zones are not configured. Choose Both, Home or Away",400);
+    WledScanEntry info;
+    if(!probeWledInfo(cfg.wled[slot],info))
+      return errorResponse("Cannot reach WLED. Check Wi-Fi or IP",503);
+    if(info.live||info.rgbw||info.ledCount>WledDdpPolicy::kMaxPixels)
+      return errorResponse(info.live?"Stop other realtime streaming in WLED":
+          info.rgbw?"RGBW is not supported by DDP":
+                    "More than 4096 LEDs; use native JSON",400);
+    const String snapshot=getWledState(cfg.wled[slot]);
+    if(snapshot.isEmpty())return errorResponse("Cannot read WLED segments",503);
+    WledDdpPolicy::Layout layout;
+    String reason;
+    if(!readWledDdpLayout(snapshot,info.ledCount,cfg.wledZoneMap[slot],
+                          uint8_t(mode),layout,reason))
+      return errorResponse(reason.c_str(),400);
+    const WledDdpPolicy::Fail geometry=WledDdpPolicy::validate(
+      layout,uint8_t(CelebrationEngine::Event::GAME_START),
+      WledZonePolicy::kUnknownSide);
+    if(geometry!=WledDdpPolicy::OK)
+      return errorResponse((String(WledDdpPolicy::reason(geometry))+
+         ". Check LED coverage and zone assignments").c_str(),400);
+    uint32_t newMap=cfg.wledZoneMap[slot];
+    if(mode!=0){
+      newMap=0;
+      for(uint8_t j=0;j<layout.count;++j)
+        newMap=WledZonePolicy::assign(newMap,layout.ranges[j].id,
+          WledZonePolicy::Role(mode));
+    }
+    const uint32_t oldMap=cfg.wledZoneMap[slot];
+    const bool oldZones=cfg.wledZoneEnabled[slot];
+    const bool oldDdp=cfg.wledDdpEnabled[slot];
+    const bool oldEnabled=cfg.wledEnabled[slot];
+    const uint8_t oldFps=cfg.wledDdpFps[slot];
+    cfg.wledZoneMap[slot]=newMap;
+    cfg.wledZoneEnabled[slot]=true;
+    cfg.wledDdpEnabled[slot]=true;
+    cfg.wledEnabled[slot]=true;
+    cfg.wledDdpFps[slot]=uint8_t(fps);
+    WledDdpSession candidate;
+    const bool prepared=prepareWledDdp(uint8_t(slot),
+      CelebrationEngine::Event::GAME_START,0x31837AUL,
+      WledZonePolicy::kUnknownSide,snapshot,candidate);
+    const String failure=wledDdp[slot].status;
+    if(!prepared){
+      cfg.wledZoneMap[slot]=oldMap;
+      cfg.wledZoneEnabled[slot]=oldZones;
+      cfg.wledDdpEnabled[slot]=oldDdp;
+      cfg.wledEnabled[slot]=oldEnabled;
+      cfg.wledDdpFps[slot]=oldFps;
+      return errorResponse((String("DDP check: ")+failure).c_str(),400);
+    }
+    // Preferences writes are checked; best-effort rollback if flash fails.
+    const String suffix=String(slot);
+    const bool saved=prefs.putUInt(("zoneMap"+suffix).c_str(),newMap)>0 &&
+      prefs.putBool(("zoneOn"+suffix).c_str(),true)>0 &&
+      prefs.putUChar(("ddpFps"+suffix).c_str(),uint8_t(fps))>0 &&
+      prefs.putBool(("ddpOn"+suffix).c_str(),true)>0 &&
+      prefs.putBool(("enable"+suffix).c_str(),true)>0;
+    if(!saved){
+      cfg.wledZoneMap[slot]=oldMap;
+      cfg.wledZoneEnabled[slot]=oldZones;
+      cfg.wledDdpEnabled[slot]=oldDdp;
+      cfg.wledEnabled[slot]=oldEnabled;
+      cfg.wledDdpFps[slot]=oldFps;
+      prefs.putUInt(("zoneMap"+suffix).c_str(),oldMap);
+      prefs.putBool(("zoneOn"+suffix).c_str(),oldZones);
+      prefs.putUChar(("ddpFps"+suffix).c_str(),oldFps);
+      prefs.putBool(("ddpOn"+suffix).c_str(),oldDdp);
+      prefs.putBool(("enable"+suffix).c_str(),oldEnabled);
+      return errorResponse("Could not save DDP settings; existing preferences restored",503);
+    }
+    wledDdp[slot].status="DDP enabled; ready for a safe 3-second test";
+    StaticJsonDocument<192> result;
+    result["ok"]=true;result["slot"]=slot;
+    result["enabled"]=true;result["ddpEnabled"]=true;
+    result["mappingEnabled"]=true;result["fps"]=fps;
+    result["pixels"]=info.ledCount;
+    result["chunks"]=WledDdpPolicy::packetCount(info.ledCount);
     sendJson(result);
   });
   server.on("/api/wled/ddp/config", HTTP_POST, []() {
