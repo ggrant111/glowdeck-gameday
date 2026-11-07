@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 // Pure, host-testable contract shared by CYD and Waveshare S3.
 // WLED 8A increases the existing four saved controller slots to eight
@@ -25,7 +26,7 @@ inline bool validInfo(const char *brand,const char *version,
                       uint32_t leds){
   if(!version || !version[0] || leds==0 || leds>65535UL)return false;
   if(!brand || !brand[0])return true; // older WLED did not expose "brand"
-  return brand[0]=='W'&&brand[1]=='L'&&brand[2]=='E'&&brand[3]=='D'&&brand[4]=='\0';
+  return strcmp(brand,"WLED")==0;
 }
 inline int freeSlot(const bool *occupied,size_t n){
   for(size_t i=0;i<n && i<kMaxDevices;++i)if(!occupied[i])return int(i);
