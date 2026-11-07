@@ -104,6 +104,7 @@ class Stream {
     if(!meta.valid || !file.seek(meta.dataOffset))return false;
     f_=&file;meta_=meta;phase_=0;inputIndex_=0;outputIndex_=0;
     buffered_=0;bufferPos_=0;consumedBytes_=0;
+    readFailed_=false;lastReadOffset_=0;
     if(!nextInput(current_))return false;
     if(meta.frames>1) {
       if(!nextInput(next_))return false;
@@ -133,6 +134,8 @@ class Stream {
     }
     return true;
   }
+  bool readFailed()const{return readFailed_;}
+  uint32_t readFailureOffset()const{return lastReadOffset_;}
  private:
   bool nextInput(int16_t &result){
     if(!f_ || inputIndex_>=meta_.frames)return false;
@@ -143,7 +146,28 @@ class Stream {
       // 512 is divisible by 2/4; each flash read holds whole PCM
       // samples, avoiding 48,000 tiny LittleFS reads per second.
       const size_t count=remain<kInputBufferBytes?remain:kInputBufferBytes;
-      if(f_->read(buffer_,count)!=count)return false;
+      // A LittleFS read may be short under load; finish without skipping PCM.
+      // Stop on persistent zero-byte reads rather than looping indefinitely.
+      size_t filled=0;
+      uint8_t zeroReads=0;
+      while(filled<count){
+        const size_t got=f_->read(buffer_+filled,count-filled);
+        if(got>count-filled){
+          readFailed_=true;
+          lastReadOffset_=meta_.dataOffset+consumedBytes_+filled;
+          return false;
+        }
+        if(!got){
+          if(++zeroReads>=3){
+            readFailed_=true;
+            lastReadOffset_=meta_.dataOffset+consumedBytes_+filled;
+            return false;
+          }
+          continue;
+        }
+        filled+=got;
+        zeroReads=0;
+      }
       consumedBytes_+=count;
       buffered_=count;
       bufferPos_=0;
@@ -160,6 +184,8 @@ class Stream {
   Info meta_{};
   uint32_t inputIndex_=0,outputIndex_=0,phase_=0,consumedBytes_=0;
   size_t buffered_=0,bufferPos_=0;
+  bool readFailed_=false;
+  uint32_t lastReadOffset_=0;
   uint8_t buffer_[kInputBufferBytes]={};
   int16_t current_=0,next_=0;
 };
