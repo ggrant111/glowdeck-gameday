@@ -7615,6 +7615,7 @@ void registerRoutes() {
         addPreviewEvent(requestedTeam.length() ? nullptr : previewGame,
                         previewType, previewTeam);
     bool wledStarted = false, rearStarted = false, overlayStarted = false;
+    bool audioStarted = false;
     if (event == CelebrationEngine::Event::NONE) {
       // The ordinary WLED Stop & restore button must not restart the same PP
       // when its former 30-second suppression interval expires.
@@ -7668,17 +7669,28 @@ void registerRoutes() {
     if (overlayKind != EventOverlay::Kind::NONE)
       overlayStarted = queueGameOverlay(requestedTeam.length() ? nullptr : previewGame,
                                        overlayKind, previewTeam, previewRow.sequence);
-    StaticJsonDocument<256> response;
+    // Full GOAL preview exercises saved live-horn opt-in and selected WAV.
+    // Still a PREVIEW event: no fabricated NHL goal, arm/follow changes
+    // or sound in WLED-only / non-goal rehearsals.
+    if (combined && event == CelebrationEngine::Event::GOAL) {
+      startHorn(previewRow.sequence);
+      audioStarted = previewRow.audio == GameEventLog::Audio::STARTED;
+    }
+    StaticJsonDocument<512> response;
     response["event"] = CelebrationEngine::label(wledActiveEvent);
     response["devices"] = wledEligibleCount(event == CelebrationEngine::Event::NONE
         ? CelebrationEngine::Event::GOAL : event);
     response["wledStarted"] = wledStarted;
     response["rearStarted"] = rearStarted;
     response["overlayStarted"] = overlayStarted;
+    response["audioStarted"] = audioStarted;
+    response["audioStatus"] = GameEventLog::audioLabel(previewRow.audio);
+    response["audioSource"] = previewRow.audioSource;
+    response["audioFallback"] = previewRow.audioFallback;
     response["team"] = previewTeam;
     response["hex"] = rgbHex(color);
     response["ok"] = event == CelebrationEngine::Event::NONE ||
-        (combined ? (wledStarted || rearStarted || overlayStarted)
+        (combined ? (wledStarted || rearStarted || overlayStarted || audioStarted)
                   : wledActiveEvent == event);
     sendJson(response);
   });

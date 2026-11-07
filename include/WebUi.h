@@ -591,7 +591,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 </div>
 </div>
 <div class="card"><h2>Full celebration preview</h2>
-<p class="small muted">Run the selected WLED controllers and screen overlay together. The CYD rear RGB participates when enabled; Waveshare S3 case LEDs use their separate hardware test. No manual preview creates a genuine NHL goal.</p>
+<p class="small muted">Run the selected WLED controllers, screen overlay and saved goal horn together. The CYD rear RGB participates when enabled; Waveshare S3 case LEDs use their separate hardware test. The horn follows your saved Sound settings; if disabled or busy, the test shows why. No manual preview creates a genuine NHL goal.</p>
 <div class="actions">
 <button id="rearFullHome">Celebrate home goal</button>
 <button id="rearFullAway">Celebrate away goal</button>
@@ -2569,6 +2569,9 @@ function fullPreview(event,side="home",team=""){
       "WLED "+(result.wledStarted?"started":"no controller accepted"),
       "Screen "+(result.overlayStarted?"started":"not enabled")
     ];
+    if(event==="goal")parts.push("Horn "+(result.audioStarted
+      ?"playback started (speaker not verified)"
+      :(result.audioStatus||"not started")));
     const description=event==="stop"?"Stop / restore requested":
       result.team+" "+result.hex+" · "+parts.join(" · ");
     $("rearFullResult").textContent=description;
