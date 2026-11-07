@@ -738,9 +738,11 @@ void markPpRearEvent(uint32_t id, const String &team) {
     return;
   }
 }
-void celebrate(uint32_t color, uint32_t eventSequence = 0);
-bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
-                    uint32_t eventSequence = 0);
+void celebrate(uint32_t color,uint32_t eventSequence=0,
+               uint8_t scorerSide=WledZonePolicy::kUnknownSide);
+bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
+                    uint32_t eventSequence=0,
+                    uint8_t scorerSide=WledZonePolicy::kUnknownSide);
 
 // Display event overlays share the NHL observation that produced the
 // WLED/rear RGB celebration. They never create a second score trigger.
@@ -836,7 +838,8 @@ void detectRearGoalChanges() {
         const bool armedForGoal = g.id == selectedGameId && haveBaseline &&
             (side == 0 ? (cfg.mode == 1 || cfg.mode == 3)
                        : (cfg.mode == 2 || cfg.mode == 3));
-        if (armedForGoal) celebrate(teamRgb(scorer), entry.sequence);
+        if (armedForGoal) celebrate(teamRgb(scorer),entry.sequence,
+                  side==0?WledZonePolicy::kHomeSide:WledZonePolicy::kAwaySide);
         // Start the internal LED flash AFTER all WLED network requests so
         // multi-device snapshots don't consume its 2–12s animation window.
         if (followed && cfg.rearLedEnabled && cfg.rearGoal) {
@@ -2004,7 +2007,9 @@ void tickRestores() {
     // event manager ends it (not a timestamp to compare using subtraction).
     if (!restoring[i] || restoreAt[i] == UINT32_MAX ||
         int32_t(now - restoreAt[i]) < 0) continue;
-    const String body = wledRestoreBody(savedState[i]);
+    const String body = wledRestoreMapped[i]
+        ? wledMappedRestoreBody(savedState[i],wledTouchedSegments[i])
+        : wledRestoreBody(savedState[i]);
     const bool restored = !body.isEmpty() &&
                           postWled(savedWledIp[i].length() ? savedWledIp[i] :
                                    cfg.wled[i], body);
@@ -2016,6 +2021,7 @@ void tickRestores() {
       savedState[i] = "";
       savedWledIp[i] = "";
       restoreRetries[i] = 0;
+      wledTouchedSegments[i]=0;wledRestoreMapped[i]=false;
     } else if (++restoreRetries[i] >= 3) {
       wledDeviceResult[i] = "Restore failed";
       markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORE_FAILED);
@@ -2024,6 +2030,7 @@ void tickRestores() {
       restoring[i] = false;
       savedState[i] = "";
       savedWledIp[i] = "";
+      wledTouchedSegments[i]=0;wledRestoreMapped[i]=false;
     } else {
       restoreAt[i] = millis() + 1500UL;
       wledDeviceResult[i] = "Retrying restore";
@@ -2032,8 +2039,8 @@ void tickRestores() {
   }
 }
 
-bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
-                    uint32_t eventSequence) {
+bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
+                    uint32_t eventSequence,uint8_t scorerSide) {
   if (event == CelebrationEngine::Event::NONE) {
     scheduleWledRestoreAll();
     return false;
@@ -2062,8 +2069,17 @@ bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
       if (restoring[i]) continue;
     }
     if (!restoring[i]) {
+      // Eight WLED snapshots can exhaust CYD heap; protect the
+      // scoreboard/audio/NHL tasks rather than risking an OOM reboot.
+      if(ESP.getFreeHeap()<45000UL){
+        wledDeviceResult[i]="Memory budget protected";
+        markWledEvent(eventSequence,i,GameEventLog::Wled::SNAPSHOT_FAILED);
+        continue;
+      }
       savedState[i] = getWledState(cfg.wled[i]);
       savedWledIp[i] = cfg.wled[i];
+      wledRestoreMapped[i]=cfg.wledZoneEnabled[i];
+      wledTouchedSegments[i]=0;
       if (savedState[i].isEmpty()) {
         savedWledIp[i] = "";
         wledDeviceResult[i] = "Snapshot failed";
@@ -2083,7 +2099,19 @@ bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
     if (wledEventOwner[i] && wledEventOwner[i] != eventSequence)
       markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::SUPERSEDED);
     wledEventOwner[i] = eventSequence;
-    const String body = wledEffectBody(savedState[i], event, color, 0);
+    uint16_t changedMask=0;
+    const String body=wledEffectBody(savedState[i],event,color,0,
+                                     i,scorerSide,changedMask);
+    if(body.isEmpty() && cfg.wledZoneEnabled[i]){
+      // An unassigned zone or powered-off controller must not be
+      // implicitly reactivated or silently fall back to segment 0.
+      wledDeviceResult[i]="No matching zone / WLED off";
+      markWledEvent(eventSequence,i,GameEventLog::Wled::NOT_SELECTED);
+      if(restoring[i])restoreAt[i]=millis();
+      else{savedState[i]="";savedWledIp[i]="";}
+      continue;
+    }
+    wledTouchedSegments[i]|=changedMask;
     if (!body.isEmpty() && postWled(cfg.wled[i], body)) {
       restoring[i] = true;
       restoreRetries[i] = 0;
@@ -2109,6 +2137,7 @@ bool startWledEvent(CelebrationEngine::Event event, uint32_t color,
   }
   wledActiveEvent = event;
   wledEventColor = color;
+  wledEventSide=scorerSide;
   wledEventStart = commonStart;
   wledEventDuration = CelebrationEngine::duration(event, cfg.seconds);
   wledPhase = 0;
@@ -2131,13 +2160,16 @@ uint8_t currentWledPowerPlay(uint32_t &color) {
 void tickWledCelebrations() {
   const uint32_t now = millis();
   uint32_t powerPlayColor = 0;
+  uint8_t powerPlaySide=WledZonePolicy::kUnknownSide;
   const bool testPP = wledPpTestUntil && int32_t(wledPpTestUntil - now) > 0;
   bool hasPP = false;
   if (testPP) {
     hasPP = true;
     powerPlayColor = wledEventColor;
+    powerPlaySide=wledEventSide;
   } else if (int32_t(wledSuppressPpUntil - now) <= 0) {
-    hasPP = currentWledPowerPlay(powerPlayColor) != 0;
+    powerPlaySide=currentWledPowerPlay(powerPlayColor);
+    hasPP = powerPlaySide!=0;
   }
   if (wledActiveEvent != CelebrationEngine::Event::NONE &&
       CelebrationEngine::temporary(wledActiveEvent)) {
@@ -2150,8 +2182,10 @@ void tickWledCelebrations() {
         for (uint8_t i = 0; i < MAX_WLED; ++i) {
           if (!restoring[i] || !wledParticipates(i, wledActiveEvent))
             continue;
-          const String body = wledEffectBody(savedState[i], wledActiveEvent,
-                                              wledEventColor, wledPhase);
+          uint16_t phaseTouched=0;
+          const String body=wledEffectBody(savedState[i],wledActiveEvent,
+                 wledEventColor,wledPhase,i,wledEventSide,phaseTouched);
+          wledTouchedSegments[i]|=phaseTouched;
           if (!body.isEmpty() && postWled(cfg.wled[i], body))
             wledDeviceResult[i] = "Playing";
           else {
@@ -2178,7 +2212,8 @@ void tickWledCelebrations() {
     // After goal or game-start, return to power-play breathing if NHL still
     // reports an advantage, otherwise restore the original WLED state.
     if (hasPP && startWledEvent(CelebrationEngine::Event::POWER_PLAY,
-                                powerPlayColor, armedPpLogSeq)) {
+                                powerPlayColor, armedPpLogSeq,
+                                powerPlaySide)) {
       return;
     }
     scheduleWledRestoreAll();
@@ -2188,7 +2223,8 @@ void tickWledCelebrations() {
     if (!hasPP) {
       scheduleWledRestoreAll();
     } else if (wledEventColor != powerPlayColor) {
-      startWledEvent(CelebrationEngine::Event::POWER_PLAY, powerPlayColor);
+      startWledEvent(CelebrationEngine::Event::POWER_PLAY,powerPlayColor,
+                     0,powerPlaySide);
     }
   } else if (hasPP && wledActiveEvent == CelebrationEngine::Event::NONE &&
              wledEligibleCount(CelebrationEngine::Event::POWER_PLAY) > 0) {
@@ -2199,14 +2235,14 @@ void tickWledCelebrations() {
       lastPpAttempt = now;
       // Repeated WLED retries update the *same* observed PP event row.
       startWledEvent(CelebrationEngine::Event::POWER_PLAY,
-                     powerPlayColor, armedPpLogSeq);
+                     powerPlayColor,armedPpLogSeq,powerPlaySide);
     }
   }
 }
 
 // The onboard horn is still handled independently from WLED response codes.
-void celebrate(uint32_t color, uint32_t eventSequence) {
-  startWledEvent(CelebrationEngine::Event::GOAL, color, eventSequence);
+void celebrate(uint32_t color,uint32_t eventSequence,uint8_t scorerSide) {
+  startWledEvent(CelebrationEngine::Event::GOAL,color,eventSequence,scorerSide);
   startHorn();
 }
 
@@ -6086,7 +6122,9 @@ void registerRoutes() {
       }
     } else {
       wledSuppressPpUntil = 0;
-      wledStarted = startWledEvent(event, color, previewRow.sequence);
+      wledStarted = startWledEvent(event,color,previewRow.sequence,
+                        side=="home"?WledZonePolicy::kHomeSide:
+                                     WledZonePolicy::kAwaySide);
       if (wledStarted && event == CelebrationEngine::Event::POWER_PLAY)
         wledPpTestUntil = millis() + 9000UL;
       else
