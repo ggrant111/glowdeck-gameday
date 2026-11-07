@@ -152,6 +152,7 @@ assert star.index("tft.setTextDatum(previousDatum);") > star.index("if(armed)")
 footer = source.split("void drawS3ArenaScoreboard(const Game &g)", 1)[1].split(
     "drawS3ArenaReadout(g);", 1)[0]
 assert "drawS3ArenaFollowStar(g);" in footer
+footer = footer.split("drawS3ArenaFollowStar(g);", 1)[1]
 # Coordinates are relative to the display edges, not dependent on the
 # current text datum. Both are 16px inset and vertically center-aligned.
 assert 'tft.setTextDatum(ML_DATUM);\n  tft.drawString("GAMES",16,300,2);' in footer
