@@ -16,7 +16,7 @@ horn=s.split('void startHorn(uint32_t eventSequence=0) {',1)[1].split(
 for key in (
     'gameEventHistory.find(eventSequence)',
     'if (!cfg.horn) {',
-    'GameEventLog::Audio::DISABLED',
+    'GameEventLog::Audio::HORN_DISABLED',
     's3Audio.selectedSource()',
     'if(!s3Audio.ready())',
     'if(!s3Audio.play())',
