@@ -1685,6 +1685,8 @@ async function openWledSceneBuilder(slot,host){
       toggle.checked=!!draft.custom;
       const toggleLabel=document.createElement("label");
       toggleLabel.textContent="Use custom scene (otherwise inherit)";
+      toggle.id="wledScene"+slot+"_"+eventId+"_"+zone.id;
+      toggleLabel.htmlFor=toggle.id;
       toggleWrap.append(toggle,toggleLabel);card.append(toggleWrap);
       const controls=document.createElement("div");controls.className="wled-scene-controls";
       const effectSelect=document.createElement("select");
@@ -1692,7 +1694,7 @@ async function openWledSceneBuilder(slot,host){
         const opt=document.createElement("option");opt.value=String(id);
         opt.textContent=label;effectSelect.append(opt);
       });
-      effectSelect.value=String(draft.fx??event.defaultFx);
+      effectSelect.value=String(draft.custom?draft.fx:event.defaultFx);
       const mkNumber=(label,key,min,max,step,initial)=>{
         const inp=document.createElement("input");inp.type="range";
         inp.min=String(min);inp.max=String(max);inp.step=String(step);
@@ -1736,7 +1738,12 @@ async function openWledSceneBuilder(slot,host){
         "Duration · until official PP ends":"Duration · 0 = shared, 2–30 seconds",
         duration));
       toggle.onchange=()=>{
+        const activating=toggle.checked&&!draft.custom;
         updateDraft(eventId,zone.id,"custom",toggle.checked);
+        if(activating){
+          updateDraft(eventId,zone.id,"fx",event.defaultFx);
+          effectSelect.value=String(event.defaultFx);
+        }
         controls.hidden=!toggle.checked;
       };
       controls.hidden=!toggle.checked;
