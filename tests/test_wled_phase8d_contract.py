@@ -86,7 +86,7 @@ assert 'WledDdpPolicy::kPreviewMs' in preview
 assert 'restoreAt[slot]=millis()' in preview
 stop=s.split('server.on("/api/wled/ddp/stop"',1)[1].split('server.on(',1)[0]
 assert "scheduleWledRestoreAll();" in stop
-assert 'const bool armedForGoal = g.id == selectedGameId' in s
+assert 'const bool armedForGoal = isArmedGame(g.id)' in s
 assert 'if (armedForGoal) celebrate(teamRgb(scorer)' in s
 assert 'CelebrationEngine::eligible(cfg.wledEnabled[i], cfg.wledEvents[i], event)' in s
 assert 'const bool followed = rearFollows(g.id);' in s
