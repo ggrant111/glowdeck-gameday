@@ -12,6 +12,8 @@
 #ifdef GLOWDECK_WAVESHARE_S3
 #include "GameDayS3Hardware.h"
 #include "S3GoalAudio.h"
+#include "S3CaseLedPolicy.h"
+#include "S3CaseLedDriver.h"
 #include "GoalGifPlayer.h"
 #include "S3NativeLayout.h"
 #include "S3ArenaBackground.h"
@@ -97,6 +99,11 @@ struct Settings {
 #ifdef GLOWDECK_WAVESHARE_S3
   uint8_t s3Volume = S3HornPolicy::kVolumePercent;
   uint8_t s3Sound = 0; // 0 = built-in, 1..3 = persistent WAV slots
+  bool caseLedsEnabled = false; // Explicit opt-in AFTER physical wiring
+  bool caseGoal=true,casePp=true,caseStart=true,caseFinal=true;
+  uint8_t casePixels=S3CaseLedPolicy::kDefaultPixels;
+  uint8_t caseBrightness=S3CaseLedPolicy::kDefaultBrightness;
+  uint8_t caseGoalSeconds=6;
 #endif
   bool rearLedEnabled = true;
   bool rearGoal = true;
@@ -124,6 +131,8 @@ GameDayS3Display tft;
 GameDayS3Touch touch;
 S3GoalAudio s3Audio;
 S3SoundStorage soundStorage;
+S3CaseLedDriver caseLedDriver;
+S3CaseLedPolicy::Controller caseLedFx;
 #else
 TFT_eSPI tft;
 SPIClass touchSPI(VSPI);
@@ -774,6 +783,15 @@ void detectRearGoalChanges() {
           triggerRearGoal(teamRgb(scorer));
           entry.rear = GameEventLog::Rear::ACTIVE;
         }
+#ifdef GLOWDECK_WAVESHARE_S3
+        // External case LEDs: followed/armed NHL GOALS only.
+        // All-live DISPLAY alerts never control physical case strips.
+        if(cfg.caseLedsEnabled && cfg.caseGoal && followed)
+          caseLedFx.trigger(side==0?S3CaseLedPolicy::Side::HOME:
+                                      S3CaseLedPolicy::Side::AWAY,
+              S3CaseLedPolicy::Event::GOAL,teamRgb(scorer),millis(),
+              uint32_t(cfg.caseGoalSeconds)*1000UL);
+#endif
         // Only followed/armed games interrupt the screen. Goal overlays
         // appear even when the WLED slots are empty or disabled.
         if (followed || cfg.displayAllLiveEvents)
@@ -1444,6 +1462,16 @@ void loadSettings() {
                           (int)S3HornPolicy::kMaxVolumePercent);
   cfg.s3Sound=constrain((int)prefs.getUChar("s3Sound",0),
                         0,(int)S3WavPolicy::kSlots);
+  cfg.caseLedsEnabled=prefs.getBool("caseOn",false);
+  cfg.caseGoal=prefs.getBool("caseGoal",true);
+  cfg.casePp=prefs.getBool("casePP",true);
+  cfg.caseStart=prefs.getBool("caseStart",true);
+  cfg.caseFinal=prefs.getBool("caseFinal",true);
+  cfg.casePixels=constrain((int)prefs.getUChar("casePixels",
+      S3CaseLedPolicy::kDefaultPixels),1,(int)S3CaseLedPolicy::kMaxPixels);
+  cfg.caseBrightness=constrain((int)prefs.getUChar("caseBri",
+      S3CaseLedPolicy::kDefaultBrightness),1,(int)S3CaseLedPolicy::kMaxBrightness);
+  cfg.caseGoalSeconds=constrain((int)prefs.getUChar("caseSec",6),2,12);
 #endif
   #ifdef GLOWDECK_WAVESHARE_S3
   cfg.rearLedEnabled = false; // S3 has no CYD-style built-in rear LED.
@@ -2453,6 +2481,23 @@ void pollNhl() {
             ? EventOverlay::Kind::FINAL_WIN
             : EventOverlay::Kind::FINAL_LOSS;
       queueGameOverlay(g, kind, fav, logged.sequence, true);
+#ifdef GLOWDECK_WAVESHARE_S3
+      if(cfg.caseLedsEnabled &&
+         transition==CelebrationEngine::Event::GAME_START && cfg.caseStart){
+        caseLedFx.trigger(S3CaseLedPolicy::Side::HOME,
+           S3CaseLedPolicy::Event::GAME_START,teamRgb(g->home),millis());
+        caseLedFx.trigger(S3CaseLedPolicy::Side::AWAY,
+           S3CaseLedPolicy::Event::GAME_START,teamRgb(g->away),millis());
+      }else if(cfg.caseLedsEnabled && cfg.caseFinal &&
+               transition!=CelebrationEngine::Event::GAME_START &&
+               g->homeScore!=g->awayScore){
+        const bool winnerHome=g->homeScore>g->awayScore;
+        caseLedFx.trigger(winnerHome?S3CaseLedPolicy::Side::HOME:
+                                    S3CaseLedPolicy::Side::AWAY,
+            S3CaseLedPolicy::Event::FINAL,
+            teamRgb(winnerHome?g->home:g->away),millis());
+      }
+#endif
       const bool enabled = transition == CelebrationEngine::Event::GAME_START
                            ? cfg.wledGameStart : cfg.wledFinal;
       if (enabled) {
@@ -4777,6 +4822,8 @@ void registerRoutes() {
     doc["audioLastClip"] = s3Audio.clipName();
     doc["audioSelectedSource"] = s3Audio.selectedSource();
     doc["audioStorageReady"] = soundStorage.mounted();
+    doc["caseLedEnabled"]=cfg.caseLedsEnabled;
+    doc["caseLedActive"]=caseLedDriver.enabled();
 #else
     doc["audioSupported"] = false;
 #endif
@@ -4960,6 +5007,14 @@ void registerRoutes() {
     doc["s3VolumeMin"] = S3HornPolicy::kMinVolumePercent;
     doc["s3VolumeMax"] = S3HornPolicy::kMaxVolumePercent;
     doc["s3Sound"] = s3Audio.selectedSource();
+    doc["caseLedsEnabled"]=cfg.caseLedsEnabled;
+    doc["casePixels"]=cfg.casePixels;
+    doc["caseBrightness"]=cfg.caseBrightness;
+    doc["caseGoal"]=cfg.caseGoal;
+    doc["casePp"]=cfg.casePp;
+    doc["caseStart"]=cfg.caseStart;
+    doc["caseFinal"]=cfg.caseFinal;
+    doc["caseGoalSeconds"]=cfg.caseGoalSeconds;
 #endif
     doc["wledPP"] = cfg.wledPP;
     doc["wledGameStart"] = cfg.wledGameStart;
@@ -5888,6 +5943,8 @@ void setup() {
     prefs.putUChar("s3Sound",0);
   }
   s3Audio.setSelectedSource(cfg.s3Sound);
+  if(cfg.caseLedsEnabled)
+    caseLedDriver.enable(true); // Only after previously saved opt-in
 #endif
   // Some ILI9341-compatible CYDs boot with visually inverted colors.
   // Runtime setting is stored in NVS, so the user can change it from web or touch.
@@ -5922,6 +5979,9 @@ void loop() {
   tickHorn();
   tickRestores();
   tickRearLed();
+#ifdef GLOWDECK_WAVESHARE_S3
+  tickCaseLeds();
+#endif
   tickWledCelebrations();
 
   const uint32_t now = millis();
