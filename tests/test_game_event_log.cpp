@@ -13,6 +13,21 @@ int main() {
   assert(b.newest(0)->awayScore==2 && b.newest(0)->homeScore==3);
   b.find(id)->rear=Rear::ACTIVE;
   b.find(id)->wled[1]=Wled::ACCEPTED;
+  b.find(id)->audio=Audio::STARTED;
+  b.find(id)->audioSource=2;
+  b.find(id)->audioFallback=false;
+  assert(!strcmp(audioLabel(b.find(id)->audio),"Playback started"));
+  b.find(id)->audio=Audio::COMPLETED;
+  assert(!strcmp(audioLabel(b.find(id)->audio),
+                 "Stream completed (speaker not verified)"));
+  assert(!strcmp(audioLabel(Audio::DISABLED),
+                 "Disabled in Sound settings"));
+  assert(!strcmp(audioLabel(Audio::NOT_ARMED),
+                 "Not armed for this game"));
+  assert(!strcmp(audioLabel(Audio::BUSY),
+                 "Playback busy or in cooldown"));
+  assert(!strcmp(audioLabel(Audio::STREAM_FAILED),"Stream failed"));
+  assert(b.find(id)->audioSource==2);
   assert(b.find(id)->rear==Rear::ACTIVE);
   assert(b.find(id)->wled[1]==Wled::ACCEPTED);
   assert(!strcmp(wledLabel(b.find(id)->wled[1]),"Command accepted"));
