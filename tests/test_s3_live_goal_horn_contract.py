@@ -52,7 +52,7 @@ for key in (
     assert key in s,key
 for key in (
     'row.type==="Goal"',
-    'Goal horn: ',
+    'goalAudio?"Goal horn"',
     'row.audioFallback',
     'Live NHL goal horn: ',
     's.audioSelectedSource',
