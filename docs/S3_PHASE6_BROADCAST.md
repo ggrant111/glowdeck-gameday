@@ -113,6 +113,43 @@ applies the user's saved screen-inversion preference. Passing these tests
 does **not** replace inspection of the physical ST7796 panel.
 
 
+## Larger official NHL logos — Arena Live
+
+The Phase 6B.2A hardware review also called for bigger, sharper team marks.
+The logo generator now builds a separate **96×96 transparent NHL SVG raster**
+for S3 (previously 80×80), while the original CYD uses its unchanged 56px
+image size. On Arena Live the away and home logo rectangles are (38,96,96,96)
+and (346,96,96,96). Each centers on its existing diffuse plinth without
+moving the scoreboard, abbreviations or navigation hit zones. Team-primary
+bars are drawn afterward at y=189 so they stay visible. This is a
+**native raster increase**, not a runtime upscale.
+
+The generator still pulls logos from official NHL JSON/CDN at build time, not
+over the network during games. Existing 80/60/30/17px logo locations on
+other S3 pages use the same new 96px asset scaled down, with no change to
+their layout. Regenerate the ignored `include/TeamLogos.h` for a local build
+using `python scripts/generate_logos.py` (requires Pillow and CairoSVG), or
+use the prebuilt CI firmware to avoid local graphics dependencies.
+
+## Footer alignment fix — armed game slides (November 2026)
+
+A physical Waveshare S3 test showed that page 2/3 shifted its bottom
+navigation while 1/3 and 3/3 looked normal. Page 2/3 was **armed**, with
+a small `A` beside its yellow follow star. The S3-only star renderer
+changed `TFT_eSprite`'s text datum from centered to top-left after
+drawing `A`, unintentionally moving subsequent GAMES, SETUP and page
+counter labels on armed slides. The fix explicitly saves/restores the text
+datum within the star renderer and anchors footer labels independently:
+GAMES uses a left-mid datum at (16,300), SETUP uses a right-mid datum at
+(464,300), and the slide number uses center-mid at (240,300). All three
+are drawn identically whether or not the displayed game is armed.
+
+**Hardware test:** cycle 1/3, 2/3 and 3/3 while toggling arm/follow for
+each game. Confirm GAMES has a 16px left inset, SETUP a 16px right inset,
+and the center counter never shifts or clips. Check the touch targets and
+scoreboard transitions still respond as before. Only S3 live drawing was
+changed; original CYD and WLED/event behavior are unaffected.
+
 ## Clean navigation
 
 - **Swipe left/right:** cycle game carousel (same favorite/live ordering).

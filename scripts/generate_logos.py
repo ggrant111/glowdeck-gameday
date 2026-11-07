@@ -5,7 +5,7 @@ Prerequisites: pip install Pillow cairosvg
 Generate:     python scripts/generate_logos.py
 Output:       include/TeamLogos.h (generated; never hand-edit)
 
-No logo is downloaded at runtime. CYD uses 56px and S3 uses 80px alpha-keyed
+No logo is downloaded at runtime. CYD uses 56px and S3 uses 96px alpha-keyed
 marks from the same JSON/CDN SVG source, selected at compile time.
 Logos remain the trademarks of their respective NHL teams, not project artwork.
 """
@@ -20,7 +20,7 @@ import cairosvg
 TEAMS = """ANA BOS BUF CGY CAR CHI COL CBJ DAL DET EDM FLA LAK MIN MTL NJD
 NSH NYI NYR OTT PHI PIT SEA SJS STL TBL TOR UTA VAN VGK WSH WPG""".split()
 SIZE = 56
-S3_SIZE = 80
+S3_SIZE = 96
 OUTPUT = Path(__file__).resolve().parent.parent / "include" / "TeamLogos.h"
 BG = (4, 12, 22)  # color used to preblend translucent antialiasing edges
 
@@ -209,7 +209,7 @@ def main():
         "// On S3 the framebuffer is a TFT_eSprite. Base-class TFT_eSPI::",
         "// pushImage() writes directly to LCD and is overwritten by pushSprite().",
         "// This overload draws *inside* the framebuffer using sprite drawPixel.",
-        "// A destination size permits native 80px hero marks and smaller list logos.",
+        "// A destination size permits native 96px hero marks and smaller list logos.",
         "inline void drawTeamLogo(TFT_eSprite &canvas, const String &abbr,",
         "                         int16_t x, int16_t y, uint8_t size = TEAM_LOGO_SIZE) {",
         "  if (!size) return;",

@@ -3216,6 +3216,10 @@ void drawS3ArenaReadout(const Game &g) {
 // Unlike the shared CYD/S3 control this does NOT draw a 44x30 card behind it.
 // Preserve follow vs armed semantics, position and existing touch geometry.
 void drawS3ArenaFollowStar(const Game &g) {
+  // Always restore the caller's text datum. Previously only armed games
+  // changed it to TL_DATUM after drawing the small "A" label, shifting
+  // the GAMES / page / SETUP footer horizontally on those slides.
+  const uint8_t previousDatum=tft.getTextDatum();
   constexpr int16_t x=399, y=24;
   const bool followed=rearFollows(g.id);
   const bool armed=g.id==selectedGameId;
@@ -3232,30 +3236,37 @@ void drawS3ArenaFollowStar(const Game &g) {
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(S3_AQUA);
     tft.drawString("A",x+15,y-9,1);
-    tft.setTextDatum(TL_DATUM);
   }
+  tft.setTextDatum(previousDatum);
 }
 void drawS3ArenaScoreboard(const Game &g) {
   if(!s3Arena.restore(tft))return;
   const uint16_t away=to565(teamRgb(g.away));
   const uint16_t home=to565(teamRgb(g.home));
-  // No persistent top banner or bottom button bar.
-  // Official logo and vivid 3px team accents sit above the arena template.
+  // Larger, native-resolution 96px NHL artwork (previously 80px).
+  // Center each logo on the softly shaded arena plinth at (86,144)
+  // and (394,144), without encroaching on the center score or labels.
+  drawTeamLogo(tft,g.away,38,96,96);
+  drawTeamLogo(tft,g.home,346,96,96);
+  // Team-primary accents stay crisp, above the artwork's lower edge.
   tft.fillRoundRect(36,189,105,3,1,away);
   tft.fillRoundRect(339,189,105,3,1,home);
-  drawTeamLogo(tft,g.away,48,101,80);
-  drawTeamLogo(tft,g.home,352,101,80);
   tft.setTextDatum(MC_DATUM);
   drawS3ArenaFitted(g.away,88,204,100,4,WHITE);
   drawS3ArenaFitted(g.home,392,204,100,4,WHITE);
   // Frameless follow/arm indicator, original touch target unchanged.
   drawS3ArenaFollowStar(g);
-  // Only two minimal navigation affordances remain. Swiping is primary.
+  // Explicit footer datums ensure pixel-identical navigation on every
+  // slide, whether the game is followed, armed or unselected. Anchor both
+  // corner labels 16px from their respective screen edges.
   tft.setTextColor(S3_MUTED);
-  tft.drawString("GAMES",39,300,2);
-  tft.drawString("SETUP",443,300,2);
+  tft.setTextDatum(ML_DATUM);
+  tft.drawString("GAMES",16,300,2);
+  tft.setTextDatum(MR_DATUM);
+  tft.drawString("SETUP",464,300,2);
   if(carouselPageCount()>1) {
     tft.setTextColor(S3_AQUA);
+    tft.setTextDatum(MC_DATUM);
     tft.drawString(String(carouselSlide+1)+"/"+
                    String(carouselPageCount()),240,300,1);
   }

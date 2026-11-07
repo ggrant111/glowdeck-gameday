@@ -136,11 +136,35 @@ assert "extra_scripts = pre:scripts/generate_s3_arena.py" in config
 assert "-D GLOWDECK_S3_PHASE6_LIVE=1" in config
 assert "void drawS3ArenaFollowStar(const Game &g)" in source
 assert "drawS3ArenaFollowStar(g);" in source
+# Hero logos are 96px centered on native S3 plinths, not enlarged 80px rasters.
+assert "drawTeamLogo(tft,g.away,38,96,96);" in source
+assert "drawTeamLogo(tft,g.home,346,96,96);" in source
+assert source.index("drawTeamLogo(tft,g.home,346,96,96);") < source.index("tft.fillRoundRect(36,189,105,3,1,away);")
 assert "drawFollowStar(g,399,24,S3_BG);" not in source
 # Accent bars and original dynamic labels remain outside the PNG.
 assert "tft.fillRoundRect(36,189,105,3,1,away);" in source
 assert "tft.fillRoundRect(339,189,105,3,1,home);" in source
-assert 'tft.drawString("GAMES",39,300,2);' in source
-assert 'tft.drawString("SETUP",443,300,2);' in source
-print(f"PASS Phase 6B.2A de-boxed: 480x320 native RGB565, {len(compressed)} B compressed, "
+# Regression for reported 2/3 armed-game bug: the tiny "A" above the star
+# formerly reset text alignment to TL_DATUM. That leaked into footer text,
+# shifting GAMES and clipping SETUP on that slide, while others stayed centered.
+star = source.split("void drawS3ArenaFollowStar(const Game &g)", 1)[1].split(
+    "void drawS3ArenaScoreboard(const Game &g)", 1)[0]
+assert "const uint8_t previousDatum=tft.getTextDatum();" in star
+assert "tft.setTextDatum(previousDatum);" in star
+assert star.index("tft.setTextDatum(previousDatum);") > star.index("if(armed)")
+
+footer = source.split("void drawS3ArenaScoreboard(const Game &g)", 1)[1].split(
+    "drawS3ArenaReadout(g);", 1)[0]
+assert "drawS3ArenaFollowStar(g);" in footer
+footer = footer.split("drawS3ArenaFollowStar(g);", 1)[1]
+# Coordinates are relative to the display edges, not dependent on the
+# current text datum. Both are 16px inset and vertically center-aligned.
+assert 'tft.setTextDatum(ML_DATUM);\n  tft.drawString("GAMES",16,300,2);' in footer
+assert 'tft.setTextDatum(MR_DATUM);\n  tft.drawString("SETUP",464,300,2);' in footer
+assert 'tft.setTextDatum(MC_DATUM);' in footer
+assert 'String(carouselPageCount()),240,300,1);' in footer
+assert footer.index('tft.setTextDatum(ML_DATUM);') < footer.index('tft.setTextDatum(MR_DATUM);')
+assert footer.index('tft.setTextDatum(MR_DATUM);') < footer.index('tft.setTextDatum(MC_DATUM);')
+assert 'tft.setTextDatum(TL_DATUM);' in footer
+print(f"PASS Phase 6B.2A + stable armed/unarmed footer: 480x320 native RGB565, {len(compressed)} B compressed, "
       f"dark mean RGB={tuple(round(v,1) for v in mean)}, CRC={crc:08X}")
