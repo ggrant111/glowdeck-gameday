@@ -20,10 +20,12 @@
 #include <atomic>
 #include "GameDayS3Hardware.h"
 #include "S3HornPolicy.h"
+#include "S3WavPolicy.h"
+#include "S3SoundStorage.h"
 
 class S3GoalAudio {
  public:
-  enum class Clip:uint8_t { HORN=0, TEST_TONE=1 };
+  enum class Clip:uint8_t { HORN=0, TEST_TONE=1, CUSTOM=2 };
   struct Probe {
     bool codecRead=false, expanderRead=false;
     uint8_t codecReset=0, codecMute=0, codecVolume=0;
@@ -97,10 +99,38 @@ class S3GoalAudio {
     return true;
   }
 
-  // Preview and real NHL goals both start the SAME one-shot synthesized horn.
-  // Real goal callbacks are still controlled by existing cfg.horn opt-in.
-  bool play(){return playClip(Clip::HORN);}
+  // Real NHL celebrations use the persisted selected sound. If a custom
+  // file is missing/corrupted, fall back to the already-tested built-in
+  // horn. Previews can explicitly audition any slot, without changing it.
+  bool play(){
+    const uint8_t chosen=selectedSource_;
+    if(chosen && storageMounted_){
+      File file=LittleFS.open(S3SoundStorage::path(chosen),"r");
+      S3WavPolicy::Info meta;
+      const bool valid=file && S3WavPolicy::parse(file,meta);
+      file.close();
+      if(valid)return playClip(Clip::CUSTOM,chosen);
+      Serial.println("[S3 WAV] selected file missing/invalid; using built-in goal horn");
+    }
+    return playClip(Clip::HORN);
+  }
+  bool playSource(uint8_t source){
+    if(source==0)return playClip(Clip::HORN);
+    if(!storageMounted_ || !S3WavPolicy::validSlot(source) ||
+       storageBusy_.load())return false;
+    File f=LittleFS.open(S3SoundStorage::path(source),"r");
+    S3WavPolicy::Info meta;
+    const bool valid=f && S3WavPolicy::parse(f,meta);
+    f.close();
+    return valid && playClip(Clip::CUSTOM,source);
+  }
   bool testTone(){return playClip(Clip::TEST_TONE);}
+  void setStorageMounted(bool mounted){storageMounted_=mounted;}
+  bool storageMounted()const{return storageMounted_;}
+  void setStorageBusy(bool busy){storageBusy_.store(busy);}
+  bool storageBusy()const{return storageBusy_.load();}
+  void setSelectedSource(uint8_t source){selectedSource_=source;}
+  uint8_t selectedSource()const{return selectedSource_;}
   Probe probe(){
     Probe p;
     p.codecRead=readCodec(0x00,p.codecReset) &&
@@ -118,7 +148,8 @@ class S3GoalAudio {
   bool hasPlayed()const{return everPlayed_;}
   bool ampEnabled()const{return ampOn_;}
   const char *clipName()const{
-    return activeClip_.load()==uint8_t(Clip::TEST_TONE)?"test-tone":"goal-horn";
+    return activeClip_.load()==uint8_t(Clip::TEST_TONE)?"test-tone":
+           activeClip_.load()==uint8_t(Clip::CUSTOM)?"custom-wav":"goal-horn";
   }
 
   // Call from main loop only: never access Wire from the audio DMA task.
@@ -177,6 +208,9 @@ class S3GoalAudio {
   };
   bool ready_=false,ampOn_=false,everPlayed_=false;
   uint8_t volumePercent_=S3HornPolicy::kVolumePercent;
+  bool storageMounted_=false;
+  std::atomic<bool> storageBusy_{false};
+  uint8_t selectedSource_=0;
   uint32_t lastStart_=0;
   std::atomic<bool> playing_{false};
   std::atomic<bool> streamError_{false};
@@ -184,6 +218,7 @@ class S3GoalAudio {
   std::atomic<uint32_t> writtenFrames_{0};
   std::atomic<uint32_t> lastDurationMs_{0};
   std::atomic<uint8_t> activeClip_{uint8_t(Clip::HORN)};
+  std::atomic<uint8_t> activeSource_{0};
   Error error_=Error::NONE;
   TaskHandle_t task_=nullptr;
 
@@ -199,11 +234,14 @@ class S3GoalAudio {
     val=Wire.read();
     return true;
   }
-  bool playClip(Clip clip) {
+  bool playClip(Clip clip,uint8_t source=0) {
     tick();
     const uint32_t now=millis();
-    if(!S3HornPolicy::canPlay(ready_,playing_.load(),now,lastStart_,
+    if(storageBusy_.load() ||
+       !S3HornPolicy::canPlay(ready_,playing_.load(),now,lastStart_,
                              everPlayed_))return false;
+    if(clip==Clip::CUSTOM &&
+       (!storageMounted_ || !S3WavPolicy::validSlot(source)))return false;
     if(!setAmp(true)){
       error_=Error::EXPANDER;
       return logFailure();
@@ -215,12 +253,14 @@ class S3GoalAudio {
     lastStreamOk_.store(false);
     writtenFrames_.store(0);
     lastDurationMs_.store(0);
+    activeSource_.store(clip==Clip::CUSTOM?source:0);
     activeClip_.store(uint8_t(clip));
     playing_.store(true);
     xTaskNotifyGive(task_);
-    Serial.printf("[S3 Audio] %s started (codec %u%%)\n",
-                  clip==Clip::TEST_TONE?"1kHz test tone":"goal horn",
-                  unsigned(volumePercent_));
+    Serial.printf("[S3 Audio] %s started (source=%u codec %u%%)\n",
+                  clip==Clip::TEST_TONE?"1kHz test tone":
+                  clip==Clip::CUSTOM?"custom WAV":"goal horn",
+                  unsigned(source),unsigned(volumePercent_));
     return true;
   }
   bool writeCodec(uint8_t reg,uint8_t val){
@@ -285,20 +325,36 @@ class S3GoalAudio {
       bool ok=true;
       const uint32_t started=millis();
       const bool test=self->activeClip_.load()==uint8_t(Clip::TEST_TONE);
-      const uint32_t frames=test?S3HornPolicy::kTestFrames:
-                                 S3HornPolicy::kFrames;
+      const bool custom=self->activeClip_.load()==uint8_t(Clip::CUSTOM);
+      File wav;
+      S3WavPolicy::Info meta;
+      S3WavPolicy::Stream<File> decoder;
+      uint32_t frames=test?S3HornPolicy::kTestFrames:S3HornPolicy::kFrames;
+      if(custom){
+        const uint8_t slot=self->activeSource_.load();
+        wav=LittleFS.open(S3SoundStorage::path(slot),"r");
+        if(!wav || !S3WavPolicy::parse(wav,meta) ||
+           !decoder.begin(wav,meta)){
+          ok=false;
+          Serial.printf("[S3 WAV] failed to stream WAV slot %u\n",
+                        unsigned(slot));
+        }else frames=meta.outputFrames;
+      }
       int16_t stereo[S3HornPolicy::kFrameChunk*2];
-      while(cursor<frames){
+      while(ok && cursor<frames){
         const uint32_t remaining=frames-cursor;
         const uint16_t count=remaining<S3HornPolicy::kFrameChunk?
                                 uint16_t(remaining):S3HornPolicy::kFrameChunk;
         for(uint16_t i=0;i<count;++i){
-          const int16_t mono=test?
-              S3HornPolicy::diagnosticSample(cursor+i):
-              S3HornPolicy::sample(cursor+i);
+          int16_t mono=0;
+          if(custom){
+            if(!decoder.next(mono)){ok=false;break;}
+          }else mono=test?S3HornPolicy::diagnosticSample(cursor+i):
+                           S3HornPolicy::sample(cursor+i);
           stereo[2*i]=mono;
           stereo[2*i+1]=mono;
         }
+        if(!ok)break;
         size_t written=0;
         const esp_err_t result=i2s_write(I2S_NUM_0,stereo,
                               size_t(count)*4,&written,pdMS_TO_TICKS(120));
@@ -312,6 +368,7 @@ class S3GoalAudio {
         cursor+=count;
         self->writtenFrames_.store(cursor);
       }
+      wav.close();
       // Allow the last DMA block to finish before disabling the PA.
       vTaskDelay(pdMS_TO_TICKS(35));
       i2s_zero_dma_buffer(I2S_NUM_0);
@@ -319,7 +376,8 @@ class S3GoalAudio {
       self->lastStreamOk_.store(ok && cursor==frames);
       if(!ok)self->streamError_.store(true);
       Serial.printf("[S3 Audio] %s stream %s, frames=%lu/%lu, elapsed=%lums\n",
-                    test?"test-tone":"goal-horn",ok?"complete":"FAILED",
+                    custom?"custom-wav":test?"test-tone":"goal-horn",
+                    ok?"complete":"FAILED",
                     (unsigned long)cursor,(unsigned long)frames,
                     (unsigned long)self->lastDurationMs_.load());
       self->playing_.store(false);
