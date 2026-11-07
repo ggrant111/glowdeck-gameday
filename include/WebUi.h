@@ -220,6 +220,24 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
  .arena-score{font-size:29px;letter-spacing:-.09em}
  .arena-topline,.arena-footer{font-size:9px;padding:8px 10px}
 }
+
+/* 8B segment maps: compact arena-tinted zone picker, no external scripts. */
+.wled-zones{margin-top:10px}
+.wled-zones>h4{margin:12px 0 5px;font-size:16px}
+.wled-segment-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;
+  padding:12px;margin:8px 0;border:1px solid #365669;border-radius:10px;background:#102838}
+.wled-segment-row strong{font-size:13px}
+.wled-segment-row p{margin:4px 0 7px}
+.wled-segment-row select{min-width:126px}
+.wled-segment-row[data-zone="1"]{border-left:4px solid #6cd1d8}
+.wled-segment-row[data-zone="2"]{border-left:4px solid #edb571}
+.wled-segment-row[data-zone="3"]{border-left:4px solid #c6d0e9}
+.wled-range-bar{height:6px;border-radius:3px;background:#0a1924;border:1px solid #335063;overflow:hidden}
+.wled-range-fill{height:100%;background:#668797}
+.wled-segment-row[data-zone="1"] .wled-range-fill{background:#6cd1d8}
+.wled-segment-row[data-zone="2"] .wled-range-fill{background:#edb571}
+.wled-segment-row[data-zone="3"] .wled-range-fill{background:#c6d0e9}
+@media(max-width:620px){.wled-segment-row{grid-template-columns:1fr}.wled-segment-row .actions{justify-content:space-between}}
 </style>
 </head>
 <body>
@@ -445,7 +463,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <p>Assign a friendly name, adjust the IP, enable the controller and choose which NHL events it receives. Discovered controllers are OFF until you opt in and save.</p>
 <div id="deviceList"></div>
 <div class="actions"><button class="primary" id="saveDevices">Save celebration settings</button></div>
-<p class="small muted">Existing celebrations still target all valid segments in participating controllers. Segment-by-segment zone assignments are the next release, Phase 8B. Saving a new controller does not trigger lights.</p>
+<p class="small muted">A controller without a zone map keeps the existing whole-controller celebration behavior. Use <strong>Manage segments</strong> to identify its physical LED ranges and opt into Home, Away or Neutral zones. Unassigned segments are never changed by mapped celebrations. DDP is reserved for Phase 8D.</p>
 </div>
 <div class="card"><h2>Preview celebrations</h2>
 <p>Test all opted-in controllers at once, without waiting for a game. The selected game's team colors are used, or Utah's color when no game is armed.</p>
@@ -1357,7 +1375,19 @@ function renderDevices(){
     const result=document.createElement("p");result.className="small muted";
     result.id="wledDeviceResult"+i;
     result.textContent="Status: not tested";
-    card.append(result);list.append(card);
+    const zones=document.createElement("div");
+    zones.className="wled-zones";
+    const manage=document.createElement("button");
+    manage.type="button";manage.className="ghost";
+    manage.textContent=device.zoneEnabled?"Manage segments · Zones ON":"Manage segments · Legacy mode";
+    manage.onclick=()=>perform(async()=>{
+      if(currentConfig.wled[i].ip!==$("ip"+i).value.trim())
+        throw Error("Save this controller IP before editing its segments");
+      if(!currentConfig.wled[i].ip)
+        throw Error("Save a WLED IP before discovering segments");
+      await openWledSegments(i,zones);
+    });
+    card.append(result,manage,zones);list.append(card);
   });
   renderWledControllerResults();
 }
@@ -1431,6 +1461,93 @@ $("wledManualCheck").onclick=()=>perform(async()=>{
   const info=await post("/api/wled/probe",{ip});
   stageWledDevice(info.ip,info.name);
 });
+async function openWledSegments(slot,host){
+  host.replaceChildren();
+  const busy=document.createElement("p");busy.className="small muted";
+  busy.textContent="Reading live segment layout from WLED…";host.append(busy);
+  const data=await api("/api/wled/segments?slot="+slot);
+  host.replaceChildren();
+  const heading=document.createElement("h4");
+  heading.textContent="Controller "+(slot+1)+" · "+data.segments.length+" segments";
+  host.append(heading);
+  const hint=document.createElement("p");hint.className="small muted";
+  hint.textContent="LED ranges come directly from WLED, start inclusive / stop exclusive. "+
+    (data.controllerOn?
+      "Identify briefly highlights only the chosen segment in white.":
+      "This controller is OFF. Turn it on in WLED to identify segments.")+
+    (data.truncated?" Only the first 16 segments can be mapped.":"");
+  host.append(hint);
+  if(!data.segments.length){
+    const no=document.createElement("p");no.className="small muted";
+    no.textContent="WLED reports no active segments. Create segments in WLED first.";
+    host.append(no);return;
+  }
+  const enabledWrap=document.createElement("div");
+  enabledWrap.className="toggle";
+  const enabled=document.createElement("input");
+  enabled.type="checkbox";enabled.checked=!!data.mappingEnabled;
+  const enabledLabel=document.createElement("label");
+  enabledLabel.textContent="Enable segment-based Home / Away / Neutral routing";
+  enabledWrap.append(enabled,enabledLabel);host.append(enabledWrap);
+  const picks=[];
+  data.segments.forEach(seg=>{
+    const row=document.createElement("div");row.className="wled-segment-row";
+    const summary=document.createElement("div");
+    const title=document.createElement("strong");
+    title.textContent=(seg.name||("Segment "+seg.id))+" · #"+seg.id;
+    const range=document.createElement("p");range.className="small muted";
+    range.textContent="LED "+seg.start+"–"+(seg.stop-1)+" ("+
+      (seg.stop-seg.start)+" pixels) · "+(seg.enabled?"On":"Off");
+    const bar=document.createElement("div");bar.className="wled-range-bar";
+    bar.setAttribute("aria-hidden","true");
+    const fill=document.createElement("div");fill.className="wled-range-fill";
+    bar.append(fill);summary.append(title,range,bar);
+    const controls=document.createElement("div");controls.className="actions";
+    const select=document.createElement("select");
+    select.setAttribute("aria-label","Segment "+seg.id+" celebration zone");
+    [["0","Unassigned"],["1","Home"],["2","Away"],["3","Neutral"]].forEach(
+      ([v,name])=>{
+        const option=document.createElement("option");
+        option.value=v;option.textContent=name;select.append(option);
+      });
+    select.value=String(seg.role);
+    const update=()=>{
+      row.dataset.zone=select.value;
+      fill.style.width="100%";
+    };
+    select.onchange=update;update();
+    const identify=document.createElement("button");identify.type="button";
+    identify.textContent="Identify";
+    identify.disabled=!data.controllerOn;
+    identify.onclick=()=>perform(async()=>{
+      const result=await post("/api/wled/segment-test",{slot,id:seg.id});
+      if(!result.ok)throw Error("Segment highlight failed; restore requested");
+      message("Highlighting segment "+seg.id+" for 1.8 seconds; previous state will restore");
+    });
+    controls.append(select,identify);row.append(summary,controls);
+    host.append(row);picks.push({id:seg.id,select});
+  });
+  const footer=document.createElement("div");footer.className="actions";
+  const save=document.createElement("button");save.className="primary";
+  save.textContent="Save zone assignments";
+  save.onclick=()=>perform(async()=>{
+    const payload={slot,enabled:enabled.checked,
+      roles:picks.map(item=>({id:item.id,role:Number(item.select.value)}))};
+    const result=await post("/api/wled/segment-config",payload);
+    currentConfig.wled[slot].zoneEnabled=!!result.enabled;
+    message(result.enabled?"Zone mapping enabled for controller "+(slot+1):
+      "Legacy whole-controller mode restored for controller "+(slot+1));
+    await openWledSegments(slot,host);
+  });
+  const close=document.createElement("button");close.textContent="Close";
+  close.onclick=()=>host.replaceChildren();
+  footer.append(save,close);host.append(footer);
+  const alert=document.createElement("p");alert.className="small muted";
+  alert.textContent="With zones enabled, Goal and PP affect only the matching team zone and Neutral. "+
+    "Game start/final uses team-colored zones. Other segments remain untouched. "+
+    "The WLED controller must already be on.";
+  host.append(alert);
+}
 function renderWledControllerResults(){
   if(!currentStatus)return;
   const statuses=currentStatus.wledResults||[];
