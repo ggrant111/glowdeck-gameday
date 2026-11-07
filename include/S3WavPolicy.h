@@ -111,8 +111,8 @@ class Stream {
   bool next(int16_t &out){
     if(!f_ || outputIndex_>=meta_.outputFrames)return false;
     const int32_t value=int32_t(current_)+
-      ((int32_t(next_)-int32_t(current_))*int32_t(phase_))/
-       int32_t(kOutputRate);
+      int32_t((int64_t(next_)-int64_t(current_))*int64_t(phase_)/
+              int64_t(kOutputRate));
     int32_t v=value;
     // 8-ms ramp at both boundaries prevents clicks from arbitrary WAVs.
     constexpr uint32_t ramp=kOutputRate*8UL/1000UL;
