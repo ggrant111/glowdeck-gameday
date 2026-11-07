@@ -80,6 +80,8 @@ jobs:
         run: python tests/test_s3_power_play_sound_contract.py
       - name: Test S3 game-start WAV assignment
         run: python tests/test_s3_game_start_sound_contract.py
+      - name: Test S3 game-finish WAV slot and live preview parity
+        run: python tests/test_s3_game_finish_sound_contract.py
       - name: Test stable power-play event history
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_power_play_log_policy.cpp -o /tmp/glowdeck-pp-event-test

@@ -5,7 +5,7 @@
 #include <LittleFS.h>
 #include "S3WavPolicy.h"
 
-// S3-only LittleFS sound library. Three fixed, non-user-controlled paths.
+// S3-only LittleFS sound library. Four fixed, non-user-controlled paths.
 // Existing /goal.gif is never touched. Two-stage install keeps the old
 // sound intact if upload fails, and restores it after a power interruption.
 class S3SoundStorage {
@@ -41,6 +41,7 @@ class S3SoundStorage {
       case 1:return "/sound1.wav";
       case 2:return "/sound2.wav";
       case 3:return "/sound3.wav";
+      case 4:return "/sound4.wav";
       default:return "";
     }
   }

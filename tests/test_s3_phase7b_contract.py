@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 7B source contracts: three-slot LittleFS WAV, endpoint auth,
+"""Phase 7B source contracts: four-slot LittleFS WAV, endpoint auth,
 NHL/WLED isolation, file safety, preferences and separate CYD output."""
 from pathlib import Path
 import re
@@ -10,7 +10,7 @@ storage=(root/"include/S3SoundStorage.h").read_text()
 policy=(root/"include/S3WavPolicy.h").read_text()
 ui=(root/"include/WebUi.h").read_text()
 cfg=(root/"platformio.ini").read_text()
-for key in ("kSlots=3","kMaxBytes=768UL*1024UL","kMaxDurationMs=10000UL",
+for key in ("kSlots=4","kMaxBytes=768UL*1024UL","kMaxDurationMs=10000UL",
             "kMaxHeaderScan=4096UL","kOutputRate=48000UL",
             'fourcc(riff,"RIFF")', 'fourcc(riff+8,"WAVE")',
             'fourcc(chunk,"fmt ")','fourcc(chunk,"data")',

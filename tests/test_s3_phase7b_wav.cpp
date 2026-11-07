@@ -72,8 +72,8 @@ static void valid(uint32_t rate,uint16_t channels,bool junk){
   assert(!stream.next(extra));
 }
 int main(){
-  assert(validSlot(1)&&validSlot(2)&&validSlot(3));
-  assert(!validSlot(0)&&!validSlot(4));
+  assert(validSlot(1)&&validSlot(2)&&validSlot(3)&&validSlot(4));
+  assert(!validSlot(0)&&!validSlot(5));
   valid(48000,1,false);valid(44100,2,true);
   valid(22050,1,true);valid(8000,2,false);
   valid(16000,1,false);valid(32000,2,false);
