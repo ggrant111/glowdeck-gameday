@@ -101,8 +101,10 @@ for ui_key in (
   '"/api/wled/ddp/config"',
   '"/api/wled/ddp/test"',
   '"/api/wled/ddp/stop"',
-  'exclusiveConfirmed:confirmed',
-  'confirm("Confirm this WLED controller is DEDICATED',
+  'exclusiveConfirmed:true',
+  'if(!confirm.checked)',
+  '"/api/wled/ddp/setup?slot="',
+  '"/api/wled/ddp/quick-setup"',
 ):
     assert ui_key in ui,ui_key
 print("PASS Phase 8D: protocol, exclusive coverage, safe defaults, endpoint auth, "+
