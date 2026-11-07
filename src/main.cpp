@@ -4374,7 +4374,8 @@ void drawS3StatsActions(bool armed) {
   tft.fillRoundRect(setup.x,setup.y,setup.w,setup.h,8,S3_NAV);
   tft.setTextColor(WHITE,S3_NAV);
   tft.drawString("< BACK",back.x+back.w/2,back.y+back.h/2,2);
-  tft.drawString("SETUP",setup.x+setup.w/2,setup.y+setup.h/2,2);
+  GameDayIcons::draw(tft,GameDayIcons::Kind::SETUP,
+      setup.x+setup.w/2,setup.y+setup.h/2,20,WHITE);
   tft.setTextColor(armed?S3_BG:S3_AQUA,armed?S3_AQUA:S3_CARD);
   tft.drawString(armed?"ARMED":"ARM GOALS",
                  arm.x+arm.w/2,arm.y+arm.h/2,2);
@@ -4693,7 +4694,8 @@ void drawS3SetupNav() {
   tft.drawString("TODAY",l.x+l.w/2,l.y+l.h/2,2);
   tft.drawString("BACK",r.x+r.w/2,r.y+r.h/2,2);
   tft.setTextColor(S3_AQUA,S3_CARD);
-  tft.drawString("GAMES",m.x+m.w/2,m.y+m.h/2,2);
+  GameDayIcons::draw(tft,GameDayIcons::Kind::GAMES,
+      m.x+m.w/2,m.y+m.h/2,20,S3_AQUA);
   tft.setTextDatum(TL_DATUM);
 }
 void drawS3Setup() {
@@ -4768,7 +4770,8 @@ void drawS3TouchCheck() {
   tft.fillRoundRect(n.x,n.y,n.w,n.h,8,S3_NAV);
   tft.setTextColor(WHITE,S3_NAV);
   tft.drawString("BACK",l.x+l.w/2,l.y+l.h/2,2);
-  tft.drawString("GAMES",n.x+n.w/2,n.y+n.h/2,2);
+  GameDayIcons::draw(tft,GameDayIcons::Kind::GAMES,
+      n.x+n.w/2,n.y+n.h/2,20,WHITE);
   tft.setTextColor(S3_AQUA,S3_CARD);
   tft.drawString("RESET",m.x+m.w/2,m.y+m.h/2,2);
   tft.setTextDatum(TL_DATUM);
@@ -5010,11 +5013,14 @@ void draw() {
   if (screen == Screen::STATS) {
     button(6, 200, 99, 34, "BACK");
     button(111, 200, 99, 34, detailGameId == selectedGameId ? "ARMED" : "ARM");
-    button(216, 200, 98, 34, "SETUP");
+    button(216,200,98,34,"");
+    GameDayIcons::draw(tft,GameDayIcons::Kind::SETUP,265,217,20,WHITE);
   } else {
-    button(6, 200, 99, 34, "TODAY", screen == Screen::LIVE);
-    button(111, 200, 99, 34, "GAMES", screen == Screen::GAMES);
-    button(216, 200, 98, 34, "SETUP", screen == Screen::SETUP);
+    button(6,200,99,34,"TODAY",screen==Screen::LIVE);
+    button(111,200,99,34,"",screen==Screen::GAMES);
+    GameDayIcons::draw(tft,GameDayIcons::Kind::GAMES,160,217,20,WHITE);
+    button(216,200,98,34,"",screen==Screen::SETUP);
+    GameDayIcons::draw(tft,GameDayIcons::Kind::SETUP,265,217,20,WHITE);
   }
 }
 
