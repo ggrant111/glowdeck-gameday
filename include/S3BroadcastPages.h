@@ -120,7 +120,7 @@ void drawS3CGameRow(const Game &g,uint8_t row){
   const uint16_t plate=(row&1)?S3C_SURFACE:S3C_ALT;
   tft.fillRect(r.x,r.y+1,r.w,r.h-2,plate);
   tft.fillRect(r.x,r.y+9,3,r.h-18,
-               g.id==selectedGameId?S3C_ACCENT:to565(teamRgb(g.away)));
+               isArmedGame(g.id)?S3C_ACCENT:to565(teamRgb(g.away)));
   tft.fillRect(r.x+r.w-4,r.y+9,2,r.h-18,to565(teamRgb(g.home)));
   drawTeamLogo(tft,g.away,24,r.y+9,28);
   drawTeamLogo(tft,g.home,372,r.y+9,28);
@@ -134,9 +134,14 @@ void drawS3CGameRow(const Game &g,uint8_t row){
     drawS3CText("-",220,r.y+17,16,2,S3C_MUTED);
     drawS3CText(String(g.homeScore),264,r.y+15,44,4,WHITE);
   }
-  const String status=(g.id==selectedGameId?String("ARMED / "):String(""))+
-     (gameIsFuture(g)?formattedStart(g.startUTC):gameStatus(g));
-  drawS3CText(status,240,r.y+38,240,1,S3C_MUTED);
+  const uint8_t rank=armPriority(g.id);
+  const String status=(gameIsFuture(g)?formattedStart(g.startUTC):gameStatus(g));
+  drawS3CText(status,205,r.y+38,170,1,S3C_MUTED);
+  const uint16_t fill=rank?S3C_ACCENT:S3C_SURFACE;
+  tft.fillRoundRect(302,r.y+28,56,20,4,fill);
+  drawS3CText(rank?"A"+String(rank):
+      armedGames.count()>=MultiGameArming::kMaxArmed?String("FULL"):String("ARM"),
+      330,r.y+38,52,1,rank?S3C_BG:WHITE);
   drawS3CStar(g,444,r.y+24);
   tft.setTextDatum(TL_DATUM);
 }
@@ -219,8 +224,9 @@ void drawS3CStats(){
        "NHL gamecenter data updates automatically",
        240,216,430,2,S3C_MUTED);
   }
-  drawS3CFooter("BACK",g->id==selectedGameId?"ARMED":"ARM GOALS",
-                "SETUP",g->id==selectedGameId);
+  drawS3CFooter("BACK",isArmedGame(g->id)?"DISARM":
+                armedGames.count()>=MultiGameArming::kMaxArmed?"MAX 5":"ARM",
+                "SETUP",isArmedGame(g->id));
 }
 
 void drawS3CStandings(){
