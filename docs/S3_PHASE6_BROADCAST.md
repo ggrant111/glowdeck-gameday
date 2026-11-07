@@ -131,6 +131,65 @@ their layout. Regenerate the ignored `include/TeamLogos.h` for a local build
 using `python scripts/generate_logos.py` (requires Pillow and CairoSVG), or
 use the prebuilt CI firmware to avoid local graphics dependencies.
 
+## Phase 6B.3 — trustworthy live data and cleaner contextual navigation
+
+Refinements apply **only** to the 480×320 S3 Arena Live Game renderer
+(`GLOWDECK_S3_PHASE6_LIVE=1`). CYD, NHL event detection, penalty-ledger
+validation, Fire TV, WLED and the original Phase 5 S3 fallback are unchanged.
+
+### SOG and live-state clarity
+
+- Two stronger SOG labels and larger, high-contrast shot counts remain
+  aligned beneath the teams, even when the values have different digits.
+  Unpublished NHL SOG values stay as **muted --**, never zero or an inferred
+  shot count. Upcoming pages retain season records instead of shots.
+- A **verified** PP badge uses the original NHL penalty ledger and period
+  clock. A pulled-goalie/empty-net badge uses the original NHL on-ice
+  `situation` data. No code infers a power play from a missing goalie.
+- The lower center displays either **POWER PLAY + team**, **EMPTY NET +
+  team**, or (if simultaneous) compact **PP TEAM / EN TEAM** lines.
+  Thin accents left and right map correctly to away and home team
+  primary colors. The EN side is a bitmask, so **both goalies pulled**
+  is displayed as EN BOTH with both accents.
+- Both badges disappear during intermission/final/pregame and when
+  supporting evidence becomes older than **45 seconds**. The view
+  refreshes its existing two dirty framebuffer regions if the badge
+  expires *even when Wi-Fi or NHL polling stalls*; it does not trigger
+  extra HTTP requests or alter any physical light behavior.
+
+### Contextual touchscreen navigation
+
+- **Swipe left/right:** next/previous carousel game (unchanged).
+- **Short tap on either NHL logo, center score/VS, SOG or PP/EN strip:**
+  opens that game's Stats screen. The main tappable area is
+  `{x=24,y=88,w=432,h=180}`.
+- **Top-right star:** toggle followed/celebrated game; this does not
+  arm/replace the selected game (unchanged).
+- **Bottom-left GAMES / bottom-right SETUP:** unchanged destinations.
+- Only a deliberate short tap (**≤24 pixels** horizontal and vertical
+  travel) invokes a tap target. Long diagonal drags/noisy swipes
+  cannot accidentally open Setup or toggle a follow star. Valid
+  carousel swipes are handled *before* this tap check.
+- A subtle **TAP FOR STATS** cue is contained within the top readout
+  dirty region. The soft arena layout, 96px official logos, fixed
+  footer and all touch control visual positions remain unchanged.
+
+### Regression and physical validation
+
+New C++ host tests check simultaneous opposite-team PP and EN,
+both goalies pulled, unverified data, stale-data cleanup at 45s,
+millis rollover, and changed-mask-only refresh. Existing geometry
+tests now assert the enlarged Stats area and intentional-tap threshold.
+CI also enforces that S3 display refreshes do not add network
+requests, WLED calls, or full-screen redraws.
+
+On physical Waveshare 3.5-inch hardware, check a live SOG update;
+a verified PP/EN on either side; transition through intermission;
+and stale-badge clearing if Wi-Fi is lost. Then test tapping the
+away/home logos, scores and shot areas, swiping between games, and
+touching the star/GAMES/SETUP without triggering the wrong action.
+Physical validation is separate from passing the CI builds.
+
 ## Phase 6B.2B — dynamic Upcoming / Live / Intermission / Final
 
 All four NHL game phases now have a dedicated readout hierarchy on the
