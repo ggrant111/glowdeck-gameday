@@ -107,6 +107,11 @@ jobs:
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_phase6c_pages.cpp -o /tmp/glowdeck-s3-6c-pages
           /tmp/glowdeck-s3-6c-pages
           python tests/test_s3_phase6c_contract.py
+      - name: Test S3 Phase 6D release, 45k-cycle event endurance and graphics recovery
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_phase6d_stability.cpp -o /tmp/glowdeck-s3-6d-stability
+          /tmp/glowdeck-s3-6d-stability
+          python tests/test_s3_phase6d_release.py
       - name: Test S3 Phase 5 framebuffer and dirty-region geometry
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_raster_geometry.cpp -o /tmp/glowdeck-s3-raster-test
