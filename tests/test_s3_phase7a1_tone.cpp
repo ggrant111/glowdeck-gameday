@@ -5,7 +5,8 @@
 #include "S3HornPolicy.h"
 using namespace S3HornPolicy;
 int main(){
-  static_assert(kVolumePercent==50,"Hardware codec must remain capped at 50%");
+  static_assert(kVolumePercent==70,"Waveshare speaker default is 70%");
+  static_assert(kMaxVolumePercent==80,"Maximum allowed level is 80%");
   static_assert(kDiagnosticHz==1000,"Diagnostic test must use 1kHz");
   static_assert(kSampleRate==48000UL,"I2S sample rate unchanged");
   static_assert(kTestDurationMs==1200,"Test tone is short");
@@ -32,6 +33,6 @@ int main(){
   // A silent or zeroed test waveform must never pass the confidence gate.
   for(uint32_t f=kTestFrames;f<kTestFrames+250;++f)
     assert(diagnosticSample(f)==0);
-  std::cout<<"PASS S3 7A.1: audible 1kHz/50% PCM, bounded 1.2s, no clipping\n";
+  std::cout<<"PASS S3 7A.1: audible 1kHz adjustable-gain PCM, bounded 1.2s, no clipping\n";
   return 0;
 }

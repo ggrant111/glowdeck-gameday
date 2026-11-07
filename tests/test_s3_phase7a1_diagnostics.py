@@ -29,11 +29,12 @@ for required in ("readCodec(0x00,p.codecReset)","readCodec(0x31,p.codecMute)",
                  "writtenFrames_.store(cursor)", "lastDurationMs_.store",
                  "i2s_write(I2S_NUM_0", "S3HornPolicy::diagnosticSample"):
     assert required in audio,required
-assert "{0x32,0x7F}" in audio
+assert "{0x32,S3HornPolicy::codecVolumeRegister(S3HornPolicy::kVolumePercent)}" in audio
 assert "{0x17,0xC8},{0x14,0x1A}" in audio
 assert "kDiagnosticHz=1000" in policy
 assert "kTestDurationMs=1200" in policy
-assert "kVolumePercent=50" in policy
+assert "kVolumePercent=70" in policy
+assert "kMaxVolumePercent=80" in policy
 for elem in ('id="s3AudioTone"','id="s3AudioProbe"',
              'id="s3AudioDiagnostics"','readS3AudioProbe()',
              'post("/api/audio/test-tone",{})'):

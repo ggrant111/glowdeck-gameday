@@ -6,7 +6,8 @@
 
 using namespace S3HornPolicy;
 int main(){
-  static_assert(kVolumePercent==50,"Phase 7A must preview at 50% volume");
+  static_assert(kVolumePercent==70,"Improved S3 default matches Waveshare 70% reference gain");
+  static_assert(kMaxVolumePercent==80,"Physical speaker cap is 80%");
   static_assert(kSampleRate==48000UL,"Match ES8311/I2S 48kHz");
   static_assert(kDurationMs==900,"User-preview duration should be bounded");
   static_assert(kFrames==43200UL,"900ms @ 48kHz");
@@ -34,15 +35,15 @@ int main(){
     if(absolute>peak)peak=absolute;
     if(absolute){++nonzero;absTotal+=absolute;}
     if(f>kFrames-kReleaseFrames && absolute>tail)tail=absolute;
-    // 50% codec gain plus a conservative PCM ceiling prevents clipping.
-    assert(absolute<=10000);
+    // Stronger 30k peak stays below int16 32767 and does not clip.
+    assert(absolute<=30000);
   }
   assert(nonzero>kFrames*8/10);
-  assert(peak>1000 && peak<=10000);
-  assert(absTotal>1000000);
+  assert(peak>22000 && peak<=30000);
+  assert(absTotal>100000000);
   // Check a full stream's L/R sample mapping stays byte-budget bounded.
   assert(kFrameChunk*2u*sizeof(int16_t)<=2048u);
   assert(kFrames*4u==172800u);
-  std::cout<<"PASS S3 Phase 7A horn policy: 50% volume, original PCM, "
+  std::cout<<"PASS S3 Phase 7A horn policy: safe default gain, brighter original PCM, "
               "48kHz sample bounds, 900ms duration, retrigger wraparound\n";
 }

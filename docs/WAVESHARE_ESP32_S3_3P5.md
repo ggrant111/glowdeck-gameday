@@ -1,5 +1,7 @@
 # Waveshare ESP32-S3 3.5-inch GlowDeck GameDay (first-install beta)
 
+> **Phase 7A.2 update:** The user physically confirmed audible output, but the original horn was too quiet. The current firmware now uses a brighter horn and **adjustable 30–80% ES8311 volume (70% default)**. Earlier references below to a fixed 50% level apply only to the original 7A/7A.1 builds. See [the latest horn and volume guide](S3_PHASE7A2_HORN_LOUDNESS.md).
+
 **Hardware target:** Waveshare **ESP32-S3-Touch-LCD-3.5** with **ST7796 SPI** LCD and **FT6336/FT6X36 I2C capacitive touch**. This is the model associated with Amazon ASIN `B0F92CWMPT`. **Do not** install on the separate `ESP32-S3-Touch-LCD-3.5B` (AXS15231B QSPI) or the original ESP32-2432S028R CYD; those have different display hardware.
 
 ## What this port preserves

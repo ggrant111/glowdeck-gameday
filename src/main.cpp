@@ -94,6 +94,9 @@ struct Settings {
   uint8_t brightness = 190;
   uint8_t seconds = 8;
   bool horn = false;
+#ifdef GLOWDECK_WAVESHARE_S3
+  uint8_t s3Volume = S3HornPolicy::kVolumePercent;
+#endif
   bool rearLedEnabled = true;
   bool rearGoal = true;
   bool rearPowerPlay = true;
@@ -1427,6 +1430,12 @@ void loadSettings() {
   cfg.brightness = constrain(prefs.getUChar("bright", 190), 1, 255);
   cfg.seconds = constrain(prefs.getUChar("seconds", 8), 2, 30);
   cfg.horn = prefs.getBool("horn", false);
+#ifdef GLOWDECK_WAVESHARE_S3
+  cfg.s3Volume=constrain((int)prefs.getUChar("s3Vol",
+                              S3HornPolicy::kVolumePercent),
+                          (int)S3HornPolicy::kMinVolumePercent,
+                          (int)S3HornPolicy::kMaxVolumePercent);
+#endif
   #ifdef GLOWDECK_WAVESHARE_S3
   cfg.rearLedEnabled = false; // S3 has no CYD-style built-in rear LED.
 #else
@@ -4935,6 +4944,11 @@ void registerRoutes() {
     doc["brightness"] = cfg.brightness;
     doc["seconds"] = cfg.seconds;
     doc["horn"] = cfg.horn;
+#ifdef GLOWDECK_WAVESHARE_S3
+    doc["s3Volume"] = s3Audio.volume();
+    doc["s3VolumeMin"] = S3HornPolicy::kMinVolumePercent;
+    doc["s3VolumeMax"] = S3HornPolicy::kMaxVolumePercent;
+#endif
     doc["wledPP"] = cfg.wledPP;
     doc["wledGameStart"] = cfg.wledGameStart;
     doc["wledFinal"] = cfg.wledFinal;
@@ -5218,6 +5232,31 @@ void registerRoutes() {
     doc["durationMs"]=S3HornPolicy::kTestDurationMs;
     sendJson(doc);
   });
+  // Standalone S3-only gain control. No NHL events, WLED or CYD NVS keys.
+  // Apply and verify DAC gain before storing the preference; never
+  // rewrite the codec volume during active I2S playback.
+  server.on("/api/audio/volume", HTTP_POST, []() {
+    if (!authorized()) return;
+    if (!s3Audio.ready()) return errorResponse(s3Audio.error(),503);
+    StaticJsonDocument<96> request;
+    if (deserializeJson(request,server.arg("plain")))
+      return errorResponse("Invalid audio volume JSON");
+    if (!request.containsKey("percent") || !request["percent"].is<int>())
+      return errorResponse("Supply integer percent in audio volume request");
+    const int percent=request["percent"].as<int>();
+    if (percent<S3HornPolicy::kMinVolumePercent ||
+        percent>S3HornPolicy::kMaxVolumePercent)
+      return errorResponse("Allowed S3 speaker volume is 30 to 80 percent");
+    if (!s3Audio.setVolume(uint8_t(percent)))
+      return errorResponse(s3Audio.playing()?"Audio is playing":
+                           "ES8311 gain update/readback failed",409);
+    cfg.s3Volume=uint8_t(percent);
+    prefs.putUChar("s3Vol",cfg.s3Volume);
+    StaticJsonDocument<96> response;
+    response["ok"]=true;
+    response["volume"]=s3Audio.volume();
+    sendJson(response);
+  });
   // GET gives observable I2C codec registers, expander state and actual
   // I2S write results. A READY flag by itself does NOT prove speaker audio.
   server.on("/api/audio/diagnostics", HTTP_GET, []() {
@@ -5231,6 +5270,7 @@ void registerRoutes() {
     doc["codecReset"]=p.codecReset;
     doc["codecMute"]=p.codecMute;
     doc["codecVolume"]=p.codecVolume;
+    doc["volumePercent"]=s3Audio.volume();
     doc["codecId1"]=p.codecId1;
     doc["codecId2"]=p.codecId2;
     doc["expanderRead"]=p.expanderRead;
@@ -5621,6 +5661,11 @@ void setup() {
   mdnsName = "glowdeck-" + String(suffix);
   mdnsName.toLowerCase();
   loadSettings();
+#ifdef GLOWDECK_WAVESHARE_S3
+  if (!s3Audio.setVolume(cfg.s3Volume))
+    Serial.printf("[S3 Audio] Saved %u%% gain could not be applied; current %u%%\n",
+                  unsigned(cfg.s3Volume),unsigned(s3Audio.volume()));
+#endif
   // Some ILI9341-compatible CYDs boot with visually inverted colors.
   // Runtime setting is stored in NVS, so the user can change it from web or touch.
   tft.invertDisplay(cfg.invertScreen);

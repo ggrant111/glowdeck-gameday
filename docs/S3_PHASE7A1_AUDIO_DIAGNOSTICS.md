@@ -1,5 +1,7 @@
 # Phase 7A.1 — Silent Waveshare S3 speaker diagnostic
 
+> **Phase 7A.2 update:** The user physically confirmed audible output, but the original horn was too quiet. The current firmware now uses a brighter horn and **adjustable 30–80% ES8311 volume (70% default)**. Earlier references below to a fixed 50% level apply only to the original 7A/7A.1 builds. See [the latest horn and volume guide](S3_PHASE7A2_HORN_LOUDNESS.md).
+
 **Reason:** After installing the 7A firmware, the user reported no audible
 sound from the connected speaker. The earlier **ready** indicator proved
 only that the ES8311 acknowledged I2C initialization; it did **not** prove

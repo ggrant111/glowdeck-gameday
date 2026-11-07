@@ -83,7 +83,7 @@ class S3GoalAudio {
       i2s_driver_uninstall(I2S_NUM_0);
       return logFailure();
     }
-    // No speaker pop at boot; codec stays at 50%, hardware PA remains OFF.
+    // No speaker pop at boot; start at 70% reference gain, PA remains OFF.
     if(xTaskCreatePinnedToCore(taskEntry,"s3_goal_audio",4096,this,2,
                               &task_,1)!=pdPASS){
       error_=Error::TASK;
@@ -92,7 +92,8 @@ class S3GoalAudio {
     }
     ready_=true;
     error_=Error::NONE;
-    Serial.println("[S3 Audio] ES8311 ready, 48kHz/16-bit I2S, codec volume 50%, PA idle");
+    Serial.printf("[S3 Audio] ES8311 ready, 48kHz/16-bit I2S, codec volume %u%%, PA idle\n",
+                  unsigned(volumePercent_));
     return true;
   }
 
@@ -131,7 +132,31 @@ class S3GoalAudio {
   }
   bool ready()const{return ready_;}
   bool playing()const{return playing_.load();}
-  uint8_t volume()const{return S3HornPolicy::kVolumePercent;}
+  uint8_t volume()const{return volumePercent_;}
+  // Only loopTask touches Wire; never update ES8311 gain while audio DMA
+  // is active. Validate I2C register readback and restore last gain on
+  // failure to avoid persisting misleading values. The PA stays off.
+  bool setVolume(uint8_t percent){
+    if(!ready_ || playing_.load() || !S3HornPolicy::validVolume(percent))
+      return false;
+    if(percent==volumePercent_)return true;
+    const uint8_t next=S3HornPolicy::codecVolumeRegister(percent);
+    const uint8_t old=S3HornPolicy::codecVolumeRegister(volumePercent_);
+    uint8_t readback=0;
+    if(!writeCodec(0x32,next) || !readCodec(0x32,readback) ||
+       readback!=next){
+      writeCodec(0x32,old);
+      error_=Error::CODEC_VOLUME;
+      Serial.printf("[S3 Audio] Volume set failed: requested %u%%, readback 0x%02X\n",
+                    unsigned(percent),unsigned(readback));
+      return false;
+    }
+    volumePercent_=percent;
+    error_=Error::NONE;
+    Serial.printf("[S3 Audio] Volume updated to %u%%, reg32=0x%02X\n",
+                  unsigned(volumePercent_),unsigned(next));
+    return true;
+  }
   const char* error()const{
     switch(error_){
       case Error::EXPANDER:return "PA expander unavailable";
@@ -140,6 +165,7 @@ class S3GoalAudio {
       case Error::I2S:return "I2S clock/pins unavailable";
       case Error::TASK:return "Audio task allocation failed";
       case Error::STREAM:return "I2S write timeout";
+      case Error::CODEC_VOLUME:return "ES8311 volume readback failed";
       default:return "";
     }
   }
@@ -147,9 +173,10 @@ class S3GoalAudio {
  private:
   static constexpr uint8_t kCodecAddress=0x18;
   enum class Error:uint8_t {
-    NONE,EXPANDER,CODEC_MISSING,CODEC_INIT,I2S,TASK,STREAM
+    NONE,EXPANDER,CODEC_MISSING,CODEC_INIT,I2S,TASK,STREAM,CODEC_VOLUME
   };
   bool ready_=false,ampOn_=false,everPlayed_=false;
+  uint8_t volumePercent_=S3HornPolicy::kVolumePercent;
   uint32_t lastStart_=0;
   std::atomic<bool> playing_{false};
   std::atomic<bool> streamError_{false};
@@ -191,8 +218,9 @@ class S3GoalAudio {
     activeClip_.store(uint8_t(clip));
     playing_.store(true);
     xTaskNotifyGive(task_);
-    Serial.printf("[S3 Audio] %s started (codec 50%%)\n",
-                  clip==Clip::TEST_TONE?"1kHz test tone":"goal horn");
+    Serial.printf("[S3 Audio] %s started (codec %u%%)\n",
+                  clip==Clip::TEST_TONE?"1kHz test tone":"goal horn",
+                  unsigned(volumePercent_));
     return true;
   }
   bool writeCodec(uint8_t reg,uint8_t val){
@@ -233,12 +261,14 @@ class S3GoalAudio {
       {0x1C,0x6A},{0x37,0x08}, // analog DAC and bypass EQ
       {0x17,0xC8},{0x14,0x1A}, // mirror official ES8311 analog-path init
       {0x31,0x00}, // DAC unmute
-      {0x32,0x7F}  // 50% volume: (50*256/100)-1
+      {0x32,S3HornPolicy::codecVolumeRegister(S3HornPolicy::kVolumePercent)}
+      // Reference volume 70%; persisted user preference applies after NVS load.
     };
     for(const auto &pair:sequence)if(!writeCodec(pair[0],pair[1]))return false;
     uint8_t volume=0,mute=0;
     if(!readCodec(0x32,volume)||!readCodec(0x31,mute))return false;
-    if(volume!=0x7F || (mute&0x60U)){
+    if(volume!=S3HornPolicy::codecVolumeRegister(volumePercent_) ||
+       (mute&0x60U)){
       Serial.printf("[S3 Audio] codec readback bad: vol=0x%02X mute=0x%02X\n",
                     volume,mute);
       return false;
