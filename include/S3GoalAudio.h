@@ -163,6 +163,13 @@ class S3GoalAudio {
   }
   bool ready()const{return ready_;}
   bool playing()const{return playing_.load();}
+  // Distinguish expected overlap/cooldown refusals from a codec/PA failure.
+  // Only the main loop reads this; lastStart_ is not written by the DMA task.
+  bool busyOrCoolingDown()const{
+    return playing_.load() || storageBusy_.load() ||
+       (everPlayed_ && uint32_t(millis()-lastStart_)<
+        S3HornPolicy::kRetriggerMs);
+  }
   uint8_t volume()const{return volumePercent_;}
   // Only loopTask touches Wire; never update ES8311 gain while audio DMA
   // is active. Validate I2C register readback and restore last gain on
