@@ -5205,9 +5205,16 @@ void draw() {
       const int16_t y=66+n*40;
       button(8,y,254,36,
              g.away+" "+String(g.awayScore)+" @ "+
-             g.home+" "+String(g.homeScore)+" "+
-             (g.id == selectedGameId ? "ARM" : g.state),
-             g.id == selectedGameId);
+             g.home+" "+String(g.homeScore),isArmedGame(g.id));
+      const uint8_t rank=armPriority(g.id);
+      const uint16_t plate=rank?TEAL:PANEL;
+      tft.fillRoundRect(214,y+7,46,22,4,plate);
+      tft.setTextDatum(MC_DATUM);
+      tft.setTextColor(WHITE,plate);
+      tft.drawString(rank?"A"+String(rank):
+          armedGames.count()>=MultiGameArming::kMaxArmed?"FULL":"ARM",
+          237,y+18,1);
+      tft.setTextDatum(TL_DATUM);
       drawFollowStar(g,290,y+18,BG);
     }
     if (gameCount > 3) {
