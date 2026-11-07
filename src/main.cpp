@@ -113,6 +113,7 @@ struct Settings {
 #ifdef GLOWDECK_WAVESHARE_S3
   uint8_t s3Volume = S3HornPolicy::kVolumePercent;
   uint8_t s3Sound = 0; // 0 = built-in, 1..3 = persistent WAV slots
+  uint8_t s3PpSound = 0; // 0 = no PP audio, 1..3 = independent WAV slot
   bool caseLedsEnabled = false; // Explicit opt-in AFTER physical wiring
   bool caseGoal=true,casePp=true,caseStart=true,caseFinal=true;
   uint8_t casePixels=S3CaseLedPolicy::kDefaultPixels;
@@ -1014,6 +1015,7 @@ PowerPlayLogPolicy::Watch *getPowerPlayLogWatch(uint32_t id) {
 }
 
 void scheduleWledRestoreAll(); // Verified PP end must stop WLED too.
+void startPowerPlaySound(uint32_t eventSequence); // Independent S3 WAV, never GOAL horn
 void observePowerPlayEvents() {
   for (uint8_t i = 0; i < gameCount; ++i) {
     const Game &g = games[i];
@@ -1045,6 +1047,10 @@ void observePowerPlayEvents() {
       if (g.id == selectedGameId) armedPpLogSeq = entry.sequence;
       queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_START,
                        team, entry.sequence, true);
+      // Only qualifying followed games have physical celebrations. League-wide
+      // display-only PP events never play audio. Debouncer emits starts once.
+      if(followed) startPowerPlaySound(entry.sequence);
+      else entry.audio=GameEventLog::Audio::NOT_ARMED;
     }
   }
 }
@@ -1681,6 +1687,8 @@ void loadSettings() {
                           (int)S3HornPolicy::kMaxVolumePercent);
   cfg.s3Sound=constrain((int)prefs.getUChar("s3Sound",0),
                         0,(int)S3WavPolicy::kSlots);
+  cfg.s3PpSound=constrain((int)prefs.getUChar("s3PpSound",0),
+                          0,(int)S3WavPolicy::kSlots);
   cfg.caseLedsEnabled=prefs.getBool("caseOn",false);
   cfg.caseGoal=prefs.getBool("caseGoal",true);
   cfg.casePp=prefs.getBool("casePP",true);
@@ -2004,6 +2012,48 @@ void startHorn(uint32_t eventSequence=0) {
     entry->audio=GameEventLog::Audio::STARTED;
     hornLogSequence=eventSequence;
   }
+#endif
+}
+// One-shot rink announcement at a verified power-play START only. Separate
+// NVS sound choice from the goal horn; source 0 disables PP sound. The
+// existing cooldown means overlapping audio is reported, not mixed.
+void startPowerPlaySound(uint32_t eventSequence) {
+  GameEventLog::Entry *entry=gameEventHistory.find(eventSequence);
+  if(entry){
+    entry->audio=GameEventLog::Audio::HORN_DISABLED;
+    entry->audioFallback=false;
+    entry->audioSource=0;
+  }
+#ifdef GLOWDECK_WAVESHARE_S3
+  const uint8_t source=cfg.s3PpSound;
+  if(entry)entry->audioSource=source;
+  if(!source){
+    Serial.println("[PP Audio] skipped: no power-play sound selected");
+    return;
+  }
+  if(!s3Audio.ready() || !soundStorage.available(source)){
+    if(entry)entry->audio=GameEventLog::Audio::UNAVAILABLE;
+    Serial.printf("[PP Audio] unavailable: source=%u codec=%s\n",
+                  unsigned(source),s3Audio.error());
+    return;
+  }
+  if(!s3Audio.playSource(source)){
+    const bool busy=s3Audio.busyOrCoolingDown();
+    if(entry)entry->audio=busy?GameEventLog::Audio::BUSY:
+                                    GameEventLog::Audio::UNAVAILABLE;
+    Serial.printf("[PP Audio] refused: source=%u %s\n",
+                  unsigned(source),busy?"busy/cooldown":"speaker failure");
+    return;
+  }
+  if(entry){
+    entry->audio=GameEventLog::Audio::STARTED;
+    hornLogSequence=eventSequence; // Existing completion monitor tracks both clips
+  }
+  Serial.printf("[PP Audio] started: source=%u event=%lu\n",
+                unsigned(source),(unsigned long)eventSequence);
+#else
+  // CYD has a simple buzzer, not a PCM speaker; do not synthesize PP audio.
+  (void)eventSequence;
 #endif
 }
 void tickHorn() {
@@ -5850,6 +5900,7 @@ void registerRoutes() {
     doc["audioAmpEnabled"] = s3Audio.ampEnabled();
     doc["audioLastClip"] = s3Audio.clipName();
     doc["audioSelectedSource"] = s3Audio.selectedSource();
+    doc["audioPowerPlaySource"] = cfg.s3PpSound;
     doc["audioStorageReady"] = soundStorage.mounted();
     doc["caseLedEnabled"]=cfg.caseLedsEnabled;
     doc["caseLedActive"]=caseLedDriver.enabled();
@@ -6077,6 +6128,7 @@ void registerRoutes() {
     doc["s3VolumeMin"] = S3HornPolicy::kMinVolumePercent;
     doc["s3VolumeMax"] = S3HornPolicy::kMaxVolumePercent;
     doc["s3Sound"] = s3Audio.selectedSource();
+    doc["s3PpSound"] = cfg.s3PpSound;
     doc["caseLedsEnabled"]=cfg.caseLedsEnabled;
     doc["casePixels"]=cfg.casePixels;
     doc["caseBrightness"]=cfg.caseBrightness;
@@ -6433,6 +6485,7 @@ void registerRoutes() {
     doc["supported"]=true;
     doc["storageReady"]=soundStorage.mounted();
     doc["selected"]=s3Audio.selectedSource();
+    doc["powerPlaySelected"]=cfg.s3PpSound;
     doc["slots"]=S3WavPolicy::kSlots;
     doc["maxFileBytes"]=S3WavPolicy::kMaxBytes;
     doc["totalBytes"]=soundStorage.totalBytes();
@@ -6480,6 +6533,30 @@ void registerRoutes() {
     response["selected"]=cfg.s3Sound;
     sendJson(response);
   });
+  // Distinct PP audio assignment. Source 0 disables; it never changes the
+  // working goal horn selection or cfg.horn. No NHL eligibility changes.
+  server.on("/api/audio/powerplay-select", HTTP_POST, []() {
+    if(!authorized())return;
+    if(s3Audio.playing() || s3Audio.storageBusy())
+      return errorResponse("Finish playback/upload before changing PP sound",409);
+    StaticJsonDocument<96> request;
+    if(deserializeJson(request,server.arg("plain")))
+      return errorResponse("Invalid PP sound selection JSON");
+    if(!request.containsKey("source") || !request["source"].is<int>())
+      return errorResponse("Select an integer source 0 through 3");
+    const int source=request["source"].as<int>();
+    if(source<0 || source>S3WavPolicy::kSlots)
+      return errorResponse("PP sound slot out of range");
+    S3WavPolicy::Info m;
+    if(source && !soundStorage.inspect(uint8_t(source),m))
+      return errorResponse("That PP sound is missing or invalid",400);
+    cfg.s3PpSound=uint8_t(source);
+    prefs.putUChar("s3PpSound",cfg.s3PpSound);
+    StaticJsonDocument<96> response;
+    response["ok"]=true;
+    response["powerPlaySelected"]=cfg.s3PpSound;
+    sendJson(response);
+  });
   server.on("/api/audio/delete", HTTP_POST, []() {
     if(!authorized())return;
     if(s3Audio.playing() || s3Audio.storageBusy())
@@ -6501,9 +6578,14 @@ void registerRoutes() {
       s3Audio.setSelectedSource(0);
       prefs.putUChar("s3Sound",0);
     }
+    if(cfg.s3PpSound==slot){
+      cfg.s3PpSound=0; // Removing a PP WAV disables only that announcement.
+      prefs.putUChar("s3PpSound",0);
+    }
     StaticJsonDocument<96> response;
     response["ok"]=true;
     response["selected"]=cfg.s3Sound;
+    response["powerPlaySelected"]=cfg.s3PpSound;
     sendJson(response);
   });
   server.on("/api/audio/upload", HTTP_POST, []() {
@@ -7669,13 +7751,14 @@ void registerRoutes() {
     if (overlayKind != EventOverlay::Kind::NONE)
       overlayStarted = queueGameOverlay(requestedTeam.length() ? nullptr : previewGame,
                                        overlayKind, previewTeam, previewRow.sequence);
-    // Full GOAL preview exercises saved live-horn opt-in and selected WAV.
-    // Still a PREVIEW event: no fabricated NHL goal, arm/follow changes
-    // or sound in WLED-only / non-goal rehearsals.
+    // Full rehearsal can exercise the goal horn OR PP announcement, while
+    // remaining a PREVIEW event that changes no NHL eligibility or follow state.
     if (combined && event == CelebrationEngine::Event::GOAL) {
       startHorn(previewRow.sequence);
-      audioStarted = previewRow.audio == GameEventLog::Audio::STARTED;
+    } else if (combined && event == CelebrationEngine::Event::POWER_PLAY) {
+      startPowerPlaySound(previewRow.sequence);
     }
+    audioStarted = previewRow.audio == GameEventLog::Audio::STARTED;
     StaticJsonDocument<512> response;
     response["event"] = CelebrationEngine::label(wledActiveEvent);
     response["devices"] = wledEligibleCount(event == CelebrationEngine::Event::NONE
@@ -7894,6 +7977,12 @@ void setup() {
     prefs.putUChar("s3Sound",0);
   }
   s3Audio.setSelectedSource(cfg.s3Sound);
+  if(cfg.s3PpSound && (!soundStorage.mounted() ||
+     !soundStorage.available(cfg.s3PpSound))){
+    Serial.println("[S3 WAV] PP clip missing; announcement disabled");
+    cfg.s3PpSound=0;
+    prefs.putUChar("s3PpSound",0);
+  }
   if(cfg.caseLedsEnabled)
     caseLedDriver.enable(true); // Only after previously saved opt-in
 #endif

@@ -591,10 +591,12 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 </div>
 </div>
 <div class="card"><h2>Full celebration preview</h2>
-<p class="small muted">Run the selected WLED controllers, screen overlay and saved goal horn together. The CYD rear RGB participates when enabled; Waveshare S3 case LEDs use their separate hardware test. The horn follows your saved Sound settings; if disabled or busy, the test shows why. No manual preview creates a genuine NHL goal.</p>
+<p class="small muted">Rehearse a goal or power play across selected WLED controllers, screen and enabled S3 sound. The CYD rear RGB participates when enabled; Waveshare S3 case LEDs have separate hardware tests. Audio is reported independently. Tests never create real NHL events.</p>
 <div class="actions">
 <button id="rearFullHome">Celebrate home goal</button>
 <button id="rearFullAway">Celebrate away goal</button>
+<button id="rearFullPpHome">Home power play + sound</button>
+<button id="rearFullPpAway">Away power play + sound</button>
 <button id="rearFullTeam" class="primary">Celebrate chosen team</button>
 <button id="rearFullStop">Stop / restore all</button>
 </div>
@@ -631,10 +633,12 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <button type="button" id="s3AudioProbe">Check audio diagnostics</button></div>
 <p class="small muted">The new horn contains brighter upper harmonics and a stronger digital signal. Both previews use your saved volume, while the device amplifier is off when idle.</p>
 <pre id="s3AudioDiagnostics" class="small muted" style="white-space:pre-wrap;word-break:break-word">No diagnostic check run yet.</pre>
-<p class="small muted">The checkbox above still controls audio for real followed/armed NHL goals. Previews never trigger lights or game events.</p>
+<p class="small muted">The goal horn checkbox controls only live goals. Power-play audio uses its separate slot selection below; no audio previews trigger lights or real NHL events.</p>
 <div class="divider" style="margin-top:20px"></div>
-<h3>Goal horn sound library</h3>
-<p class="small muted">Keep the built-in horn or install up to three custom WAV sounds. Select one sound for all followed/armed goal celebrations. Team-specific assignments are planned for Phase 7B.3.</p>
+<h3>Sound library · goals &amp; power plays</h3>
+<p class="small muted">Upload up to three WAV clips. Goals keep their own built-in/custom horn selection. Separately assign a custom clip to verified followed power-play starts. An unset power-play slot means no PP announcement.</p>
+<p id="s3PpSoundStatus" class="small muted">Power-play announcement: disabled</p>
+<div class="actions"><button type="button" id="s3PpSoundOff">Disable PP announcement</button></div>
 <p id="s3SoundLibraryStatus" class="small muted">Loading audio library...</p>
 <div class="actions"><button type="button" id="s3SoundBuiltInUse">Use built-in horn</button>
 <button type="button" id="s3SoundBuiltInPreview">Preview built-in</button></div>
@@ -1065,9 +1069,10 @@ function createEventElement(row){
     const sound=document.createElement("div");
     sound.className="small";
     sound.style.marginTop="5px";
+    const ppAudio=row.type==="Power play started"||row.type==="Power-play preview";
     const source=row.audioSource>0?"Custom WAV slot "+row.audioSource:
-      (currentStatus?.audioSupported?"Built-in S3 horn":"CYD tone");
-    sound.textContent="Goal horn: "+(row.audio||"Not recorded on this firmware")+
+      (ppAudio?"No PP WAV assigned":currentStatus?.audioSupported?"Built-in S3 horn":"CYD tone");
+    sound.textContent=(ppAudio?"Power-play audio: ":"Goal horn: ")+(row.audio||"Not recorded on this firmware")+
       (row.audio&&row.audio!=="Not applicable"?" · "+source:"")+
       (row.audioFallback?" · selected WAV unavailable, built-in fallback":"");
     card.append(sound);
@@ -1227,7 +1232,9 @@ function renderStatus(){
     $("hornHelp").textContent="Live NHL goal horn: "+(s.hornEnabled?"ENABLED":"DISABLED")+
       " · Active sound: "+(Number(s.audioSelectedSource)>0?
         "custom WAV slot "+s.audioSelectedSource:"built-in horn")+
-      ". Preview works independently of this checkbox. Save changes before live games.";
+      " · PP announcement: "+(Number(s.audioPowerPlaySource)>0?
+        "slot "+s.audioPowerPlaySource:"off")+
+      ". Preview works independently of this checkbox. Save goal-horn changes before live games.";
     $("s3AudioStatus").textContent=s.audioReady?
       (s.audioPlaying?(s.audioLastClip||"Audio")+" playing · "+gain+"%":
        (s.audioHasPlayed?(s.audioLastStreamOk?"I2S stream finished":"Audio stream incomplete"):"Codec initialized · speaker not yet tested")+
@@ -2213,7 +2220,7 @@ function renderRearTestControls(){
     ?(armed?"Armed matchup: ":"Featured matchup: ")+
       "Away "+fmt(g.away)+" @ Home "+fmt(g.home)
     :"No game available. Choose a team below for color tests.";
-  for(const id of ["rearTestHome","rearTestAway","rearTestPP","rearFullHome","rearFullAway"])
+  for(const id of ["rearTestHome","rearTestAway","rearTestPP","rearFullHome","rearFullAway","rearFullPpHome","rearFullPpAway"])
     $(id).disabled=!g;
   $("rearTestHome").textContent=g?"Flash home "+fmt(g.home):"No home team";
   $("rearTestAway").textContent=g?"Flash away "+fmt(g.away):"No away team";
@@ -2414,6 +2421,10 @@ async function loadSoundLibrary(){
     " · "+(Math.round((lib.usedBytes||0)/1024))+" KB used of "+
     Math.round((lib.totalBytes||0)/1024)+" KB flash audio/animation space";
   $("s3SoundBuiltInUse").disabled=lib.selected===0;
+  $("s3PpSoundStatus").textContent=lib.powerPlaySelected?
+    "Live followed power plays: WAV slot "+lib.powerPlaySelected+" assigned":
+    "Live followed power plays: announcement OFF. Assign a WAV below to enable.";
+  $("s3PpSoundOff").disabled=!lib.powerPlaySelected;
   const host=$("s3SoundLibrarySlots");
   host.replaceChildren();
   (lib.clips||[]).forEach(c=>{
@@ -2449,6 +2460,16 @@ async function loadSoundLibrary(){
       message("Goal sound set to slot "+c.slot);
     });
     actions.append(select);
+    const ppSelect=document.createElement("button");
+    ppSelect.textContent=lib.powerPlaySelected===c.slot?"PP sound selected":"Use for power plays";
+    ppSelect.disabled=!c.installed||lib.powerPlaySelected===c.slot;
+    ppSelect.onclick=()=>perform(async()=>{
+      await post("/api/audio/powerplay-select",{source:c.slot});
+      currentConfig.s3PpSound=c.slot;
+      await loadSoundLibrary();
+      message("Power-play announcement assigned to slot "+c.slot);
+    });
+    actions.append(ppSelect);
     const remove=document.createElement("button");
     remove.textContent="Delete";
     remove.disabled=!c.bytes;
@@ -2470,6 +2491,12 @@ $("s3SoundBuiltInUse").onclick=()=>perform(async()=>{
   currentConfig.s3Sound=0;
   await loadSoundLibrary();
   message("Built-in goal horn selected");
+});
+$("s3PpSoundOff").onclick=()=>perform(async()=>{
+  await post("/api/audio/powerplay-select",{source:0});
+  currentConfig.s3PpSound=0;
+  await loadSoundLibrary();
+  message("Power-play announcement disabled. Goal horn unchanged.");
 });
 $("s3SoundUploadForm").onsubmit=e=>{e.preventDefault();perform(async()=>{
   const file=$("s3SoundUploadFile").files[0];
@@ -2569,7 +2596,7 @@ function fullPreview(event,side="home",team=""){
       "WLED "+(result.wledStarted?"started":"no controller accepted"),
       "Screen "+(result.overlayStarted?"started":"not enabled")
     ];
-    if(event==="goal")parts.push("Horn "+(result.audioStarted
+    if(event==="goal"||event==="pp")parts.push((event==="pp"?"PP audio ":"Goal horn ")+(result.audioStarted
       ?"playback started (speaker not verified)"
       :(result.audioStatus||"not started")));
     const description=event==="stop"?"Stop / restore requested":
@@ -2580,6 +2607,8 @@ function fullPreview(event,side="home",team=""){
 }
 $("rearFullHome").onclick=()=>fullPreview("goal","home");
 $("rearFullAway").onclick=()=>fullPreview("goal","away");
+$("rearFullPpHome").onclick=()=>fullPreview("pp","home");
+$("rearFullPpAway").onclick=()=>fullPreview("pp","away");
 $("rearFullTeam").onclick=()=>fullPreview("goal","home",selectedRearTeam());
 $("rearFullStop").onclick=()=>fullPreview("stop");
 $("testHome").onclick=()=>perform(async()=>{await post("/api/test",{side:"home"});message("Home color test started")});
