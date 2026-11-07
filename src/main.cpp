@@ -3575,7 +3575,7 @@ void drawTeamGradientBackground(const Game &g) {
 void drawFollowStar(const Game &g, int16_t x=148, int16_t y=15,
                     uint16_t background=ARENA_PLATE) {
   const bool followed=rearFollows(g.id);
-  const bool armed=g.id==selectedGameId;
+  const bool armed=isArmedGame(g.id);
   const uint16_t plate=armed ? TEAL : followed ? 0x4220 : background;
   tft.fillRoundRect(x-22,y-15,44,30,6,plate);
   const int8_t px[10]={0,3,10,5,6,0,-6,-5,-10,-3};
@@ -3590,7 +3590,7 @@ void drawFollowStar(const Game &g, int16_t x=148, int16_t y=15,
   if (armed) {
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(WHITE,plate);
-    tft.drawString("A",x+15,y-9,1);
+      tft.drawString("A"+String(armPriority(g.id)),x+15,y-9,1);
     tft.setTextDatum(TL_DATUM);
   }
 }
@@ -4428,7 +4428,7 @@ void drawS3ArenaFollowStar(const Game &g) {
   const uint8_t previousDatum=tft.getTextDatum();
   constexpr int16_t x=399, y=24;
   const bool followed=rearFollows(g.id);
-  const bool armed=g.id==selectedGameId;
+  const bool armed=isArmedGame(g.id);
   const uint16_t color=followed ? 0xFE60 : 0xCE79;
   const int8_t px[10]={0,3,10,5,6,0,-6,-5,-10,-3};
   const int8_t py[10]={-11,-3,-3,2,10,6,10,2,-3,-3};
@@ -4441,7 +4441,7 @@ void drawS3ArenaFollowStar(const Game &g) {
   if(armed) {
     tft.setTextDatum(MC_DATUM);
     tft.setTextColor(S3_AQUA);
-    tft.drawString("A",x+15,y-9,1);
+    tft.drawString("A"+String(armPriority(g.id)),x+15,y-9,1);
   }
   tft.setTextDatum(previousDatum);
 }
@@ -4536,9 +4536,16 @@ void drawS3GameRow(const Game &g, uint8_t row) {
   }
   tft.setTextColor(S3_MUTED,surface);
   String status=gameIsFuture(g)?formattedStart(g.startUTC):gameStatus(g);
-  if(g.id==selectedGameId)status="ARMED  /  "+status;
+  if(isArmedGame(g.id))status="A"+String(armPriority(g.id))+" / "+status;
   if(status.length()>34)status=status.substring(0,34);
-  tft.drawString(status,242,r.y+38,1);
+  tft.drawString(status,213,r.y+38,1);
+  const uint8_t rank=armPriority(g.id);
+  const uint16_t pill=rank?S3_AQUA:S3_NAV;
+  tft.fillRoundRect(301,r.y+29,58,19,4,pill);
+  tft.setTextColor(rank?S3_BG:WHITE,pill);
+  tft.drawString(rank?"A"+String(rank):
+      armedGames.count()>=MultiGameArming::kMaxArmed?"FULL":"ARM",
+      330,r.y+38,1);
   drawFollowStar(g,444,r.y+24,surface);
   tft.setTextDatum(TL_DATUM);
 }
@@ -4586,7 +4593,8 @@ void drawS3StatsActions(bool armed) {
   GameDayIcons::draw(tft,GameDayIcons::Kind::SETUP,
       setup.x+setup.w/2,setup.y+setup.h/2,20,WHITE);
   tft.setTextColor(armed?S3_BG:S3_AQUA,armed?S3_AQUA:S3_CARD);
-  tft.drawString(armed?"ARMED":"ARM GOALS",
+  tft.drawString(armed?"DISARM":
+                 armedGames.count()>=MultiGameArming::kMaxArmed?"MAX 5":"ARM GOALS",
                  arm.x+arm.w/2,arm.y+arm.h/2,2);
   tft.setTextDatum(TL_DATUM);
 }
@@ -4666,7 +4674,7 @@ void drawS3Stats() {
        "NHL gamecenter data updates automatically",240,215,2);
   }
   tft.setTextDatum(TL_DATUM);
-  drawS3StatsActions(g->id==selectedGameId);
+  drawS3StatsActions(isArmedGame(g->id));
 }
 void drawS3Standings() {
   const StandingsCarousel::Page page=StandingsCarousel::page(
@@ -5221,7 +5229,9 @@ void draw() {
 
   if (screen == Screen::STATS) {
     button(6, 200, 99, 34, "BACK");
-    button(111, 200, 99, 34, detailGameId == selectedGameId ? "ARMED" : "ARM");
+    button(111, 200, 99, 34,
+           isArmedGame(detailGameId)?"DISARM":
+           armedGames.count()>=MultiGameArming::kMaxArmed?"MAX 5":"ARM");
     button(216,200,98,34,"");
     GameDayIcons::draw(tft,GameDayIcons::Kind::SETUP,265,217,20,WHITE);
   } else {
@@ -5356,10 +5366,8 @@ void handleS3NativeTouch(bool pressed) {
         swallowLiveGesture=false;
         break;
       case S3NativeLayout::Action::ARM:
-        if(detailGameId) {
-          selectGame(detailGameId);
-          swallowLiveGesture=false;
-        }
+        if(detailGameId)
+          editArmedGame(detailGameId,!isArmedGame(detailGameId));
         break;
       case S3NativeLayout::Action::SETUP:
         s3ReturnFromSetup=Screen::STATS;
@@ -5418,12 +5426,15 @@ void handleS3NativeTouch(bool pressed) {
           if((uint16_t(gamePage)+1)*4<gameCount)++gamePage;
           break;
         case S3NativeLayout::Action::SUMMARY_FOLLOW:
+        case S3NativeLayout::Action::SUMMARY_ARM:
         case S3NativeLayout::Action::SUMMARY_DETAILS: {
           const uint8_t index=gamePage*4+hit.row;
           if(index<gameCount) {
             const Game &g=games[index];
             if(hit.action==S3NativeLayout::Action::SUMMARY_FOLLOW)
               setGameFollow(g.id,!rearFollows(g.id));
+            else if(hit.action==S3NativeLayout::Action::SUMMARY_ARM)
+              editArmedGame(g.id,!isArmedGame(g.id));
             else {
               selectGame(g.id);
               // Picker taps are processed on finger release, unlike the old
@@ -5512,13 +5523,15 @@ void handleS3NativeTouch(bool pressed) {
       if(carouselPageCount()>1)advanceCarousel(1);
       break;
     case S3NativeLayout::Action::SUMMARY_FOLLOW:
+    case S3NativeLayout::Action::SUMMARY_ARM:
     case S3NativeLayout::Action::SUMMARY_DETAILS:
       if(summary && hit.row<page.count && page.rows[hit.row]<gameCount) {
         const Game &g=games[page.rows[hit.row]];
         if(hit.action==S3NativeLayout::Action::SUMMARY_FOLLOW)
           setGameFollow(g.id,!rearFollows(g.id));
-        else
-          showDetail(g.id);
+        else if(hit.action==S3NativeLayout::Action::SUMMARY_ARM)
+          editArmedGame(g.id,!isArmedGame(g.id));
+        else showDetail(g.id);
       }
       break;
     case S3NativeLayout::Action::DETAILS:
@@ -5672,7 +5685,7 @@ void handleTouch() {
   } else if (y >= 198) {
     if (screen == Screen::STATS) {
       if (x < 107) screen = Screen::LIVE;
-      else if (x < 214) selectGame(detailGameId);
+      else if (x < 214) editArmedGame(detailGameId,!isArmedGame(detailGameId));
       else screen = Screen::SETUP;
     } else {
       screen = x < 107 ? Screen::LIVE : x < 214 ? Screen::GAMES : Screen::SETUP;
@@ -5689,6 +5702,7 @@ void handleTouch() {
         const uint32_t id=games[index].id;
         if (GameFollowPolicy::listStarTap(x))
           setGameFollow(id,!rearFollows(id));
+        else if(x>=214)editArmedGame(id,!isArmedGame(id));
         else selectGame(id);
       }
     }
