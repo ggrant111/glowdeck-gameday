@@ -5412,7 +5412,9 @@ void registerRoutes() {
       soundUploadError=soundUploadFailed?"Unauthorized":"";
       soundUploadFinished=false;
       soundUploadBytes=0;
-      soundUploadSlot=uint8_t(server.arg("slot").toInt());
+      const String slotArg=server.arg("slot");
+      // Require an exact slot digit; never allow modulo-wrapped user IDs.
+      soundUploadSlot=slotArg=="1"?1:slotArg=="2"?2:slotArg=="3"?3:0;
       soundUploadTitle="";
       const String filename=upload.filename;
       const int dot=filename.lastIndexOf('.');
