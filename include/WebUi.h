@@ -598,6 +598,8 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <button id="rearFullPpHome">Home power play + sound</button>
 <button id="rearFullPpAway">Away power play + sound</button>
 <button id="rearFullStart">Game start + slot 3 audio</button>
+<button id="rearFullFinishWin">Game finish (win) + audio</button>
+<button id="rearFullFinishLoss">Game finish (loss) + audio</button>
 <button id="rearFullTeam" class="primary">Celebrate chosen team</button>
 <button id="rearFullStop">Stop / restore all</button>
 </div>
@@ -637,10 +639,12 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <p class="small muted">The goal horn checkbox controls only live goals. Power-play audio uses its separate slot selection below; no audio previews trigger lights or real NHL events.</p>
 <div class="divider" style="margin-top:20px"></div>
 <h3>Sound library · goals &amp; power plays</h3>
-<p class="small muted">Upload up to three WAV clips. Goals keep their own built-in/custom horn selection. Separately assign a custom clip to verified followed power-play starts. An unset power-play slot means no PP announcement.</p>
+<p class="small muted">Upload up to four WAV clips. Goals keep their own built-in/custom horn selection. Separately assign a custom clip to verified followed power-play starts. An unset power-play slot means no PP announcement.</p>
 <p id="s3PpSoundStatus" class="small muted">Power-play announcement: disabled</p>
 <p id="s3StartSoundStatus" class="small muted">Game-start sound: slot 3</p>
 <div class="actions"><button type="button" id="s3StartSoundOff">Disable game-start audio</button></div>
+<p id="s3FinishSoundStatus" class="small muted">Game-finish sound: slot 4</p>
+<div class="actions"><button type="button" id="s3FinishSoundOff">Disable game-finish audio</button></div>
 <div class="actions"><button type="button" id="s3PpSoundOff">Disable PP announcement</button></div>
 <p id="s3SoundLibraryStatus" class="small muted">Loading audio library...</p>
 <div class="actions"><button type="button" id="s3SoundBuiltInUse">Use built-in horn</button>
@@ -1074,9 +1078,10 @@ function createEventElement(row){
     sound.style.marginTop="5px";
     const ppAudio=row.type==="Power play started"||row.type==="Power-play preview";
     const startAudio=row.type==="Game started"||row.type==="Game-start preview";
+    const finishAudio=row.type==="Final win"||row.type==="Final loss"||row.type==="Final-win preview"||row.type==="Final-loss preview";
     const source=row.audioSource>0?"Custom WAV slot "+row.audioSource:
       (ppAudio?"No PP WAV assigned":currentStatus?.audioSupported?"Built-in S3 horn":"CYD tone");
-    sound.textContent=(ppAudio?"Power-play audio: ":startAudio?"Game-start audio: ":"Goal horn: ")+(row.audio||"Not recorded on this firmware")+
+    sound.textContent=(ppAudio?"Power-play audio: ":startAudio?"Game-start audio: ":finishAudio?"Game-finish audio: ":"Goal horn: ")+(row.audio||"Not recorded on this firmware")+
       (row.audio&&row.audio!=="Not applicable"?" · "+source:"")+
       (row.audioFallback?" · selected WAV unavailable, built-in fallback":"");
     card.append(sound);
@@ -1237,6 +1242,7 @@ function renderStatus(){
       " · Active sound: "+(Number(s.audioSelectedSource)>0?
         "custom WAV slot "+s.audioSelectedSource:"built-in horn")+
       " · Game start: "+(Number(s.audioGameStartSource)>0?"slot "+s.audioGameStartSource:"off")+
+      " · Game finish: "+(Number(s.audioGameFinishSource)>0?"slot "+s.audioGameFinishSource:"off")+
       " · PP announcement: "+(Number(s.audioPowerPlaySource)>0?
         "slot "+s.audioPowerPlaySource:"off")+
       ". Preview works independently of this checkbox. Save goal-horn changes before live games.";
@@ -2225,7 +2231,7 @@ function renderRearTestControls(){
     ?(armed?"Armed matchup: ":"Featured matchup: ")+
       "Away "+fmt(g.away)+" @ Home "+fmt(g.home)
     :"No game available. Choose a team below for color tests.";
-  for(const id of ["rearTestHome","rearTestAway","rearTestPP","rearFullHome","rearFullAway","rearFullPpHome","rearFullPpAway","rearFullStart"])
+  for(const id of ["rearTestHome","rearTestAway","rearTestPP","rearFullHome","rearFullAway","rearFullPpHome","rearFullPpAway","rearFullStart","rearFullFinishWin","rearFullFinishLoss"])
     $(id).disabled=!g;
   $("rearTestHome").textContent=g?"Flash home "+fmt(g.home):"No home team";
   $("rearTestAway").textContent=g?"Flash away "+fmt(g.away):"No away team";
@@ -2434,6 +2440,10 @@ async function loadSoundLibrary(){
     "Followed game start: WAV slot "+lib.gameStartSelected:
     "Followed game start: sound OFF";
   $("s3StartSoundOff").disabled=!lib.gameStartSelected;
+  $("s3FinishSoundStatus").textContent=lib.gameFinishSelected?
+    "Followed game finish: WAV slot "+lib.gameFinishSelected:
+    "Followed game finish: sound OFF";
+  $("s3FinishSoundOff").disabled=!lib.gameFinishSelected;
   const host=$("s3SoundLibrarySlots");
   host.replaceChildren();
   (lib.clips||[]).forEach(c=>{
@@ -2489,6 +2499,16 @@ async function loadSoundLibrary(){
       message("Game-start sound assigned to slot "+c.slot);
     });
     actions.append(startSelect);
+    const finishSelect=document.createElement("button");
+    finishSelect.textContent=lib.gameFinishSelected===c.slot?"Game-finish selected":"Use for game finish";
+    finishSelect.disabled=!c.installed||lib.gameFinishSelected===c.slot;
+    finishSelect.onclick=()=>perform(async()=>{
+      await post("/api/audio/gamefinish-select",{source:c.slot});
+      currentConfig.s3FinishSound=c.slot;
+      await loadSoundLibrary();
+      message("Game-finish sound assigned to slot "+c.slot);
+    });
+    actions.append(finishSelect);
     const remove=document.createElement("button");
     remove.textContent="Delete";
     remove.disabled=!c.bytes;
@@ -2510,6 +2530,12 @@ $("s3SoundBuiltInUse").onclick=()=>perform(async()=>{
   currentConfig.s3Sound=0;
   await loadSoundLibrary();
   message("Built-in goal horn selected");
+});
+$("s3FinishSoundOff").onclick=()=>perform(async()=>{
+  await post("/api/audio/gamefinish-select",{source:0});
+  currentConfig.s3FinishSound=0;
+  await loadSoundLibrary();
+  message("Game-finish sound disabled");
 });
 $("s3StartSoundOff").onclick=()=>perform(async()=>{
   await post("/api/audio/gamestart-select",{source:0});
@@ -2621,7 +2647,7 @@ function fullPreview(event,side="home",team=""){
       "WLED "+(result.wledStarted?"started":"no controller accepted"),
       "Screen "+(result.overlayStarted?"started":"not enabled")
     ];
-    if(event==="goal"||event==="pp"||event==="start")parts.push((event==="pp"?"PP audio ":event==="start"?"Game-start audio ":"Goal horn ")+(result.audioStarted
+    if(event==="goal"||event==="pp"||event==="start"||event==="win"||event==="loss")parts.push((event==="pp"?"PP audio ":event==="start"?"Game-start audio ":(event==="win"||event==="loss")?"Game-finish audio ":"Goal horn ")+(result.audioStarted
       ?"playback started (speaker not verified)"
       :(result.audioStatus||"not started")));
     const description=event==="stop"?"Stop / restore requested":
@@ -2635,6 +2661,8 @@ $("rearFullAway").onclick=()=>fullPreview("goal","away");
 $("rearFullPpHome").onclick=()=>fullPreview("pp","home");
 $("rearFullPpAway").onclick=()=>fullPreview("pp","away");
 $("rearFullStart").onclick=()=>fullPreview("start","home");
+$("rearFullFinishWin").onclick=()=>fullPreview("win","home");
+$("rearFullFinishLoss").onclick=()=>fullPreview("loss","away");
 $("rearFullTeam").onclick=()=>fullPreview("goal","home",selectedRearTeam());
 $("rearFullStop").onclick=()=>fullPreview("stop");
 $("testHome").onclick=()=>perform(async()=>{await post("/api/test",{side:"home"});message("Home color test started")});
