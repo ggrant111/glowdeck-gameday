@@ -8,6 +8,7 @@
 #include <Update.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <WiFiClientSecure.h>
 #ifdef GLOWDECK_WAVESHARE_S3
 #include "GameDayS3Hardware.h"
@@ -36,6 +37,7 @@
 #include "WledDiscoveryPolicy.h"
 #include "WledZonePolicy.h"
 #include "WledScenePolicy.h"
+#include "WledDdpPolicy.h"
 #include "TeamGradient.h"
 #include "GameEventLog.h"
 #include "PowerPlayLogPolicy.h"
@@ -96,6 +98,8 @@ struct Settings {
   bool wledZoneEnabled[MAX_WLED] = {}; // OFF for migrated 8A/legacy slots
   uint32_t wledZoneMap[MAX_WLED] = {}; // 2-bit per existing WLED segment ID
   WledScenePolicy::Scene wledScenes[MAX_WLED][WledScenePolicy::kSceneCount];
+  bool wledDdpEnabled[MAX_WLED]={}; // explicit exclusive-controller opt-in
+  uint8_t wledDdpFps[MAX_WLED]={}; // loaded 10–20 fps, default 15
   bool wledPP = true, wledGameStart = true, wledFinal = true;
   uint8_t wledGoalStyle = 0; // 0 strobe+chase, 1 strobe, 2 chase, 3 solid
   uint8_t favoriteSide = 0; // home 0 / away 1; for start and final outcomes
@@ -215,6 +219,18 @@ uint16_t wledCurrentSceneSegments[MAX_WLED] = {};
 uint16_t wledRestoredSceneSegments[MAX_WLED] = {};
 uint32_t lastWledSceneExpiryCheck=0;
 bool wledRestoreMapped[MAX_WLED] = {};
+struct WledDdpSession {
+  bool active=false,manual=false;
+  uint8_t sequence=0,fps=WledDdpPolicy::kDefaultFps;
+  uint32_t started=0,lastFrame=0,lastGoodFrame=0,frames=0,durationMs=0;
+  CelebrationEngine::Event event=CelebrationEngine::Event::NONE;
+  WledDdpPolicy::Layout layout;
+  WledDdpPolicy::Style styles[WledDdpPolicy::kMaxRanges];
+  String status="Disabled"; // visible reason when the JSON fallback wins
+};
+WledDdpSession wledDdp[MAX_WLED];
+WiFiUDP wledDdpUdp;
+uint8_t wledDdpPacket[WledDdpPolicy::kPacketBytes];
 uint8_t wledEventSide=WledZonePolicy::kUnknownSide;
 uint8_t queuedWledSide=WledZonePolicy::kUnknownSide;
 CelebrationEngine::Event wledActiveEvent = CelebrationEngine::Event::NONE;
@@ -1512,6 +1528,11 @@ void loadSettings() {
     cfg.wledName[i] = prefs.getString(("wname" + String(i)).c_str(), "");
     cfg.wledZoneEnabled[i] = prefs.getBool(("zoneOn"+String(i)).c_str(),false);
     cfg.wledZoneMap[i] = prefs.getUInt(("zoneMap"+String(i)).c_str(),0);
+    cfg.wledDdpEnabled[i]=prefs.getBool(("ddpOn"+String(i)).c_str(),false);
+    const int ddpRate=prefs.getUChar(("ddpFps"+String(i)).c_str(),
+                                         WledDdpPolicy::kDefaultFps);
+    cfg.wledDdpFps[i]=WledDdpPolicy::validFps(ddpRate)?
+      uint8_t(ddpRate):WledDdpPolicy::kDefaultFps;
     // 8C scene templates live in one CRC-validated NVS blob per slot.
     // Missing/corrupt blobs keep all 15 entries in INHERIT mode.
     const String key="scene"+String(i);
@@ -5376,6 +5397,8 @@ void registerRoutes() {
       d["ip"] = cfg.wled[i];
       d["name"] = cfg.wledName[i];
       d["zoneEnabled"] = cfg.wledZoneEnabled[i];
+      d["ddpEnabled"] = cfg.wledDdpEnabled[i];
+      d["ddpFps"] = cfg.wledDdpFps[i];
       d["enabled"] = cfg.wledEnabled[i];
       d["events"] = cfg.wledEvents[i];
     }
