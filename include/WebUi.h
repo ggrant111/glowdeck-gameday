@@ -725,12 +725,8 @@ function mountPortalModules(){
   // Screen tests are never mixed with live overlay configuration.
   const screenLab=$("mount-lab-screen");
   const screenActions=$("overlayTestGoal").closest(".actions");
-  place("overlayTestGoal" /* used below via parent; keep IDs stable */, "mount-lab-screen");
-  // Reinsert the relocated first button into its original action group;
-  // the whole group then travels intact to the Test Lab.
-  screenActions.prepend($("overlayTestGoal"));
-  screenLab.appendChild(screenActions);
   const visualNote=screenActions.nextElementSibling;
+  screenLab.appendChild(screenActions);
   if(visualNote&&visualNote.matches("p"))screenLab.appendChild(visualNote);
   const gifPreview=$("goalGifPreview");
   const gifRow=document.createElement("div");gifRow.className="actions";
@@ -838,17 +834,41 @@ async function api(url, options={}){
 }
 const post = (url,body) => api(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
 async function perform(fn){try{await fn()}catch(err){message("Error: "+err.message)}}
-function tab(id){
-  document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===id));
+function jumpToZone(anchor){
+  const section=$(anchor);
+  if(!section)return;
+  document.querySelectorAll(".subnav button").forEach(button=>{
+    const selected=button.dataset.jump===anchor;
+    button.classList.toggle("active",selected);
+    button.setAttribute("aria-pressed",String(selected));
+  });
+  const reduced=matchMedia("(prefers-reduced-motion:reduce)").matches;
+  section.scrollIntoView({block:"start",behavior:reduced?"auto":"smooth"});
+}
+function tab(id,anchor){
+  const route=PORTAL_ROUTES[id]||PORTAL_ROUTES.dashboard;
+  const page=route.page;
+  document.querySelectorAll(".panel").forEach(x=>
+    x.classList.toggle("active",x.id===page));
   document.querySelectorAll(".tab").forEach(x=>{
-    const selected=x.dataset.tab===id;
+    const selected=x.dataset.tab===page;
     x.classList.toggle("selected",selected);
     if(selected)x.setAttribute("aria-current","page");
     else x.removeAttribute("aria-current");
   });
-  scrollTo({top:0,behavior:"smooth"});
+  if(anchor||route.anchor){
+    requestAnimationFrame(()=>jumpToZone(anchor||route.anchor));
+  }else{
+    const reduced=matchMedia("(prefers-reduced-motion:reduce)").matches;
+    scrollTo({top:0,behavior:reduced?"auto":"smooth"});
+  }
+  // Bookmark navigational state without requesting extra firmware routes.
+  history.replaceState(null,"","#"+page);
 }
-document.querySelectorAll("[data-tab]").forEach(x=>x.addEventListener("click",()=>tab(x.dataset.tab)));
+document.querySelectorAll("[data-tab]").forEach(x=>x.addEventListener("click",
+  ()=>tab(x.dataset.tab,x.dataset.anchor)));
+document.querySelectorAll("[data-jump]").forEach(x=>x.addEventListener("click",
+  ()=>jumpToZone(x.dataset.jump)));
 let eventOffset=0, eventPageTotal=0;
 function eventTimestamp(row){
   if(row.timestamp)
@@ -1379,7 +1399,8 @@ async function saveConfig(){
   $("wifiPassword").value="";$("adminPassword").value="";
   currentConfig=await api("/api/config");
   await refresh();
-  message("Settings saved on the CYD");
+  setPortalDirty(false);
+  message("GameDay settings saved");
 }
 async function loadConfig(){
   currentConfig=await api("/api/config");
@@ -1427,6 +1448,8 @@ document.querySelectorAll("[data-mode]").forEach(b=>b.addEventListener("click",(
   await post("/api/config",{mode});
   await refresh();message("Celebrations: "+modes[mode]);
 })));
+$("portalSave").onclick=()=>perform(saveConfig);
+$("deviceSave").onclick=()=>perform(saveConfig);
 $("saveSettings").onclick=()=>perform(saveConfig);
 $("saveDisplay").onclick=()=>perform(saveConfig);
 function previewOverlay(kind,side="home"){
@@ -1775,8 +1798,19 @@ $("reboot").onclick=()=>perform(async()=>{
   await api("/api/reboot",{method:"POST"});message("Restart requested");
 });
 (async()=>{
-  try{await loadConfig();await refresh();await loadGoalGif();await loadSoundLibrary();await loadS3CaseLeds()}
-  catch(err){message("Cannot load device: "+err.message)}
+  try{
+    mountPortalModules();
+    trackPortalChanges();
+    await loadConfig();
+    await refresh();
+    await loadGoalGif();
+    await loadSoundLibrary();
+    await loadS3CaseLeds();
+    setPortalDirty(false);
+    const initial=location.hash.slice(1);
+    if(initial && PORTAL_ROUTES[initial] && initial!=="dashboard")
+      tab(initial);
+  }catch(err){message("Cannot load device: "+err.message)}
   setInterval(()=>refresh().catch(()=>{}),15000);
 })();
 </script>
