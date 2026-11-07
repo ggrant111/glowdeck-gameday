@@ -90,10 +90,12 @@ jobs:
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_native_layout.cpp -o /tmp/glowdeck-s3-native-test
           /tmp/glowdeck-s3-native-test
-      - name: Test S3 Phase 6B.2B dynamic Upcoming / Live / Intermission / Final scoreboard
+      - name: Test S3 Phase 6B.2B and 6B.3 dynamic scoreboard, status evidence and navigation
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_broadcast_states.cpp -o /tmp/glowdeck-s3-broadcast-state-test
           /tmp/glowdeck-s3-broadcast-state-test
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_broadcast_data.cpp -o /tmp/glowdeck-s3-broadcast-data-test
+          /tmp/glowdeck-s3-broadcast-data-test
           python tests/test_s3_broadcast_contract.py
       - name: Test S3 Phase 5 framebuffer and dirty-region geometry
         run: |
