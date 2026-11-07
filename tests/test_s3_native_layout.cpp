@@ -73,6 +73,9 @@ int main() {
   // follow star and tiny corner controls; no 3-button footer.
   assert(broadcastHitTest(401,23).action==Action::FOLLOW);
   assert(broadcastHitTest(24,301).action==Action::GAMES);
+  assert(broadcastHitTest(120,301).action==Action::PREVIOUS);
+  assert(broadcastHitTest(240,301).action==Action::PAUSE);
+  assert(broadcastHitTest(360,301).action==Action::NEXT);
   assert(broadcastHitTest(453,301).action==Action::MENU);
   assert(broadcastHitTest(240,148).action==Action::DETAILS);
   assert(broadcastHitTest(80,144).action==Action::DETAILS);  // Away logo
