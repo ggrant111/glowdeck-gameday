@@ -21,8 +21,19 @@ assert "GameDayIcons::Kind::NEXT" in main
 # Method names may appear in explanatory comments. Reject only actual unsafe
 # draw calls; the S3 framebuffer uses sprite-safe pixel and fill primitives.
 assert "tft.drawCircle(" not in icons and "tft.drawLine(" not in icons
-pp=main.split("void observePowerPlayEvents()",1)[1].split("Game *selectedGame()",1)[0]
-assert "change.ended" in pp and "scheduleWledRestoreAll();" in pp
+# A PP-end overlay must not call the old global restore: another armed
+# game may still own the WLED lights. The scheduler resolves PP ownership.
+pp=main.split("void observePowerPlayEvents() {",1)[1].split("Game *gameById",1)[0]
+assert "change.ended" in pp
+assert "scheduleWledRestoreAll();" not in pp
+tick=main.split("void tickWledCelebrations() {",1)[1].split(
+    "// Compact score/state fingerprint:",1)[0]
+assert "ppSide=currentWledPowerPlay(ppColor,ppGameId,ppSeq);" in tick
+assert "if(wledActiveEvent==CelebrationEngine::Event::POWER_PLAY)" in tick
+assert "if(!hasPP)" in tick and "scheduleWledRestoreAll();" in tick
+assert "wledActiveGameId!=ppGameId" in tick
+assert "const bool ddpReleased=releaseWledDdp(i);" in main
+assert "suppressArmedPowerPlays();" in main
 assert "wledPpManuallyStoppedGameId" in main
 assert "void tickWledCelebrations()" in main
 assert "tickWledDdpStreams();" in main
