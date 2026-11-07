@@ -8,9 +8,20 @@ struct State {
   bool paused = false;
   uint32_t gameId = 0;
   void reset() { paused = false; gameId = 0; }
+  void pin(uint32_t visibleGameId) {
+    if (!visibleGameId) return;
+    paused = true;
+    gameId = visibleGameId;
+  }
   void toggle(uint32_t visibleGameId) {
     if (paused) { reset(); return; }
-    if (visibleGameId) { paused = true; gameId = visibleGameId; }
+    pin(visibleGameId);
+  }
+  // A transient NHL API omission is not an explicit resume command.
+  // Only user navigation, resume, or a confirmed new scoreboard date
+  // releases the lock; the next valid feed can restore this game ID.
+  void onFeedRefresh(bool sameScoreboardDate) {
+    if (!sameScoreboardDate) reset();
   }
   template<typename Game>
   uint8_t index(const Game *games, uint8_t count) const {
