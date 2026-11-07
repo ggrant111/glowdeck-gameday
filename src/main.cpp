@@ -1935,6 +1935,197 @@ uint32_t wledSceneMaxDuration(uint8_t slot,
   return longest;
 }
 
+// Phase 8D: DDP is exclusively available on fully assigned, dedicated
+// RGB controllers. A mixed-target goal / PP or a WLED used elsewhere MUST
+// stay on the working native JSON segment path. Never use DDP as a broad
+// replacement for WLED's existing per-segment JSON semantics.
+uint8_t activeDdpCount(){
+  uint8_t active=0;
+  for(uint8_t i=0;i<MAX_WLED;++i)if(wledDdp[i].active)++active;
+  return active;
+}
+bool prepareWledDdp(uint8_t slot,CelebrationEngine::Event event,
+                    uint32_t color,uint8_t scorerSide,
+                    const String &snapshot,WledDdpSession &plan){
+  if(slot>=MAX_WLED || !cfg.wledDdpEnabled[slot] ||
+     !cfg.wledZoneEnabled[slot] || snapshot.isEmpty() ||
+     event==CelebrationEngine::Event::POWER_PLAY ||
+     event==CelebrationEngine::Event::NONE){
+    if(slot<MAX_WLED)wledDdp[slot].status="Native JSON (DDP not enabled / PP)";
+    return false;
+  }
+  if(activeDdpCount()>=WledDdpPolicy::kMaxConcurrent){
+    wledDdp[slot].status="Native JSON (DDP concurrent stream limit)";
+    return false;
+  }
+  WledScanEntry info;
+  if(!probeWledInfo(cfg.wled[slot],info,WledDiscoveryPolicy::kScanProbeTimeoutMs)){
+    wledDdp[slot].status="Native JSON (WLED info unavailable)";
+    return false;
+  }
+  if(info.live||info.rgbw||info.ledCount>WledDdpPolicy::kMaxPixels){
+    wledDdp[slot].status=info.live?
+      "Native JSON (WLED already in realtime mode)":
+      info.rgbw?"Native JSON (RGBW unsupported)":
+                 "Native JSON (over 300 LEDs)";
+    return false;
+  }
+  DynamicJsonDocument filter(384);
+  filter["on"]=true;
+  JsonObject slice=filter["seg"][0].to<JsonObject>();
+  slice["id"]=true;slice["start"]=true;slice["stop"]=true;slice["len"]=true;
+  DynamicJsonDocument state(3072);
+  if(deserializeJson(state,snapshot,DeserializationOption::Filter(filter))||
+     !(state["on"]|false)){
+    wledDdp[slot].status="Native JSON (WLED off or bad snapshot)";
+    return false;
+  }
+  WledDdpPolicy::Layout layout;
+  layout.pixels=info.ledCount;
+  JsonArray segments=state["seg"].as<JsonArray>();
+  if(segments.isNull()||segments.size()>WledDdpPolicy::kMaxRanges){
+    wledDdp[slot].status="Native JSON (unsupported WLED segments)";
+    return false;
+  }
+  for(uint8_t j=0;j<segments.size();++j){
+    JsonObject seg=segments[j];
+    const int id=seg["id"]|(int)j;
+    const int first=seg["start"]|0;
+    int end=seg["stop"]|0;
+    if(end<=first)end=first+(seg["len"]|0);
+    if(!WledZonePolicy::validSegment(id)||first<0||end<0||
+       first>65535||end>65535){
+      wledDdp[slot].status="Native JSON (invalid segment geometry)";
+      return false;
+    }
+    WledDdpPolicy::Range &range=layout.ranges[layout.count++];
+    range.start=uint16_t(first);range.stop=uint16_t(end);
+    range.id=uint8_t(id);
+    range.role=WledZonePolicy::role(cfg.wledZoneMap[slot],uint8_t(id));
+  }
+  const WledDdpPolicy::Fail safety=
+      WledDdpPolicy::validate(layout,uint8_t(event),scorerSide);
+  if(safety!=WledDdpPolicy::OK){
+    wledDdp[slot].status=WledDdpPolicy::reason(safety);
+    return false;
+  }
+  // DDP can only restore a whole controller. Different zone durations
+  // need native JSON's individually targeted restoration instead.
+  const Game *game=selectedGame();
+  const uint32_t home=game?teamRgb(game->home):color;
+  const uint32_t away=game?teamRgb(game->away):color;
+  uint32_t total=0;
+  WledDdpSession next;
+  next.layout=layout;
+  next.event=event;next.fps=cfg.wledDdpFps[slot];
+  next.status="DDP ready";
+  for(uint8_t j=0;j<layout.count;++j){
+    const WledDdpPolicy::Range &range=layout.ranges[j];
+    const WledZonePolicy::Role role=
+       WledZonePolicy::Role(range.role);
+    const uint32_t time=wledSceneDuration(slot,event,role);
+    if(!total)total=time;
+    else if(time!=total){
+      wledDdp[slot].status="Native JSON (different zone durations)";
+      return false;
+    }
+    const WledScenePolicy::Scene &scene=wledScene(slot,event,role);
+    const CelebrationEngine::Effect baseline=
+        CelebrationEngine::effect(event,0,cfg.wledGoalStyle);
+    const CelebrationEngine::Effect chosen=
+        WledScenePolicy::effect(scene,baseline);
+    const uint32_t standard=WledZonePolicy::zoneColor(role,uint8_t(event),
+                                        color,home,away);
+    const uint32_t team=role==WledZonePolicy::HOME?home:
+       role==WledZonePolicy::AWAY?away:color;
+    WledDdpPolicy::Style &style=next.styles[j];
+    style.color=WledScenePolicy::rgb(scene,standard,team);
+    style.brightness=WledScenePolicy::brightness(scene,cfg.brightness);
+    style.fx=chosen.fx;style.speed=chosen.speed;
+    style.intensity=chosen.intensity;
+  }
+  if(total==0||total>WledDdpPolicy::kMaxLiveMs){
+    wledDdp[slot].status="Native JSON (unbounded duration)";
+    return false;
+  }
+  next.durationMs=total;
+  plan=next;
+  return true;
+}
+bool sendWledDdpFrame(uint8_t slot,uint32_t now){
+  if(slot>=MAX_WLED || !wledDdp[slot].active ||
+     WiFi.status()!=WL_CONNECTED)return false;
+  WledDdpSession &session=wledDdp[slot];
+  const uint32_t elapsed=uint32_t(now-session.started);
+  // Respect the Phase 8C Strobe→Chase legacy goal style while retaining
+  // an explicitly configured scene's native FX selection.
+  WledDdpPolicy::Style rendered[WledDdpPolicy::kMaxRanges];
+  for(uint8_t j=0;j<session.layout.count;++j){
+    rendered[j]=session.styles[j];
+    const WledZonePolicy::Role role=WledZonePolicy::Role(
+         session.layout.ranges[j].role);
+    if(session.event==CelebrationEngine::Event::GOAL &&
+       wledScene(slot,session.event,role).fx==WledScenePolicy::kInherit &&
+       cfg.wledGoalStyle==0 &&
+       elapsed>=session.durationMs/3UL)
+      rendered[j].fx=28;
+  }
+  size_t bytes=0;
+  if(!WledDdpPolicy::frame(session.layout,rendered,elapsed,
+              session.sequence++,wledDdpPacket,sizeof(wledDdpPacket),bytes))
+    return false;
+  IPAddress target;
+  if(!target.fromString(cfg.wled[slot]) || !validWledLocalIp(target))
+    return false;
+  if(!wledDdpUdp.beginPacket(target,WledDdpPolicy::kPort))return false;
+  const bool written=wledDdpUdp.write(wledDdpPacket,bytes)==bytes;
+  const bool sent=wledDdpUdp.endPacket()==1;
+  if(!written||!sent)return false;
+  session.lastFrame=now;session.lastGoodFrame=now;++session.frames;
+  return true;
+}
+bool releaseWledDdp(uint8_t slot){
+  if(slot>=MAX_WLED)return false;
+  if(!wledDdp[slot].active)return true;
+  // DDP has taken the controller into WLED realtime mode: explicitly
+  // release it BEFORE restoring native segment FX, not just stop UDP.
+  const String ip=savedWledIp[slot].isEmpty()?cfg.wled[slot]:
+                   savedWledIp[slot];
+  if(!postWled(ip,"{\"live\":false,\"udpn\":{\"nn\":true}}"))
+    return false;
+  wledDdp[slot].active=false;
+  wledDdp[slot].manual=false;
+  wledDdp[slot].status="DDP released; restoring previous WLED state";
+  return true;
+}
+void tickWledDdpStreams(){
+  const uint32_t now=millis();
+  for(uint8_t i=0;i<MAX_WLED;++i){
+    WledDdpSession &session=wledDdp[i];
+    if(!session.active)continue;
+    if(!restoring[i] || WiFi.status()!=WL_CONNECTED){
+      if(restoring[i])restoreAt[i]=now;
+      session.status="DDP interrupted; restore requested";
+      continue;
+    }
+    if(restoreAt[i]!=UINT32_MAX &&
+       int32_t(now-restoreAt[i])>=0)continue;
+    const uint32_t elapsed=uint32_t(now-session.started);
+    if(elapsed>=WledDdpPolicy::kMaxLiveMs ||
+       (session.manual && elapsed>=WledDdpPolicy::kPreviewMs)){
+      restoreAt[i]=now;
+      session.status="DDP duration reached; restoring";
+      continue;
+    }
+    const uint32_t interval=1000UL/session.fps;
+    if(session.frames && uint32_t(now-session.lastFrame)<interval)continue;
+    if(!sendWledDdpFrame(i,now)){
+      restoreAt[i]=now;
+      session.status="DDP UDP send failed; restoring";
+      wledDeviceResult[i]="DDP transport failure";
+    }
+  }
+}
 // Native JSON effects always target WLED's EXISTING segment IDs.
 // When mapping is enabled there is intentionally NO legacy segment-0 fallback.
 // No start/stop/len/sel fields are written: this never reshapes WLED segments.
