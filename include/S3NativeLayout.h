@@ -31,7 +31,7 @@ inline Rect summaryStar(uint8_t n) {
           48, kSummaryHeight};
 }
 enum class Action : uint8_t {
-  NONE, MENU, FOLLOW, PREVIOUS, NEXT, GAMES, DETAILS,
+  NONE, MENU, FOLLOW, PREVIOUS, NEXT, GAMES, PAUSE, DETAILS,
   SUMMARY_DETAILS, SUMMARY_FOLLOW, BACK, ARM, SETUP,
   TEST, TOUCH_CHECK, COLOR_MODE, RESET_CHECK
 };
@@ -62,8 +62,11 @@ inline Hit hitTest(int16_t x, int16_t y, bool summary) {
 // Phase 6B broadcast Live Game touch map: minimal corner actions, no
 // permanent header or three-button footer. Swipe still advances the carousel.
 constexpr Rect kBroadcastFollow={375,2,52,42};
-constexpr Rect kBroadcastGames={0,272,82,48};
-constexpr Rect kBroadcastSettings={398,272,82,48};
+constexpr Rect kBroadcastGames={0,272,75,48};
+constexpr Rect kBroadcastPrev={85,272,70,48};
+constexpr Rect kBroadcastPause={202,272,76,48};
+constexpr Rect kBroadcastNext={325,272,70,48};
+constexpr Rect kBroadcastSettings={405,272,75,48};
 // The full matchup, both logos and unified lower data strip open Stats.
 // Star/corner controls have priority and remain outside this body zone.
 constexpr Rect kBroadcastDetails={24,88,432,180};
@@ -78,6 +81,9 @@ inline Hit broadcastHitTest(int16_t x,int16_t y) {
   if(x<0 || y<0 || x>=kWidth || y>=kHeight)return {Action::NONE,0};
   if(kBroadcastFollow.contains(x,y))return {Action::FOLLOW,0};
   if(kBroadcastGames.contains(x,y))return {Action::GAMES,0};
+  if(kBroadcastPrev.contains(x,y))return {Action::PREVIOUS,0};
+  if(kBroadcastPause.contains(x,y))return {Action::PAUSE,0};
+  if(kBroadcastNext.contains(x,y))return {Action::NEXT,0};
   if(kBroadcastSettings.contains(x,y))return {Action::MENU,0};
   if(kBroadcastDetails.contains(x,y))return {Action::DETAILS,0};
   return {Action::NONE,0};
