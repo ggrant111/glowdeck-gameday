@@ -26,7 +26,8 @@ int main(){
 
   int32_t peak=0;
   int64_t absTotal=0;
-  uint32_t nonzero=0, tail=0;
+  uint32_t nonzero=0;
+  int32_t tail=0;
   for(uint32_t f=0;f<kFrames;++f){
     const int32_t s=sample(f);
     const int32_t absolute=s<0?-s:s;
