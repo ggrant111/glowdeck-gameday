@@ -6762,7 +6762,7 @@ void registerRoutes() {
       soundUploadBytes=0;
       const String slotArg=server.arg("slot");
       // Require an exact slot digit; never allow modulo-wrapped user IDs.
-      soundUploadSlot=slotArg=="1"?1:slotArg=="2"?2:slotArg=="3"?3:0;
+      soundUploadSlot=slotArg=="1"?1:slotArg=="2"?2:slotArg=="3"?3:slotArg=="4"?4:0;
       soundUploadTitle="";
       const String filename=upload.filename;
       const int dot=filename.lastIndexOf('.');
@@ -6778,7 +6778,7 @@ void registerRoutes() {
         soundUploadTitle="Custom sound "+String(soundUploadSlot);
       if(!soundUploadFailed){
         if(!S3WavPolicy::validSlot(soundUploadSlot)){
-          soundUploadError="Select sound slot 1 through 3";
+          soundUploadError="Select sound slot 1 through 4";
           soundUploadFailed=true;
         }else if(!soundStorage.mounted()){
           soundUploadError="Sound storage not available";
