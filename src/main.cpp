@@ -15,6 +15,7 @@
 #include "S3NativeLayout.h"
 #include "S3ArenaBackground.h"
 #include "S3BroadcastGameState.h"
+#include "S3BroadcastDataPolicy.h"
 #else
 #include <XPT2046_Touchscreen.h>
 #endif
@@ -204,6 +205,10 @@ enum class Screen : uint8_t { LIVE, GAMES, SETUP, CALIBRATE, STATS };
 EventOverlay::Controller overlayController;
 #ifdef GLOWDECK_WAVESHARE_S3
 S3ArenaBackground s3Arena;
+#if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
+uint32_t s3BroadcastRenderedGameId=0;
+uint8_t s3BroadcastRenderedStatus=0;
+#endif
 GoalGifPlayer goalGif;
 uint32_t gifOverlayStart = 0;
 uint32_t gifOverlayFailedStart = 0;
@@ -3155,6 +3160,17 @@ void drawS3ArenaFitted(const String &value,int16_t x,int16_t y,
 // Phase 6B Arena Broadcast: the asset is a static arena template,
 // while logos, numbers, clock, PP and touch targets remain live GameDay data.
 // The transparent NHL logo pixels are composited into TFT_eSprite.
+// Team-linked status accents stay in the 136px centre of the lower strip.
+// They use official team primary colors, not an ambiguous generic PP color.
+void drawS3ArenaStatusLine(const Game &g,const String &label,
+                           int16_t y,uint8_t sides,uint16_t labelColor){
+  if(S3Broadcast::hasAway(sides))
+    tft.fillRoundRect(175,y-3,11,5,2,to565(teamRgb(g.away)));
+  if(S3Broadcast::hasHome(sides))
+    tft.fillRoundRect(294,y-3,11,5,2,to565(teamRgb(g.home)));
+  drawS3ArenaFitted(label,240,y,100,2,labelColor);
+}
+
 // Phase 6B.2B: one state-aware readout renderer for full and partial frames.
 // All dynamic pixels stay inside the two dirty rectangles. They are restored
 // from the cached RGB565 image before drawing, so FUT->LIVE->INT->FINAL never
@@ -3259,35 +3275,37 @@ void drawS3ArenaReadout(const Game &g) {
       tft.drawString("RECORDS PENDING",240,254,1);
     }
   } else if(view.showShots) {
+    // Stronger SOG hierarchy; a missing NHL number stays muted ("--"),
+    // never silently becomes a fabricated zero.
     tft.setTextColor(S3_MUTED);
-    tft.drawString("SOG",115,229,1);
-    tft.drawString("SOG",365,229,1);
-    tft.setTextColor(WHITE);
+    tft.drawString("SOG",115,229,2);
+    tft.drawString("SOG",365,229,2);
+    tft.setTextColor(g.awayShots>=0?WHITE:S3_MUTED);
     tft.drawString(g.awayShots>=0?String(g.awayShots):String("--"),
-                   115,250,4);
+                   115,251,4);
+    tft.setTextColor(g.homeShots>=0?WHITE:S3_MUTED);
     tft.drawString(g.homeShots>=0?String(g.homeShots):String("--"),
-                   365,250,4);
+                   365,251,4);
 
     if(view.showSpecialTeams) {
-      const uint32_t now=millis();
-      const bool ppFresh=g.ppDataKnown && g.ppSide!=0 &&
-          uint32_t(now-g.ppUpdatedAt)<45000UL;
-      const bool enFresh=g.emptyNetKnown && g.emptyNetSide!=0 &&
-          uint32_t(now-g.emptyNetUpdatedAt)<45000UL;
-      if(ppFresh || enFresh) {
-        const String ppTeam=g.ppSide==1?g.home:g.away;
-        const String enTeam=g.emptyNetSide==3?String("BOTH"):
-                             g.emptyNetSide==1?g.home:g.away;
-        if(ppFresh && enFresh) {
-          drawS3ArenaFitted("PP "+ppTeam,240,237,130,2,0xFDA6);
-          drawS3ArenaFitted("EN "+enTeam,240,257,130,1,S3_AQUA);
-        } else if(ppFresh) {
-          drawS3ArenaFitted("POWER PLAY",240,237,132,2,0xFDA6);
-          drawS3ArenaFitted(ppTeam,240,257,132,2,WHITE);
-        } else {
-          drawS3ArenaFitted("EMPTY NET",240,237,132,2,S3_AQUA);
-          drawS3ArenaFitted(enTeam,240,257,132,2,WHITE);
-        }
+      // Presentation only: PP proof still comes from the NHL penalty ledger,
+      // goalie-pulled states from the NHL on-ice feed. Respect expiry even
+      // if Wi-Fi disconnects and the scoreboard stops polling.
+      const S3Broadcast::SpecialTeams status=S3Broadcast::specialTeams(
+          view.phase,g.ppDataKnown,g.ppSide,g.ppUpdatedAt,
+          g.emptyNetKnown,g.emptyNetSide,g.emptyNetUpdatedAt,millis());
+      const String ppTeam=status.ppSide==1?g.home:g.away;
+      const String enTeam=status.emptyNetSides==3?String("BOTH"):
+          status.emptyNetSides==1?g.home:g.away;
+      if(status.ppSide && status.emptyNetSides) {
+        drawS3ArenaStatusLine(g,"PP "+ppTeam,237,status.ppSide,0xFDA6);
+        drawS3ArenaStatusLine(g,"EN "+enTeam,256,status.emptyNetSides,S3_AQUA);
+      } else if(status.ppSide) {
+        drawS3ArenaStatusLine(g,"POWER PLAY",237,status.ppSide,0xFDA6);
+        drawS3ArenaFitted(ppTeam,240,255,100,2,WHITE);
+      } else if(status.emptyNetSides) {
+        drawS3ArenaStatusLine(g,"EMPTY NET",237,status.emptyNetSides,S3_AQUA);
+        drawS3ArenaFitted(enTeam,240,255,100,2,WHITE);
       }
     } else if(view.phase==S3Broadcast::Phase::INTERMISSION) {
       tft.setTextColor(S3_AQUA);
@@ -3307,6 +3325,15 @@ void drawS3ArenaReadout(const Game &g) {
     tft.setTextColor(S3_MUTED);
     tft.drawString("AWAITING NHL UPDATE",240,245,1);
   }
+  // Entire main scoreboard now opens Stats with a short tap. Keep this
+  // low-contrast hint inside the existing top dirty rectangle.
+  tft.setTextColor(S3_MUTED);
+  tft.drawString("TAP FOR STATS",240,195,1);
+  const S3Broadcast::SpecialTeams visibleStatus=S3Broadcast::specialTeams(
+      view.phase,g.ppDataKnown,g.ppSide,g.ppUpdatedAt,
+      g.emptyNetKnown,g.emptyNetSide,g.emptyNetUpdatedAt,millis());
+  s3BroadcastRenderedGameId=g.id;
+  s3BroadcastRenderedStatus=visibleStatus.signature();
   tft.setTextDatum(TL_DATUM);
 }
 // A freestanding follow star for the de-boxed Phase 6B.2A broadcast page.
@@ -4304,6 +4331,13 @@ void handleS3NativeTouch(bool pressed) {
   }
 #if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
   if(screen==Screen::LIVE && showingGamePage() && s3Arena.ready()) {
+    // A diagonal drag or imperfect swipe must never accidentally follow a
+    // matchup or open Setup/Stats. The regular carousel swipe was handled
+    // above; only deliberate short taps reach the hit-map below.
+    if(!S3NativeLayout::broadcastTap(dx,dy)) {
+      lastCarouselAdvance=millis();
+      return;
+    }
     const auto hit=S3NativeLayout::broadcastHitTest(gestureStartX,gestureStartY);
     const LiveCarousel::Page page=currentCarouselPage();
     switch(hit.action){
@@ -5562,6 +5596,27 @@ void loop() {
       fetchDetailStats(games[currentIndex].id);
     }
   }
+#if defined(GLOWDECK_WAVESHARE_S3) && defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
+  // Expire a visibly stale PP/goalie-pulled badge on time even if the NHL
+  // request is delayed or Wi-Fi drops. Compare the displayed bits first to
+  // avoid scheduling redraws every loop iteration.
+  if(!needsDraw && !overlayController.active() && !partialLiveUpdate &&
+     screen==Screen::LIVE && showingGamePage() && gameCount &&
+     s3Arena.ready()) {
+    const LiveCarousel::Page visible=currentCarouselPage();
+    if(visible.kind==LiveCarousel::Kind::GAME && visible.index<gameCount) {
+      const Game &g=games[visible.index];
+      const S3Broadcast::Phase phase=S3Broadcast::classify(
+          g.state.c_str(),g.intermission);
+      const S3Broadcast::SpecialTeams fresh=S3Broadcast::specialTeams(
+          phase,g.ppDataKnown,g.ppSide,g.ppUpdatedAt,
+          g.emptyNetKnown,g.emptyNetSide,g.emptyNetUpdatedAt,now);
+      if(S3Broadcast::needsStatusRefresh(s3BroadcastRenderedGameId,
+           s3BroadcastRenderedStatus,g.id,fresh.signature()))
+        partialLiveUpdate=true;
+    }
+  }
+#endif
 #ifdef GLOWDECK_WAVESHARE_S3
   bool displayChanged = false;
   bool s3ScoreOnlyFrame = false;

@@ -36,10 +36,31 @@ assert readout.index("if(view.showSeasonRecord)") < readout.index("else if(view.
 assert readout.index("if(view.showSpecialTeams)") > readout.index("else if(view.showShots)")
 assert "cached->recordAway" in readout and "cached->recordHome" in readout
 assert "N/A" in readout and "RECORDS PENDING" in readout
-assert "uint32_t(now-g.ppUpdatedAt)<45000UL" in readout
-assert "uint32_t(now-g.emptyNetUpdatedAt)<45000UL" in readout
-assert "ppFresh && enFresh" in readout
-assert "g.emptyNetSide==3" in readout
+assert "S3Broadcast::specialTeams(" in readout
+assert "g.ppDataKnown,g.ppSide,g.ppUpdatedAt" in readout
+assert "g.emptyNetKnown,g.emptyNetSide,g.emptyNetUpdatedAt" in readout
+assert "status.ppSide && status.emptyNetSides" in readout
+assert "status.emptyNetSides==3" in readout
+assert 'drawS3ArenaStatusLine(g,"PP "+ppTeam' in readout
+assert 'drawS3ArenaStatusLine(g,"EN "+enTeam' in readout
+assert "drawS3ArenaStatusLine(const Game &g" in main
+assert "S3Broadcast::hasAway(sides)" in main
+assert "S3Broadcast::hasHome(sides)" in main
+assert "g.awayShots>=0?WHITE:S3_MUTED" in readout
+assert "g.homeShots>=0?WHITE:S3_MUTED" in readout
+assert 'tft.drawString("TAP FOR STATS",240,195,1);' in readout
+assert "s3BroadcastRenderedStatus=visibleStatus.signature();" in readout
+
+# A TTL expiry can update the two status regions even when Wi-Fi and NHL
+# polls stop. This path must be readout-only (no extra polling or light actions).
+tick=main.split("// Expire a visibly stale PP/goalie-pulled badge on time",1)[1]
+tick=tick.split("bool displayChanged = false;",1)[0]
+assert "S3Broadcast::needsStatusRefresh(" in tick
+assert "partialLiveUpdate=true;" in tick
+assert "!overlayController.active()" in tick
+assert "fetchDetailStats(" not in tick
+assert "pollNhl(" not in tick
+assert "startWledEvent(" not in tick
 
 # Dynamic fragments have two bounded, cache-restored regions and no
 # full-screen redraw, network fetch or icon reallocation.
@@ -62,7 +83,10 @@ assert "tft.presentRegion(bottom.x,bottom.y,bottom.w,bottom.h);" in main
 assert "overlayController.active()" in main
 assert "constexpr Rect kBroadcastReadoutTop={144,43,192,160};" in layout
 assert "constexpr Rect kBroadcastReadoutBottom={48,215,384,53};" in layout
+assert "constexpr Rect kBroadcastDetails={24,88,432,180};" in layout
+assert "broadcastTap(dx,dy)" in main
+assert "inline bool broadcastTap(int dx,int dy)" in layout
 assert "enum class Phase" in header
 assert "winnerSide" in header
 assert "GLOWDECK_S3_PHASE6_LIVE=1" in (root / "platformio.ini").read_text()
-print("PASS: S3 dynamic states, honest NHL status and isolated dirty refresh")
+print("PASS: S3 6B.3 team-status, TTL clearing, broad Stats touch, and isolated dirty refresh")
