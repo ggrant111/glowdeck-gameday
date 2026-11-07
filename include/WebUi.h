@@ -395,16 +395,23 @@ header{padding:19px 17px}
 <div class="card"><h2>Celebration preferences</h2>
 <label for="brightness">WLED brightness</label><input id="brightness" type="range" min="1" max="255"><div class="small" id="brightValue"></div>
 <label for="seconds">Celebration duration (seconds)</label><input id="seconds" type="number" min="2" max="30" step="1" value="8">
-<div class="toggle" style="margin-top:18px"><input id="horn" type="checkbox"><label for="horn">Enable built-in horn (GPIO26 speaker)</label></div>
-<p class="small muted">The onboard horn is a simple tone sequence. Custom WAV playback is not yet included.</p>
+<div class="toggle" style="margin-top:18px"><input id="horn" type="checkbox"><label for="horn" id="hornLabel">Enable built-in horn (GPIO26 speaker)</label></div>
+<p class="small muted" id="hornHelp">The onboard horn is a simple tone sequence. Custom WAV playback is not yet included.</p>
 <div class="toggle" style="margin-top:18px"><input id="screenInverted" type="checkbox"><label for="screenInverted">Correct inverted CYD display colors</label></div>
 <p class="small muted">Enable if the screen is pale blue or buttons appear pink instead of dark teal. It can also be toggled under SETUP directly on the touchscreen.</p>
 <label for="adminPassword">Change home Wi-Fi dashboard password</label><input id="adminPassword" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing">
 <p class="small muted">Connected to GlowDeck's setup hotspot? The dashboard opens without an extra login. Over your home Wi-Fi, sign in as admin with the dashboard password. Enter at least 8 characters to change it. The hotspot itself remains Wi-Fi password protected.</p>
 </div></div>
+<div class="card" id="s3AudioCard" hidden style="display:none">
+<h2>Onboard speaker · ESP32-S3</h2>
+<p>Play an original, synthesized hockey goal horn through the ES8311 speaker at a fixed 50% codec volume. This test only uses the onboard speaker: no NHL events, screen takeovers, WLED lights or remote sound systems are triggered.</p>
+<p id="s3AudioStatus" class="small muted">Checking speaker...</p>
+<div class="actions"><button type="button" id="s3AudioPreview">Preview goal horn · 50%</button></div>
+<p class="small muted">Use the horn checkbox above and Save settings to enable audio for actual followed/armed NHL goals. Custom WAV uploads are planned for Phase 7B.</p>
+</div>
 <div class="card" id="s3GoalGifCard" hidden style="display:none">
 <h2>Hockey goal GIF · ESP32-S3</h2>
-<p>Play your hockey goal-and-siren animation whenever a real NHL goal or GOAL preview appears on the touchscreen. Team-colored borders, score, and WLED celebrations stay synchronized. The GIF is a silent animation; ESP32-S3 onboard audio requires its own codec driver.</p>
+<p>Play your hockey goal-and-siren animation whenever a real NHL goal or GOAL preview appears on the touchscreen. Team-colored borders, score, and WLED celebrations stay synchronized. The GIF itself is silent; the separate ES8311 onboard horn can play during an armed game's real goal when enabled.</p>
 <p id="goalGifStatus" class="small muted">Checking animation storage...</p>
 <form id="goalGifUploadForm">
 <label for="goalGifFile">Upload optimized 320×240 GIF (maximum 1 MB)</label>
@@ -588,6 +595,20 @@ function renderStatus(){
     (s.overlayEvent||"Event")+" "+(s.overlayTeam||"")+
     " · "+Math.ceil((s.overlayRemainingMs||0)/1000)+"s":"Idle";
   $("overlayQueued").textContent=String(s.overlayQueue??0);
+  const audioCard=$("s3AudioCard");
+  audioCard.hidden=!s.audioSupported;
+  audioCard.style.display=s.audioSupported?"":"none";
+  if(s.audioSupported){
+    $("hornLabel").textContent="Enable onboard S3 goal horn (ES8311)";
+    $("hornHelp").textContent="Actual armed/followed goals use the S3 speaker at 50% volume; preview works even when this is unchecked.";
+    $("s3AudioStatus").textContent=s.audioReady?
+      (s.audioPlaying?"Horn playing · 50%":"ES8311 ready · 50% volume · idle"):
+      "Speaker unavailable: "+(s.audioError||"Codec not initialized");
+    $("s3AudioPreview").disabled=!s.audioReady||!!s.audioPlaying;
+  }else{
+    $("hornLabel").textContent="Enable built-in horn (GPIO26 speaker)";
+    $("hornHelp").textContent="The CYD plays a simple GPIO26 tone sequence; custom WAV playback is not included.";
+  }
   $("displayStandingsState").textContent=s.standingsReady?"Current cache loaded":"Loading or unavailable";
   $("displayDate").textContent=s.scoreDate||"Not loaded";
   $("displayToday").textContent=s.today||"Synchronizing";
@@ -1027,6 +1048,12 @@ $("overlayTestStart").onclick=()=>previewOverlay("start");
 $("overlayTestWin").onclick=()=>previewOverlay("win");
 $("overlayTestLoss").onclick=()=>previewOverlay("loss");
 $("overlayStop").onclick=()=>previewOverlay("stop");
+$("s3AudioPreview").onclick=()=>perform(async()=>{
+  const result=await post("/api/audio/preview",{});
+  $("s3AudioStatus").textContent="Goal horn playing · "+result.volume+"%";
+  message("S3 onboard goal horn preview started at "+result.volume+"% volume");
+  await refresh();
+});
 $("eventCategory").onchange=()=>{eventOffset=0;perform(loadEventLog)};
 $("refreshEventLog").onclick=()=>perform(loadEventLog);
 $("eventOlder").onclick=()=>{eventOffset+=12;perform(loadEventLog)};
