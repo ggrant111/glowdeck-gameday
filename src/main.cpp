@@ -35,6 +35,7 @@
 #include "CelebrationEngine.h"
 #include "WledDiscoveryPolicy.h"
 #include "WledZonePolicy.h"
+#include "WledScenePolicy.h"
 #include "TeamGradient.h"
 #include "GameEventLog.h"
 #include "PowerPlayLogPolicy.h"
@@ -94,6 +95,7 @@ struct Settings {
   String wledName[MAX_WLED];
   bool wledZoneEnabled[MAX_WLED] = {}; // OFF for migrated 8A/legacy slots
   uint32_t wledZoneMap[MAX_WLED] = {}; // 2-bit per existing WLED segment ID
+  WledScenePolicy::Scene wledScenes[MAX_WLED][WledScenePolicy::kSceneCount];
   bool wledPP = true, wledGameStart = true, wledFinal = true;
   uint8_t wledGoalStyle = 0; // 0 strobe+chase, 1 strobe, 2 chase, 3 solid
   uint8_t favoriteSide = 0; // home 0 / away 1; for start and final outcomes
@@ -209,6 +211,9 @@ uint32_t lastTouch = 0;
 String savedState[MAX_WLED];
 String savedWledIp[MAX_WLED];
 uint16_t wledTouchedSegments[MAX_WLED] = {};
+uint16_t wledCurrentSceneSegments[MAX_WLED] = {};
+uint16_t wledRestoredSceneSegments[MAX_WLED] = {};
+uint32_t lastWledSceneExpiryCheck=0;
 bool wledRestoreMapped[MAX_WLED] = {};
 uint8_t wledEventSide=WledZonePolicy::kUnknownSide;
 uint8_t queuedWledSide=WledZonePolicy::kUnknownSide;
@@ -1507,6 +1512,16 @@ void loadSettings() {
     cfg.wledName[i] = prefs.getString(("wname" + String(i)).c_str(), "");
     cfg.wledZoneEnabled[i] = prefs.getBool(("zoneOn"+String(i)).c_str(),false);
     cfg.wledZoneMap[i] = prefs.getUInt(("zoneMap"+String(i)).c_str(),0);
+    // 8C scene templates live in one CRC-validated NVS blob per slot.
+    // Missing/corrupt blobs keep all 15 entries in INHERIT mode.
+    const String key="scene"+String(i);
+    if(prefs.getBytesLength(key.c_str())==WledScenePolicy::kBlobBytes){
+      uint8_t raw[WledScenePolicy::kBlobBytes]={};
+      if(prefs.getBytes(key.c_str(),raw,sizeof(raw))==sizeof(raw) &&
+         !WledScenePolicy::decode(raw,sizeof(raw),cfg.wledScenes[i]))
+        Serial.printf("[WLED Scene] invalid scene blob slot=%u; defaults retained\n",
+                     unsigned(i));
+    }
     cfg.wledEnabled[i] = prefs.getBool(("enable" + String(i)).c_str(), false);
     cfg.wledEvents[i] = prefs.getUChar(("event" + String(i)).c_str(),
                                          CelebrationEngine::ALL_EVENTS) &
@@ -1869,13 +1884,41 @@ String wledRestoreBody(const String &original) {
   return body;
 }
 
+// 8C scenes are only evaluated AFTER the existing NHL arm/role policy.
+const WledScenePolicy::Scene &wledScene(uint8_t slot,
+    CelebrationEngine::Event event,WledZonePolicy::Role role){
+  static const WledScenePolicy::Scene fallback;
+  const int index=WledScenePolicy::index(uint8_t(event),uint8_t(role));
+  return slot<MAX_WLED && index>=0?
+    cfg.wledScenes[slot][index]:fallback;
+}
+uint32_t wledSceneDuration(uint8_t slot,
+    CelebrationEngine::Event event,WledZonePolicy::Role role){
+  return WledScenePolicy::durationMs(wledScene(slot,event,role),
+    uint8_t(event),CelebrationEngine::duration(event,cfg.seconds));
+}
+uint32_t wledSceneMaxDuration(uint8_t slot,
+     CelebrationEngine::Event event,uint16_t mask){
+  const uint32_t legacy=CelebrationEngine::duration(event,cfg.seconds);
+  if(!cfg.wledZoneEnabled[slot])return legacy;
+  uint32_t longest=0;
+  for(uint8_t id=0;id<WledZonePolicy::kMaxSegments;++id){
+    if(!(mask&(uint16_t(1U)<<id)))continue;
+    const WledZonePolicy::Role role=
+      WledZonePolicy::role(cfg.wledZoneMap[slot],id);
+    const uint32_t duration=wledSceneDuration(slot,event,role);
+    if(duration>longest)longest=duration;
+  }
+  return longest;
+}
+
 // Native JSON effects always target WLED's EXISTING segment IDs.
 // When mapping is enabled there is intentionally NO legacy segment-0 fallback.
 // No start/stop/len/sel fields are written: this never reshapes WLED segments.
 String wledEffectBody(const String &snapshot,
                       CelebrationEngine::Event event,uint32_t color,
                       uint8_t phase,uint8_t slot,uint8_t scorerSide,
-                      uint16_t &touched) {
+                      uint16_t &touched,uint16_t skipSegments=0) {
   touched=0;
   DynamicJsonDocument filter(384);
   filter["on"]=true;
@@ -1915,15 +1958,25 @@ String wledEffectBody(const String &snapshot,
        (stop<=first && len<=0))continue;
     if(!WledZonePolicy::target(mapped,cfg.wledZoneMap[slot],uint8_t(id),
          uint8_t(event),scorerSide))continue;
+    if(mapped && (skipSegments&(uint16_t(1U)<<id)))continue;
     const WledZonePolicy::Role zone=
       WledZonePolicy::role(cfg.wledZoneMap[slot],uint8_t(id));
-    const uint32_t rgb=mapped?
+    const WledScenePolicy::Scene &scene=wledScene(slot,event,zone);
+    const CelebrationEngine::Effect chosen=mapped?
+        WledScenePolicy::effect(scene,effect):effect;
+    const uint32_t defaultRgb=mapped?
         WledZonePolicy::zoneColor(zone,uint8_t(event),color,homeRgb,awayRgb):
         color;
+    const uint32_t zoneTeamRgb=zone==WledZonePolicy::HOME?homeRgb:
+       zone==WledZonePolicy::AWAY?awayRgb:color;
+    const uint32_t rgb=mapped?
+        WledScenePolicy::rgb(scene,defaultRgb,zoneTeamRgb):color;
     JsonObject out=segments.createNestedObject();
     out["id"]=id;out["on"]=true;
-    if(mapped)out["bri"]=cfg.brightness; // segment only, not global
-    out["fx"]=effect.fx;out["sx"]=effect.speed;out["ix"]=effect.intensity;
+    if(mapped)out["bri"]=cfg.brightness; // original 8B default
+    if(mapped && scene.fx!=WledScenePolicy::kInherit)
+      out["bri"]=scene.brightness;
+    out["fx"]=chosen.fx;out["sx"]=chosen.speed;out["ix"]=chosen.intensity;
     out["pal"]=0;
     JsonArray cols=out.createNestedArray("col");
     JsonArray primary=cols.createNestedArray();
@@ -2007,12 +2060,15 @@ void tickRestores() {
     // event manager ends it (not a timestamp to compare using subtraction).
     if (!restoring[i] || restoreAt[i] == UINT32_MAX ||
         int32_t(now - restoreAt[i]) < 0) continue;
-    const String body = wledRestoreMapped[i]
-        ? wledMappedRestoreBody(savedState[i],wledTouchedSegments[i])
-        : wledRestoreBody(savedState[i]);
-    const bool restored = !body.isEmpty() &&
-                          postWled(savedWledIp[i].length() ? savedWledIp[i] :
-                                   cfg.wled[i], body);
+    const bool alreadyRestored=wledRestoreMapped[i] &&
+                             wledTouchedSegments[i]==0;
+    const String body=alreadyRestored?String(""):
+        wledRestoreMapped[i]
+          ? wledMappedRestoreBody(savedState[i],wledTouchedSegments[i])
+          : wledRestoreBody(savedState[i]);
+    const bool restored=alreadyRestored || (!body.isEmpty() &&
+        postWled(savedWledIp[i].length() ? savedWledIp[i] :
+                 cfg.wled[i],body));
     if (restored) {
       wledDeviceResult[i] = "Restored";
       markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORED);
@@ -2022,6 +2078,7 @@ void tickRestores() {
       savedWledIp[i] = "";
       restoreRetries[i] = 0;
       wledTouchedSegments[i]=0;wledRestoreMapped[i]=false;
+      wledCurrentSceneSegments[i]=0;wledRestoredSceneSegments[i]=0;
     } else if (++restoreRetries[i] >= 3) {
       wledDeviceResult[i] = "Restore failed";
       markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORE_FAILED);
@@ -2031,6 +2088,7 @@ void tickRestores() {
       savedState[i] = "";
       savedWledIp[i] = "";
       wledTouchedSegments[i]=0;wledRestoreMapped[i]=false;
+      wledCurrentSceneSegments[i]=0;wledRestoredSceneSegments[i]=0;
     } else {
       restoreAt[i] = millis() + 1500UL;
       wledDeviceResult[i] = "Retrying restore";
@@ -2093,12 +2151,15 @@ bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
 
   const uint32_t commonStart = millis();
   uint8_t successful = 0;
+  uint32_t longestSceneMs=0;
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     if (!prepared[i]) continue;
     // The prior event might have been preempted before its own restore.
     if (wledEventOwner[i] && wledEventOwner[i] != eventSequence)
       markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::SUPERSEDED);
     wledEventOwner[i] = eventSequence;
+    wledCurrentSceneSegments[i]=0;
+    wledRestoredSceneSegments[i]=0;
     uint16_t changedMask=0;
     const String body=wledEffectBody(savedState[i],event,color,0,
                                      i,scorerSide,changedMask);
@@ -2113,6 +2174,9 @@ bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
     }
     wledTouchedSegments[i]|=changedMask;
     if (!body.isEmpty() && postWled(cfg.wled[i], body)) {
+      wledCurrentSceneSegments[i]=changedMask;
+      const uint32_t duration=wledSceneMaxDuration(i,event,changedMask);
+      if(duration>longestSceneMs)longestSceneMs=duration;
       restoring[i] = true;
       restoreRetries[i] = 0;
       // All devices share a single clock; PP has no duration until it ends.
@@ -2139,7 +2203,7 @@ bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
   wledEventColor = color;
   wledEventSide=scorerSide;
   wledEventStart = commonStart;
-  wledEventDuration = CelebrationEngine::duration(event, cfg.seconds);
+  wledEventDuration = longestSceneMs; // longest participating scene sets shared WLED end
   wledPhase = 0;
   Serial.printf("[WLED] %s on %u/%u selected controllers, heap=%u\n",
                 CelebrationEngine::label(event), successful,
@@ -2155,6 +2219,41 @@ uint8_t currentWledPowerPlay(uint32_t &color) {
       uint32_t(millis() - g->ppUpdatedAt) >= 80000UL) return 0;
   color = teamRgb(g->ppSide == 1 ? g->home : g->away);
   return g->ppSide;
+}
+
+// Expire individual customized scene zones early without restoring or
+// changing unrelated segments. A failed targeted restore is retried at the
+// next bounded tick; the normal end-of-event restore remains a fallback.
+void tickWledSceneExpirations(uint32_t now,uint32_t elapsed){
+  if(uint32_t(now-lastWledSceneExpiryCheck)<400UL)return;
+  lastWledSceneExpiryCheck=now;
+  for(uint8_t i=0;i<MAX_WLED;++i){
+    if(!restoring[i] || !wledRestoreMapped[i] ||
+       !cfg.wledZoneEnabled[i] || !wledCurrentSceneSegments[i])continue;
+    uint16_t expired=0;
+    for(uint8_t id=0;id<WledZonePolicy::kMaxSegments;++id){
+      const uint16_t bit=uint16_t(1U)<<id;
+      if(!(wledCurrentSceneSegments[i]&bit) ||
+         (wledRestoredSceneSegments[i]&bit))continue;
+      const WledZonePolicy::Role zone=
+          WledZonePolicy::role(cfg.wledZoneMap[i],id);
+      const uint32_t duration=wledSceneDuration(i,wledActiveEvent,zone);
+      if(duration>0 && elapsed>=duration)
+        expired|=bit;
+    }
+    if(!expired)continue;
+    const String body=wledMappedRestoreBody(savedState[i],expired);
+    if(!body.isEmpty() && postWled(cfg.wled[i],body)){
+      wledRestoredSceneSegments[i]|=expired;
+      wledCurrentSceneSegments[i]&=~expired;
+      wledTouchedSegments[i]&=~expired;
+      wledDeviceResult[i]="Scene zone finished";
+    }else{
+      wledDeviceResult[i]="Scene zone restore retrying";
+      Serial.printf("[WLED Scene] slot %u early restore retry mask=%04X\n",
+                    unsigned(i),unsigned(expired));
+    }
+  }
 }
 
 void tickWledCelebrations() {
@@ -2175,6 +2274,7 @@ void tickWledCelebrations() {
       CelebrationEngine::temporary(wledActiveEvent)) {
     const uint32_t elapsed = uint32_t(now - wledEventStart);
     if (elapsed < wledEventDuration) {
+      tickWledSceneExpirations(now,elapsed);
       const uint8_t nextPhase = CelebrationEngine::phase(
           wledActiveEvent, elapsed, wledEventDuration, cfg.wledGoalStyle);
       if (nextPhase != wledPhase) {
@@ -2184,8 +2284,10 @@ void tickWledCelebrations() {
             continue;
           uint16_t phaseTouched=0;
           const String body=wledEffectBody(savedState[i],wledActiveEvent,
-                 wledEventColor,wledPhase,i,wledEventSide,phaseTouched);
+                 wledEventColor,wledPhase,i,wledEventSide,phaseTouched,
+                 wledRestoredSceneSegments[i]);
           wledTouchedSegments[i]|=phaseTouched;
+          wledCurrentSceneSegments[i]|=phaseTouched;
           if (!body.isEmpty() && postWled(cfg.wled[i], body))
             wledDeviceResult[i] = "Playing";
           else {
@@ -6221,6 +6323,209 @@ void registerRoutes() {
     response["ok"]=applied;
     response["slot"]=slot;response["id"]=id;
     response["durationMs"]=1800;
+    sendJson(response);
+  });
+  // 8C scene builder routes: authenticated, no NHL observation/follow changes.
+  server.on("/api/wled/scenes", HTTP_GET, []() {
+    if(!authorized())return;
+    const String input=server.arg("slot");
+    if(input.length()!=1 || input[0]<'0' || input[0]>'7')
+      return errorResponse("Specify a WLED slot 0–7",400);
+    const uint8_t slot=uint8_t(input[0]-'0');
+    if(cfg.wled[slot].isEmpty())return errorResponse("Save WLED controller first",400);
+    DynamicJsonDocument response(4400);
+    response["ok"]=true;response["slot"]=slot;
+    response["name"]=cfg.wledName[slot];
+    response["mappingEnabled"]=cfg.wledZoneEnabled[slot];
+    response["wledIp"]=cfg.wled[slot];
+    response["globalGoalSeconds"]=cfg.seconds;
+    JsonArray options=response.createNestedArray("effects");
+    for(uint8_t j=0;j<WledScenePolicy::kAllowedFxCount;++j)
+      options.add(WledScenePolicy::kAllowedFx[j]);
+    JsonArray rows=response.createNestedArray("scenes");
+    for(uint8_t event=1;event<=WledScenePolicy::kEvents;++event){
+      for(uint8_t zone=1;zone<=WledScenePolicy::kZones;++zone){
+        const int idx=WledScenePolicy::index(event,zone);
+        const WledScenePolicy::Scene &sc=cfg.wledScenes[slot][idx];
+        JsonObject obj=rows.createNestedObject();
+        obj["event"]=event;obj["zone"]=zone;
+        obj["custom"]=sc.fx!=WledScenePolicy::kInherit;
+        obj["fx"]=sc.fx==WledScenePolicy::kInherit?0:sc.fx;
+        obj["speed"]=sc.speed;obj["intensity"]=sc.intensity;
+        obj["brightness"]=sc.brightness;
+        obj["colorMode"]=sc.colorMode;
+        char hex[8];
+        snprintf(hex,sizeof(hex),"#%02X%02X%02X",sc.r,sc.g,sc.b);
+        obj["hex"]=hex;obj["duration"]=sc.duration;
+      }
+    }
+    if(response.overflowed())return errorResponse("Scene list memory unavailable",503);
+    sendJson(response);
+  });
+  server.on("/api/wled/scenes", HTTP_POST, []() {
+    if(!authorized())return;
+    const String body=server.arg("plain");
+    if(body.length()>3600)return errorResponse("Scene request too large",400);
+    DynamicJsonDocument request(4800);
+    if(deserializeJson(request,body) || !request["slot"].is<int>() ||
+       !request["scenes"].is<JsonArray>())
+      return errorResponse("Expected slot and scenes array",400);
+    const int slot=request["slot"].as<int>();
+    if(!WledDiscoveryPolicy::validSlot(slot) || cfg.wled[slot].isEmpty())
+      return errorResponse("Save the WLED controller before editing scenes",400);
+    if(wledActiveEvent!=CelebrationEngine::Event::NONE || restoring[slot])
+      return errorResponse("Finish active WLED effects and restore before saving scenes",409);
+    JsonArray rows=request["scenes"].as<JsonArray>();
+    if(rows.size()!=WledScenePolicy::kSceneCount)
+      return errorResponse("Provide all 15 event-zone templates",400);
+    WledScenePolicy::Scene next[WledScenePolicy::kSceneCount];
+    uint16_t seen=0;
+    for(JsonVariant item:rows){
+      if(!item["event"].is<int>() || !item["zone"].is<int>() ||
+         !item["custom"].is<bool>())
+        return errorResponse("Each template requires event, zone and custom",400);
+      const int event=item["event"].as<int>(),zone=item["zone"].as<int>();
+      const int idx=WledScenePolicy::index(uint8_t(event),uint8_t(zone));
+      if(event<1||event>WledScenePolicy::kEvents||
+         zone<1||zone>WledScenePolicy::kZones||
+         idx<0||(seen&(uint16_t(1U)<<idx)))
+        return errorResponse("Invalid or repeated event-zone template",400);
+      seen|=uint16_t(1U)<<idx;
+      if(!item["custom"].as<bool>())continue; // exact Phase 8B inheritance
+      for(const char *field:{"fx","speed","intensity","brightness",
+                              "colorMode","duration"})
+        if(!item[field].is<int>())
+          return errorResponse("Template parameters must be integers",400);
+      const int fx=item["fx"].as<int>(),speed=item["speed"].as<int>();
+      const int intensity=item["intensity"].as<int>();
+      const int brightness=item["brightness"].as<int>();
+      const int mode=item["colorMode"].as<int>();
+      const int duration=item["duration"].as<int>();
+      if(fx<0||fx>254||speed<0||speed>255||
+         intensity<0||intensity>255||brightness<1||brightness>255||
+         mode<0||mode>3||duration<0||duration>30)
+        return errorResponse("Scene parameter outside allowed range",400);
+      const String hex=item["hex"]|String("");
+      if(hex.length()!=7 || hex[0]!='#')
+        return errorResponse("Scene color must be #RRGGBB",400);
+      uint32_t rgb=0;
+      for(uint8_t k=1;k<7;++k){
+        const char c=hex[k];
+        const uint8_t digit=c>='0'&&c<='9'?c-'0':
+          c>='a'&&c<='f'?c-'a'+10:
+          c>='A'&&c<='F'?c-'A'+10:255;
+        if(digit>15)return errorResponse("Invalid hexadecimal scene color",400);
+        rgb=(rgb<<4)|digit;
+      }
+      WledScenePolicy::Scene &sc=next[idx];
+      sc.fx=uint8_t(fx);sc.speed=uint8_t(speed);
+      sc.intensity=uint8_t(intensity);sc.brightness=uint8_t(brightness);
+      sc.colorMode=uint8_t(mode);
+      sc.r=uint8_t(rgb>>16);sc.g=uint8_t(rgb>>8);sc.b=uint8_t(rgb);
+      sc.duration=uint8_t(duration);
+      if(!WledScenePolicy::valid(sc,uint8_t(event)))
+        return errorResponse("Unsupported effect or scene duration",400);
+    }
+    if(seen!=uint16_t((1U<<WledScenePolicy::kSceneCount)-1U))
+      return errorResponse("Every event-zone pair must be supplied",400);
+    // Persist one complete CRC-protected blob; never partially apply a
+    // multi-zone edit to a live GameDay celebration.
+    uint8_t blob[WledScenePolicy::kBlobBytes]={};
+    WledScenePolicy::encode(next,blob);
+    const String key="scene"+String(slot);
+    if(prefs.putBytes(key.c_str(),blob,sizeof(blob))!=sizeof(blob))
+      return errorResponse("Scene library flash write failed",503);
+    for(uint8_t i=0;i<WledScenePolicy::kSceneCount;++i)
+      cfg.wledScenes[slot][i]=next[i];
+    StaticJsonDocument<112> response;
+    response["ok"]=true;response["slot"]=slot;response["saved"]=true;
+    sendJson(response);
+  });
+  server.on("/api/wled/scene-preview", HTTP_POST, []() {
+    if(!authorized())return;
+    StaticJsonDocument<384> request;
+    const String raw=server.arg("plain");
+    if(raw.length()>350 || deserializeJson(request,raw) ||
+       !request["slot"].is<int>() || !request["event"].is<int>() ||
+       !request["zone"].is<int>())
+      return errorResponse("Invalid scene preview request",400);
+    const int slot=request["slot"].as<int>();
+    const int event=request["event"].as<int>(),zone=request["zone"].as<int>();
+    if(!WledDiscoveryPolicy::validSlot(slot) ||
+       !WledZonePolicy::validRole(zone) || zone==0 ||
+       event<1||event>WledScenePolicy::kEvents ||
+       cfg.wled[slot].isEmpty() || !cfg.wledZoneEnabled[slot])
+      return errorResponse("Enable segment zones on a saved WLED first",400);
+    if(wledActiveEvent!=CelebrationEngine::Event::NONE || restoring[slot])
+      return errorResponse("Stop active WLED celebration/restore before preview",409);
+    const String original=getWledState(cfg.wled[slot]);
+    if(original.isEmpty())return errorResponse("Cannot snapshot WLED before preview",503);
+    DynamicJsonDocument filter(480);
+    filter["on"]=true;
+    JsonObject shape=filter["seg"][0].to<JsonObject>();
+    for(const char *k:{"id","start","stop","len"})shape[k]=true;
+    DynamicJsonDocument state(3072);
+    if(deserializeJson(state,original,DeserializationOption::Filter(filter))||
+       !(state["on"]|false))
+      return errorResponse("WLED must be ON and report valid segment state",409);
+    const WledZonePolicy::Role role=WledZonePolicy::Role(zone);
+    const WledScenePolicy::Scene &scene=wledScene(uint8_t(slot),
+                    CelebrationEngine::Event(event),role);
+    const Game *game=testMatchup();
+    const uint32_t homeRgb=game?teamRgb(game->home):0x38B4DEUL;
+    const uint32_t awayRgb=game?teamRgb(game->away):0xE6A44FUL;
+    const uint32_t trigger=zone==int(WledZonePolicy::AWAY)?awayRgb:homeRgb;
+    const uint32_t fallback=WledZonePolicy::zoneColor(role,uint8_t(event),
+                                      trigger,homeRgb,awayRgb);
+    const uint32_t team=role==WledZonePolicy::HOME?homeRgb:
+      role==WledZonePolicy::AWAY?awayRgb:trigger;
+    const uint32_t rgb=WledScenePolicy::rgb(scene,fallback,team);
+    const CelebrationEngine::Effect chosen=WledScenePolicy::effect(
+      scene,CelebrationEngine::effect(CelebrationEngine::Event(event),0,
+                                    cfg.wledGoalStyle));
+    const uint8_t bri=WledScenePolicy::brightness(scene,cfg.brightness);
+    DynamicJsonDocument command(2900);
+    command["udpn"]["nn"]=true;command["transition"]=0;
+    JsonArray targets=command.createNestedArray("seg");
+    uint16_t mask=0;
+    JsonArray segments=state["seg"].as<JsonArray>();
+    for(uint8_t j=0;j<segments.size() &&
+        j<WledZonePolicy::kMaxSegments;++j){
+      JsonObject seg=segments[j];
+      const int id=seg["id"]|(int)j;
+      const int first=seg["start"]|0;
+      const int end=seg["stop"]|0;
+      if(!WledZonePolicy::validSegment(id) ||
+         (end<=first && (seg["len"]|0)<=0) ||
+         WledZonePolicy::role(cfg.wledZoneMap[slot],uint8_t(id))!=role)
+        continue;
+      JsonObject out=targets.createNestedObject();
+      out["id"]=id;out["on"]=true;out["bri"]=bri;
+      out["fx"]=chosen.fx;out["sx"]=chosen.speed;
+      out["ix"]=chosen.intensity;out["pal"]=0;
+      JsonArray cols=out.createNestedArray("col");
+      JsonArray primary=cols.createNestedArray();
+      primary.add((rgb>>16)&255);primary.add((rgb>>8)&255);primary.add(rgb&255);
+      mask|=uint16_t(1U)<<id;
+    }
+    if(!mask || command.overflowed())
+      return errorResponse("No valid WLED segments assigned to this zone",400);
+    String body;serializeJson(command,body);
+    savedState[slot]=original;savedWledIp[slot]=cfg.wled[slot];
+    wledTouchedSegments[slot]=mask;wledCurrentSceneSegments[slot]=0;
+    wledRestoredSceneSegments[slot]=0;wledRestoreMapped[slot]=true;
+    wledEventOwner[slot]=0;restoring[slot]=true;
+    restoreRetries[slot]=0;
+    // Manual rehearsal is deliberately short even if the live scene
+    // duration is 30 seconds; use the real saved scene effect/color.
+    restoreAt[slot]=millis()+3000UL;
+    const bool applied=postWled(cfg.wled[slot],body);
+    if(!applied)restoreAt[slot]=millis();
+    wledDeviceResult[slot]=applied?"Scene preview":"Scene preview failed; restoring";
+    StaticJsonDocument<120> response;
+    response["ok"]=applied;response["slot"]=slot;
+    response["event"]=event;response["zone"]=zone;
+    response["restoreMs"]=3000;
     sendJson(response);
   });
   server.on("/api/wled/preview", HTTP_POST, []() {

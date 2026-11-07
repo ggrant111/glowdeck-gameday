@@ -238,7 +238,34 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 .wled-segment-row[data-zone="2"] .wled-range-fill{background:#edb571}
 .wled-segment-row[data-zone="3"] .wled-range-fill{background:#c6d0e9}
 @media(max-width:620px){.wled-segment-row{grid-template-columns:1fr}.wled-segment-row .actions{justify-content:space-between}}
-</style>
+/* Native WLED JSON scene composer — arena-blue surfaces and zone accents. */
+.wled-scene-builder{margin-top:12px;padding:16px;border:1px solid #46768b;
+  border-radius:13px;background:linear-gradient(150deg,#112d3b,#0b1d29)}
+.wled-scene-title{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.wled-scene-title h4{margin:0 0 4px;font-size:17px}
+.wled-scene-title strong{font-size:15px}
+.wled-scene-warning{padding:12px;border:1px solid #aa8455;
+  background:#4f3d2755;border-radius:10px;color:#f2d6a2}
+.wled-scene-toolbar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;
+  padding:12px 0;border-bottom:1px solid #34586b}
+.wled-scene-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(225px,1fr));
+  gap:12px;margin:14px 0}
+.wled-scene-zone{padding:13px;border:1px solid #426578;border-radius:12px;
+  background:#102534}
+.wled-scene-zone[data-zone="1"]{border-top:3px solid #62c9d6}
+.wled-scene-zone[data-zone="2"]{border-top:3px solid #dfab64}
+.wled-scene-zone[data-zone="3"]{border-top:3px solid #d5dced}
+.wled-scene-zone .toggle{margin:10px 0}
+.wled-scene-controls{display:flex;flex-direction:column;gap:10px}
+.wled-scene-controls[hidden]{display:none}
+.wled-scene-field{display:flex;flex-direction:column;gap:4px;
+  min-width:155px;font-size:12px;font-weight:650;color:#bad4dd}
+.wled-scene-field input[type=range]{width:100%;min-height:18px}
+.wled-scene-field b{align-self:flex-end;font-variant-numeric:tabular-nums}
+.wled-scene-field select{width:100%}
+.wled-scene-field input[type=color]{width:100%;height:40px;padding:3px}
+@media(max-width:620px){.wled-scene-builder{padding:10px}
+  .wled-scene-grid{grid-template-columns:minmax(0,1fr)}}</style>
 </head>
 <body>
 <header>
@@ -1387,7 +1414,19 @@ function renderDevices(){
         throw Error("Save a WLED IP before discovering segments");
       await openWledSegments(i,zones);
     });
-    card.append(result,manage,zones);list.append(card);
+    const sceneButton=document.createElement("button");
+    sceneButton.type="button";sceneButton.className="ghost";
+    sceneButton.textContent="Celebration scene builder";
+    const sceneHost=document.createElement("div");
+    sceneHost.className="wled-scene-host";
+    sceneButton.onclick=()=>perform(async()=>{
+      if(currentConfig.wled[i].ip!==$("ip"+i).value.trim())
+        throw Error("Save this controller IP before editing scenes");
+      if(!currentConfig.wled[i].ip)
+        throw Error("Save a WLED controller before creating celebration scenes");
+      await openWledSceneBuilder(i,sceneHost);
+    });
+    card.append(result,manage,sceneButton,zones,sceneHost);list.append(card);
   });
   renderWledControllerResults();
 }
@@ -1547,6 +1586,203 @@ async function openWledSegments(slot,host){
     "Game start/final uses team-colored zones. Other segments remain untouched. "+
     "The WLED controller must already be on.";
   host.append(alert);
+}
+// 8C scene editor. Every change lives in one local draft until explicit
+// Save scenes; switching event tabs never writes flash or WLED devices.
+const WLED_SCENE_EVENTS=[
+  {id:1,name:"Goal",defaultFx:23},
+  {id:2,name:"Power play",defaultFx:2},
+  {id:3,name:"Game start",defaultFx:3},
+  {id:4,name:"Final · win",defaultFx:17},
+  {id:5,name:"Final · loss",defaultFx:12}
+];
+const WLED_SCENE_ZONES=[
+  {id:1,name:"Home",hint:"Home goals and power plays"},
+  {id:2,name:"Away",hint:"Away goals and power plays"},
+  {id:3,name:"Neutral",hint:"Either team's goals and power plays"}
+];
+const WLED_SCENE_EFFECTS=[
+  [0,"Solid"],[2,"Breathe"],[3,"Wipe"],[12,"Fade"],
+  [17,"Twinkle"],[23,"Strobe"],[28,"Chase"]
+];
+function sceneControl(label,element){
+  const wrapper=document.createElement("label");
+  wrapper.className="wled-scene-field";
+  const title=document.createElement("span");title.textContent=label;
+  wrapper.append(title,element);return wrapper;
+}
+async function openWledSceneBuilder(slot,host){
+  host.replaceChildren();
+  const info=await api("/api/wled/scenes?slot="+slot);
+  const drafts=info.scenes.map(scene=>({...scene}));
+  host.replaceChildren();
+  const frame=document.createElement("div");frame.className="wled-scene-builder";
+  const head=document.createElement("div");head.className="wled-scene-title";
+  const title=document.createElement("h4");
+  title.textContent="Celebration scenes · "+(info.name||"Controller "+(slot+1));
+  const close=document.createElement("button");
+  close.type="button";close.className="ghost";close.textContent="Close";
+  close.onclick=()=>host.replaceChildren();
+  head.append(title,close);frame.append(head);
+  const instruction=document.createElement("p");instruction.className="small muted";
+  instruction.textContent="Set an effect for each NHL event and lighting zone. "+
+    "Leave a template on Inherit to retain the Phase 8B behavior. "+
+    "Your scene edits apply to this controller only, and never change its LED ranges.";
+  frame.append(instruction);
+  if(!info.mappingEnabled){
+    const warning=document.createElement("p");warning.className="wled-scene-warning";
+    warning.textContent="Zone routing is OFF. Assign segments and enable Home/Away/Neutral "+
+      "mapping under Manage segments before these scenes can play.";
+    frame.append(warning);
+  }
+  let eventId=1;
+  const toolbar=document.createElement("div");toolbar.className="wled-scene-toolbar";
+  const eventSelect=document.createElement("select");
+  eventSelect.setAttribute("aria-label","Scene event");
+  WLED_SCENE_EVENTS.forEach(event=>{
+    const option=document.createElement("option");option.value=String(event.id);
+    option.textContent=event.name;eventSelect.append(option);
+  });
+  toolbar.append(sceneControl("NHL event",eventSelect));
+  const defaultEvent=document.createElement("button");
+  defaultEvent.type="button";defaultEvent.className="ghost";
+  defaultEvent.textContent="Reset this event to inheritance";
+  toolbar.append(defaultEvent);frame.append(toolbar);
+  const sceneGrid=document.createElement("div");sceneGrid.className="wled-scene-grid";
+  frame.append(sceneGrid);
+  const foot=document.createElement("div");foot.className="actions";
+  const save=document.createElement("button");save.type="button";
+  save.className="primary";save.textContent="Save all scene templates";
+  const discard=document.createElement("button");discard.type="button";
+  discard.textContent="Discard changes";
+  discard.onclick=()=>perform(()=>openWledSceneBuilder(slot,host));
+  foot.append(save,discard);frame.append(foot);
+  const tip=document.createElement("p");tip.className="small muted";
+  tip.textContent="Preview runs the LAST SAVED scene for 3 seconds. Save edits first. "+
+    "A preview will briefly change real WLED segments and restore their prior appearance. "+
+    "Only the armed NHL game can trigger live WLED celebrations.";
+  frame.append(tip);host.append(frame);
+  function updateDraft(ev,zone,key,value){
+    const scene=drafts.find(x=>x.event===ev&&x.zone===zone);
+    if(scene)scene[key]=value;
+    save.dataset.dirty="true";
+    save.textContent="Save scene changes";
+  }
+  function draw(){
+    sceneGrid.replaceChildren();
+    const event=WLED_SCENE_EVENTS.find(x=>x.id===eventId);
+    WLED_SCENE_ZONES.forEach(zone=>{
+      const draft=drafts.find(x=>x.event===eventId&&x.zone===zone.id);
+      const card=document.createElement("div");card.className="wled-scene-zone";
+      card.dataset.zone=String(zone.id);
+      const heading=document.createElement("div");heading.className="wled-scene-title";
+      const name=document.createElement("strong");name.textContent=zone.name+" zone";
+      const label=document.createElement("span");label.className="small muted";
+      label.textContent=zone.hint;
+      heading.append(name,label);card.append(heading);
+      const toggleWrap=document.createElement("div");toggleWrap.className="toggle";
+      const toggle=document.createElement("input");toggle.type="checkbox";
+      toggle.checked=!!draft.custom;
+      const toggleLabel=document.createElement("label");
+      toggleLabel.textContent="Use custom scene (otherwise inherit)";
+      toggle.id="wledScene"+slot+"_"+eventId+"_"+zone.id;
+      toggleLabel.htmlFor=toggle.id;
+      toggleWrap.append(toggle,toggleLabel);card.append(toggleWrap);
+      const controls=document.createElement("div");controls.className="wled-scene-controls";
+      const effectSelect=document.createElement("select");
+      WLED_SCENE_EFFECTS.forEach(([id,label])=>{
+        const opt=document.createElement("option");opt.value=String(id);
+        opt.textContent=label;effectSelect.append(opt);
+      });
+      effectSelect.value=String(draft.custom?draft.fx:event.defaultFx);
+      const mkNumber=(label,key,min,max,step,initial)=>{
+        const inp=document.createElement("input");inp.type="range";
+        inp.min=String(min);inp.max=String(max);inp.step=String(step);
+        inp.value=String(initial);
+        const value=document.createElement("b");value.className="small";
+        value.textContent=String(initial);
+        inp.oninput=()=>{value.textContent=inp.value;updateDraft(eventId,zone.id,key,Number(inp.value));};
+        const wrap=sceneControl(label,inp);wrap.append(value);controls.append(wrap);
+      };
+      const effectField=sceneControl("WLED effect",effectSelect);
+      controls.append(effectField);
+      effectSelect.onchange=()=>updateDraft(eventId,zone.id,"fx",Number(effectSelect.value));
+      mkNumber("Speed","speed",0,255,1,draft.speed??128);
+      mkNumber("Intensity","intensity",0,255,1,draft.intensity??128);
+      mkNumber("Brightness","brightness",1,255,1,draft.brightness??190);
+      const color=document.createElement("select");
+      [["0","Automatic (8B defaults)"],["1","Team primary color"],
+       ["2","White"],["3","Custom hex color"]].forEach(([id,label])=>{
+        const opt=document.createElement("option");opt.value=id;opt.textContent=label;
+        color.append(opt);
+      });
+      color.value=String(draft.colorMode??0);
+      const colorField=sceneControl("Color behavior",color);
+      controls.append(colorField);
+      const colorHex=document.createElement("input");colorHex.type="color";
+      colorHex.value=/^#[0-9a-f]{6}$/i.test(draft.hex||"")?
+        draft.hex:"#ffffff";
+      const hexField=sceneControl("Custom color",colorHex);
+      hexField.hidden=color.value!=="3";controls.append(hexField);
+      color.onchange=()=>{
+        updateDraft(eventId,zone.id,"colorMode",Number(color.value));
+        hexField.hidden=color.value!=="3";
+      };
+      colorHex.oninput=()=>updateDraft(eventId,zone.id,"hex",colorHex.value);
+      const duration=document.createElement("input");duration.type="number";
+      duration.min="0";duration.max="30";duration.step="1";
+      duration.value=String(draft.duration??0);
+      duration.disabled=eventId===2;
+      duration.onchange=()=>updateDraft(eventId,zone.id,"duration",Number(duration.value));
+      controls.append(sceneControl(eventId===2?
+        "Duration · until official PP ends":"Duration · 0 = shared, 2–30 seconds",
+        duration));
+      toggle.onchange=()=>{
+        const activating=toggle.checked&&!draft.custom;
+        updateDraft(eventId,zone.id,"custom",toggle.checked);
+        if(activating){
+          updateDraft(eventId,zone.id,"fx",event.defaultFx);
+          effectSelect.value=String(event.defaultFx);
+        }
+        controls.hidden=!toggle.checked;
+      };
+      controls.hidden=!toggle.checked;
+      card.append(controls);
+      const actions=document.createElement("div");actions.className="actions";
+      const preview=document.createElement("button");preview.type="button";
+      preview.textContent="Preview saved scene";
+      preview.disabled=!info.mappingEnabled;
+      preview.onclick=()=>perform(async()=>{
+        if(save.dataset.dirty==="true")
+          throw Error("Save or discard your scene edits before previewing");
+        const result=await post("/api/wled/scene-preview",{
+          slot,event:eventId,zone:zone.id
+        });
+        if(!result.ok)throw Error("WLED preview failed; restore scheduled");
+        message(zone.name+" · "+event.name+" preview playing for 3 seconds");
+      });
+      actions.append(preview);card.append(actions);sceneGrid.append(card);
+    });
+  }
+  eventSelect.onchange=()=>{eventId=Number(eventSelect.value);draw();};
+  defaultEvent.onclick=()=>{
+    WLED_SCENE_ZONES.forEach(zone=>updateDraft(eventId,zone.id,"custom",false));
+    draw();
+  };
+  save.onclick=()=>perform(async()=>{
+    const validated=drafts.map(scene=>{
+      const v={...scene};
+      if(!v.custom)return {event:v.event,zone:v.zone,custom:false};
+      if(v.event===2)v.duration=0;
+      if(v.duration!==0 && (v.duration<2||v.duration>30))
+        throw Error("Custom duration must be 0 or 2–30 seconds");
+      return v;
+    });
+    await post("/api/wled/scenes",{slot,scenes:validated});
+    message("Saved all 15 scene templates on controller "+(slot+1));
+    await openWledSceneBuilder(slot,host);
+  });
+  draw();
 }
 function renderWledControllerResults(){
   if(!currentStatus)return;
