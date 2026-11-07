@@ -9,12 +9,14 @@ using namespace S3WavPolicy;
 struct Reader {
   std::vector<uint8_t> b;
   size_t pos=0;
+  uint32_t reads=0;
   uint32_t size()const{return static_cast<uint32_t>(b.size());}
   bool seek(uint32_t p){
     if(p>b.size())return false;
     pos=p;return true;
   }
   size_t read(uint8_t *out,size_t n){
+    ++reads;
     if(n>b.size()-pos)return 0;
     std::memcpy(out,b.data()+pos,n);
     pos+=n;return n;
@@ -109,6 +111,7 @@ int main(){
   }
   assert(parse(large,info)&&info.outputFrames==48000);
   Stream<Reader> stream;
+  const uint32_t beforeReads=large.reads;
   assert(stream.begin(large,info));
   int16_t sample=0;
   int32_t maximum=0;
@@ -118,6 +121,9 @@ int main(){
     if(absolute>maximum)maximum=absolute;
   }
   assert(maximum>30000);assert(!stream.next(sample));
+  // 44.1k stereo 1-second audio must read in ~345 buffered chunks,
+  // NOT 44,100 per-sample LittleFS operations while I2S is active.
+  assert(large.reads-beforeReads<500);
   std::cout<<"PASS S3 7B PCM RIFF parser, 8/16/22.05/32/44.1/48kHz, mono/stereo, "
               "bounded resampler, corrupt headers and truncated files\n";
 }
