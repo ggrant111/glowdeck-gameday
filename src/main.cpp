@@ -697,13 +697,24 @@ void validatePowerPlay(Game &g) {
 }
 
 uint8_t activePowerPlaySide(uint32_t now, uint32_t &color) {
-  for (uint8_t i = 0; i < gameCount; ++i) {
-    const Game &g = games[i];
-    if (!rearFollows(g.id) || (g.state != "LIVE" && g.state != "CRIT") ||
-        g.intermission || !g.ppDataKnown || !g.ppSide ||
-        uint32_t(now - g.ppUpdatedAt) > 80000UL) continue;
-    color = teamRgb(g.ppSide == 1 ? g.home : g.away);
-    return g.ppSide;
+  // Armed game ranks take precedence; separately starred games remain
+  // eligible for local LEDs when none of the armed games has a valid PP.
+  for(uint8_t pass=0;pass<2;++pass){
+    const uint8_t n=pass==0?MultiGameArming::kMaxArmed:gameCount;
+    for(uint8_t i=0;i<n;++i){
+      const uint32_t id=pass==0?armedGames.ids[i]:games[i].id;
+      const Game *candidate=nullptr;
+      for(uint8_t j=0;j<gameCount;++j)
+        if(id&&games[j].id==id){candidate=&games[j];break;}
+      if(!candidate)continue;
+      const Game &g=*candidate;
+      if(pass==1 && (!rearFollows(id)||isArmedGame(id)))continue;
+      if(!CelebrationEngine::isLive(g.state.c_str())||g.intermission||
+         !g.ppDataKnown||!g.ppSide ||
+         uint32_t(now-g.ppUpdatedAt)>80000UL)continue;
+      color=teamRgb(g.ppSide==1?g.home:g.away);
+      return g.ppSide;
+    }
   }
   return 0;
 }
@@ -770,10 +781,11 @@ void tickCaseLeds() {
   const Game *candidate=nullptr;
   for(uint8_t i=0;i<gameCount;++i){
     const Game &g=games[i];
-    if((g.id!=selectedGameId && !rearFollows(g.id)) ||
+    if(!rearFollows(g.id) ||
        (g.state!="LIVE" && g.state!="CRIT"))continue;
-    if(g.id==selectedGameId){candidate=&g;break;}
-    if(!candidate)candidate=&g;
+    if(!candidate || (isArmedGame(g.id) &&
+       (!isArmedGame(candidate->id) ||
+         armPriority(g.id)<armPriority(candidate->id))))candidate=&g;
   }
   uint8_t pp=0;
   if(cfg.casePp && candidate && !candidate->intermission &&
