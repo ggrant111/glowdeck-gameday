@@ -8,7 +8,7 @@ int main(){
   assert(a.add(104));assert(a.add(105));
   assert(!a.add(106));assert(a.count()==5);
   assert(a.promote(103));assert(a.primary()==103 && a.rank(101)==1);
-  assert(a.move(104,-1));assert(a.rank(104)==3);
+  assert(a.move(104,-1));assert(a.rank(104)==2);
   assert(a.remove(103));assert(a.count()==4 && a.primary()==101);
   assert(a.add(106));assert(a.rank(106)==4);
   Queue q;
@@ -29,7 +29,7 @@ int main(){
   assert(q.add(g1,a));assert(q.add(g2,a));
   assert(q.pop(out,a) && out.gameId==101);
   q.removeGame(105);assert(q.count==0);
-  assert(!q.add(goal,a)==false); // Goal 105 remains armed.
+  assert(q.add(goal,a)); // Goal 105 remains armed.
   q.clear();a.clear();assert(!a.primary() && a.count()==0);
   puts("PASS 5 armed game ranks; goal/final/start/PP priority; no unbounded queue");
 }
