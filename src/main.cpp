@@ -1866,74 +1866,120 @@ String wledRestoreBody(const String &original) {
   return body;
 }
 
+// Native JSON effects always target WLED's EXISTING segment IDs.
+// When mapping is enabled there is intentionally NO legacy segment-0 fallback.
+// No start/stop/len/sel fields are written: this never reshapes WLED segments.
 String wledEffectBody(const String &snapshot,
-                      CelebrationEngine::Event event, uint32_t color,
-                      uint8_t phase) {
+                      CelebrationEngine::Event event,uint32_t color,
+                      uint8_t phase,uint8_t slot,uint8_t scorerSide,
+                      uint16_t &touched) {
+  touched=0;
   DynamicJsonDocument filter(384);
-  if (filter.capacity() < 384) return "";
-  JsonObject templateSegment = filter["seg"][0].to<JsonObject>();
-  templateSegment["id"] = true;
-  templateSegment["start"] = true;
-  templateSegment["stop"] = true;
-  templateSegment["len"] = true;
+  filter["on"]=true;
+  JsonObject templateSegment=filter["seg"][0].to<JsonObject>();
+  templateSegment["id"]=true;templateSegment["start"]=true;
+  templateSegment["stop"]=true;templateSegment["len"]=true;
   DynamicJsonDocument state(3072);
-  if (state.capacity() < 3072) return "";
-  if (deserializeJson(state, snapshot, DeserializationOption::Filter(filter)))
+  if(deserializeJson(state,snapshot,DeserializationOption::Filter(filter)))
     return "";
-
+  const bool mapped=cfg.wledZoneEnabled[slot];
+  // With zone mapping, do not wake a whole previously-off controller:
+  // setting global ON would unintentionally illuminate unrelated segments.
+  if(mapped && !(state["on"]|false))return "";
   DynamicJsonDocument command(4096);
-  if (command.capacity() < 4096) return "";
-  command["on"] = true;
-  command["bri"] = cfg.brightness;
-  command["transition"] = 0;
-  command["udpn"]["nn"] = true;  // Do not wake non-participating WLEDs.
-  const CelebrationEngine::Effect effect =
-      CelebrationEngine::effect(event, phase, cfg.wledGoalStyle);
-  JsonArray segments = command.createNestedArray("seg");
-  JsonArray current = state["seg"].as<JsonArray>();
-  uint8_t emitted = 0;
-  for (uint8_t j = 0; j < current.size() &&
-                       emitted < CelebrationEngine::kMaxSegments; ++j) {
-    JsonObject seg = current[j];
-    const int start = seg["start"] | 0;
-    const int stop = seg["stop"] | 0;
-    const int len = seg["len"] | 0;
-    if (stop <= start && len <= 0) continue;
-    JsonObject out = segments.createNestedObject();
-    out["id"] = seg["id"] | (int)j;
-    out["on"] = true;
-    out["fx"] = effect.fx;
-    out["sx"] = effect.speed;
-    out["ix"] = effect.intensity;
-    out["pal"] = 0;
-    JsonArray cols = out.createNestedArray("col");
-    JsonArray primary = cols.createNestedArray();
-    primary.add((color >> 16) & 0xFF);
-    primary.add((color >> 8) & 0xFF);
-    primary.add(color & 0xFF);
-    JsonArray secondary = cols.createNestedArray();
-    secondary.add(0); secondary.add(0); secondary.add(0);
+  if(!mapped){
+    command["on"]=true; // EXACT old behavior for migrated controllers
+    command["bri"]=cfg.brightness;
+  }
+  command["transition"]=0;
+  command["udpn"]["nn"]=true;
+  const CelebrationEngine::Effect effect=
+    CelebrationEngine::effect(event,phase,cfg.wledGoalStyle);
+  JsonArray segments=command.createNestedArray("seg");
+  JsonArray current=state["seg"].as<JsonArray>();
+  uint8_t emitted=0;
+  const Game *game=selectedGame();
+  const uint32_t homeRgb=game?teamRgb(game->home):color;
+  const uint32_t awayRgb=game?teamRgb(game->away):color;
+  for(uint8_t j=0;j<current.size() &&
+      j<CelebrationEngine::kMaxSegments;++j){
+    JsonObject seg=current[j];
+    const int id=seg["id"]|(int)j;
+    const int first=seg["start"]|0;
+    const int stop=seg["stop"]|0;
+    const int len=seg["len"]|0;
+    if(!WledZonePolicy::validSegment(id) ||
+       (stop<=first && len<=0))continue;
+    if(!WledZonePolicy::target(mapped,cfg.wledZoneMap[slot],uint8_t(id),
+         uint8_t(event),scorerSide))continue;
+    const WledZonePolicy::Role zone=
+      WledZonePolicy::role(cfg.wledZoneMap[slot],uint8_t(id));
+    const uint32_t rgb=mapped?
+        WledZonePolicy::zoneColor(zone,uint8_t(event),color,homeRgb,awayRgb):
+        color;
+    JsonObject out=segments.createNestedObject();
+    out["id"]=id;out["on"]=true;
+    if(mapped)out["bri"]=cfg.brightness; // segment only, not global
+    out["fx"]=effect.fx;out["sx"]=effect.speed;out["ix"]=effect.intensity;
+    out["pal"]=0;
+    JsonArray cols=out.createNestedArray("col");
+    JsonArray primary=cols.createNestedArray();
+    primary.add((rgb>>16)&255);primary.add((rgb>>8)&255);primary.add(rgb&255);
+    JsonArray secondary=cols.createNestedArray();
+    secondary.add(0);secondary.add(0);secondary.add(0);
+    touched|=uint16_t(1U<<id);
     ++emitted;
   }
-  if (!emitted) {
-    // Some older WLED builds omit segment bounds from their state JSON.
-    JsonObject out = segments.createNestedObject();
-    out["id"] = 0;
-    out["on"] = true;
-    out["fx"] = effect.fx;
-    out["sx"] = effect.speed;
-    out["ix"] = effect.intensity;
-    out["pal"] = 0;
-    JsonArray cols = out.createNestedArray("col");
-    JsonArray primary = cols.createNestedArray();
-    primary.add((color >> 16) & 0xFF);
-    primary.add((color >> 8) & 0xFF);
-    primary.add(color & 0xFF);
+  if(!emitted){
+    if(mapped)return "";
+    // Older WLED versions may omit bounds. Preserve the v0.3.1
+    // default seg0 behavior only for unmapped legacy controllers.
+    JsonObject out=segments.createNestedObject();
+    out["id"]=0;out["on"]=true;
+    out["fx"]=effect.fx;out["sx"]=effect.speed;out["ix"]=effect.intensity;
+    out["pal"]=0;
+    JsonArray cols=out.createNestedArray("col");
+    JsonArray primary=cols.createNestedArray();
+    primary.add((color>>16)&255);primary.add((color>>8)&255);primary.add(color&255);
+    touched=1U;
   }
-  if (command.overflowed()) return "";
-  String body;
-  serializeJson(command, body);
-  return body;
+  if(command.overflowed()){touched=0;return "";}
+  String body;serializeJson(command,body);return body;
+}
+
+// Restore ONLY the segment IDs that this GameDay session actually changed.
+// Unlike the original whole-state restore, unrelated segments keep running
+// undisturbed. Preserve original fx, palette, colors, speed and brightness.
+// This is intentionally NOT a WLED segment layout editor.
+String wledMappedRestoreBody(const String &snapshot,uint16_t touched){
+  if(!touched)return "";
+  DynamicJsonDocument filter(768);
+  JsonObject segFilter=filter["seg"][0].to<JsonObject>();
+  for(const char *field:{"id","on","bri","fx","sx","ix","pal",
+                         "col","rev","mi","sel"})
+    segFilter[field]=true;
+  DynamicJsonDocument source(7000);
+  if(deserializeJson(source,snapshot,DeserializationOption::Filter(filter)))
+    return "";
+  DynamicJsonDocument command(7000);
+  command["transition"]=0;command["udpn"]["nn"]=true;
+  JsonArray targets=command.createNestedArray("seg");
+  JsonArray originals=source["seg"].as<JsonArray>();
+  uint8_t restored=0;
+  for(uint8_t j=0;j<originals.size() &&
+       j<WledZonePolicy::kMaxSegments;++j){
+    JsonObject seg=originals[j];
+    const int id=seg["id"]|(int)j;
+    if(!WledZonePolicy::validSegment(id) ||
+       !(touched&(uint16_t(1U)<<id)))continue;
+    JsonObject out=targets.createNestedObject();out["id"]=id;
+    for(const char *field:{"on","bri","fx","sx","ix","pal",
+                           "col","rev","mi","sel"})
+      if(!seg[field].isNull())out[field]=seg[field];
+    ++restored;
+  }
+  if(!restored || command.overflowed())return "";
+  String body;serializeJson(command,body);return body;
 }
 
 void scheduleWledRestoreAll() {
