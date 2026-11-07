@@ -46,6 +46,7 @@ class Controller {
  public:
   void stop(){for(uint8_t i=0;i<2;++i)ch_[i]=Channel{};}
   void setPowerPlay(Side side,bool active,uint32_t color){
+    if(!validSide(static_cast<uint8_t>(side)))return;
     Channel &c=ch_[static_cast<uint8_t>(side)];
     c.pp=active;
     c.ppColor=active?color:0;
@@ -64,6 +65,7 @@ class Controller {
         event==Event::FINAL?kFinalMs:kTestMs;
   }
   Event eventAt(Side side,uint32_t now)const{
+    if(!validSide(static_cast<uint8_t>(side)))return Event::IDLE;
     const Channel &c=ch_[static_cast<uint8_t>(side)];
     if(c.event!=Event::IDLE &&
        uint32_t(now-c.started)<c.duration)return c.event;
@@ -71,7 +73,8 @@ class Controller {
   }
   uint32_t pixel(Side side,uint8_t index,uint8_t count,
                  uint32_t now,uint8_t brightness)const{
-    if(!validPixels(count)||index>=count||!validBrightness(brightness))
+    if(!validSide(static_cast<uint8_t>(side)) ||
+       !validPixels(count)||index>=count||!validBrightness(brightness))
       return 0;
     const Channel &c=ch_[static_cast<uint8_t>(side)];
     const Event event=eventAt(side,now);
