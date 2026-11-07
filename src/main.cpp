@@ -1754,7 +1754,7 @@ void tickWledDiscovery(){
       const int found=MDNS.queryService("wled","tcp");
       for(int i=0;i<found &&
           wledScanTotal<WledDiscoveryPolicy::kMaxCandidates;++i)
-        addWledScanCandidate(MDNS.address(i).toString());
+        addWledScanCandidate(MDNS.IP(i).toString());
     }else wledScanError="mDNS not connected; checking configured IPs";
   }
   if(wledScanNext<wledScanTotal){
