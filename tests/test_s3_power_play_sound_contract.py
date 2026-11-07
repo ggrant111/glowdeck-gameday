@@ -57,7 +57,7 @@ for required in (
     '"/api/audio/powerplay-select"',
     '$("rearFullPpHome").onclick=()=>fullPreview("pp","home")',
     '$("rearFullPpAway").onclick=()=>fullPreview("pp","away")',
-    'Power-play audio: ',
+    'ppAudio?"Power-play audio"',
 ):
     assert required in ui,required
 assert "playSource(uint8_t source)" in audio

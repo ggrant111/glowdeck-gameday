@@ -24,5 +24,5 @@ assert 'fullPreview("loss","away")' in ui
 assert 'id="s3FinishSoundStatus"' in ui
 assert '"/api/audio/gamefinish-select"' in ui
 assert '"Use for game finish"' in ui
-assert 'Game-finish audio: ' in ui
+assert 'finishAudio?"Game-finish audio"' in ui
 print("PASS S3 game-finish audio contract")

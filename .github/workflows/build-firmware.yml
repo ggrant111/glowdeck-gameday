@@ -72,6 +72,8 @@ jobs:
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_game_event_log.cpp -o /tmp/glowdeck-game-event-test
           /tmp/glowdeck-game-event-test
+      - name: Test S3 live audio resilience and Activity/serial audit parity
+        run: python tests/test_s3_live_audio_reliability_contract.py
       - name: Test S3 live-goal horn outcome, WAV selection and sound diagnostics
         run: python tests/test_s3_live_goal_horn_contract.py
       - name: Test combined goal celebration plays and reports the saved horn

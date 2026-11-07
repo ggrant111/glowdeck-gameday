@@ -54,7 +54,7 @@ assert "i2s_driver_install(I2S_NUM_0" in audio
 assert "i2s_write(I2S_NUM_0" in audio
 assert "xTaskCreatePinnedToCore" in audio
 assert "ulTaskNotifyTake(pdTRUE,portMAX_DELAY)" in audio
-assert "vTaskDelay(pdMS_TO_TICKS(35))" in audio
+assert "vTaskDelay(pdMS_TO_TICKS(85))" in audio  # Drain extended 64ms DMA queue
 assert "i2s_zero_dma_buffer(I2S_NUM_0)" in audio
 assert "kVolumePercent=70" in policy
 assert "kMaxVolumePercent=80" in policy
