@@ -22,6 +22,24 @@ enum class Wled : uint8_t {
   NA = 0, NOT_SELECTED, PENDING, ACCEPTED, SNAPSHOT_FAILED,
   COMMAND_FAILED, RESTORED, RESTORE_FAILED, RESTORE_RETRYING, SUPERSEDED
 };
+// A goal can have a successful WLED effect and no horn. Record the actual
+// software audio outcome, never claim the speaker was physically audible.
+enum class Audio : uint8_t {
+  NA = 0, NOT_ARMED, DISABLED, UNAVAILABLE, BUSY,
+  STARTED, COMPLETED, STREAM_FAILED
+};
+inline const char *audioLabel(Audio a){
+  switch(a){
+    case Audio::NOT_ARMED:return "Not armed for this game";
+    case Audio::DISABLED:return "Disabled in Sound settings";
+    case Audio::UNAVAILABLE:return "Audio device unavailable";
+    case Audio::BUSY:return "Playback busy or in cooldown";
+    case Audio::STARTED:return "Playback started";
+    case Audio::COMPLETED:return "Stream completed (speaker not verified)";
+    case Audio::STREAM_FAILED:return "Stream failed";
+    default:return "Not applicable";
+  }
+}
 
 inline const char *typeLabel(Type t) {
   switch(t) {
@@ -100,6 +118,9 @@ struct Entry {
   uint8_t period = 0;
   bool preview = false;
   Rear rear = Rear::NA;
+  Audio audio = Audio::NA;
+  uint8_t audioSource = 0; // 0 built-in horn; 1..3 selected custom WAV
+  bool audioFallback = false; // selected WAV unavailable; built-in used
   Wled wled[kDevices] = {}; // Eight controller slots; NA is zero
   uint8_t wledAcknowledgedMask = 0; // Retained even after restore/failure
 };
