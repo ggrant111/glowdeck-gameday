@@ -11,8 +11,10 @@ conf=(root/"platformio.ini").read_text()
 assert "#ifdef GLOWDECK_WAVESHARE_S3\n#include \"GameDayS3Hardware.h\"\n#include \"S3GoalAudio.h\"" in main
 assert "S3GoalAudio s3Audio;" in main
 assert "s3Audio.begin();" in main and "s3Audio.tick();" in main
-assert "if (!cfg.horn) return;" in main
-assert "s3Audio.play();" in main
+assert "if (!cfg.horn) {" in main
+assert "entry->audio=GameEventLog::Audio::HORN_DISABLED" in main
+assert "if(!s3Audio.play())" in main
+assert "entry->audio=GameEventLog::Audio::STARTED" in main
 assert "ledcWriteTone(AUDIO_CH, nextFreq);" in main
 assert "ledcAttachPin(PIN_AUDIO, AUDIO_CH);" in main
 assert "#ifndef GLOWDECK_WAVESHARE_S3" in main

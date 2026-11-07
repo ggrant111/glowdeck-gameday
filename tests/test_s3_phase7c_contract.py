@@ -27,7 +27,7 @@ assert 'prefs.putBool("caseOn",cfg.caseLedsEnabled)' in m
 assert 'cfg.caseLedsEnabled=enabled;' in m
 assert 'caseLedDriver.enable(enabled);' in m
 assert 'cfg.casePixels=S3CaseLedPolicy' not in m or "casePixels" in m
-assert "s3Audio.begin();" in m and "s3Audio.play();" in m
+assert "s3Audio.begin();" in m and "if(!s3Audio.play())" in m
 assert 'caseLedFx.trigger(side==0?S3CaseLedPolicy::Side::HOME:' in m
 assert "if(cfg.caseLedsEnabled && cfg.caseGoal && followed)" in m
 assert "teamRgb(scorer)" in m and "rearFollows(g.id)" in m

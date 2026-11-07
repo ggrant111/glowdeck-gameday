@@ -259,6 +259,7 @@ bool restoring[MAX_WLED] = {false, false, false, false};
 uint32_t restoreAt[MAX_WLED] = {0, 0, 0, 0};
 uint8_t restoreRetries[MAX_WLED] = {0, 0, 0, 0};
 bool hornPlaying = false;
+uint32_t hornLogSequence = 0; // Most recent accepted audio-start event, if any
 uint32_t hornStart = 0;
 uint16_t hornFrequency = 0;
 
@@ -861,6 +862,7 @@ void detectRearGoalChanges() {
                        : (cfg.mode == 2 || cfg.mode == 3));
         if (armedForGoal) celebrate(teamRgb(scorer),entry.sequence,
                   side==0?WledZonePolicy::kHomeSide:WledZonePolicy::kAwaySide);
+        else entry.audio=GameEventLog::Audio::NOT_ARMED;
         // Start the internal LED flash AFTER all WLED network requests so
         // multi-device snapshots don't consume its 2–12s animation window.
         if (followed && cfg.rearLedEnabled && cfg.rearGoal) {
@@ -1827,21 +1829,68 @@ void tickWledDiscovery(){
   }
 }
 
-void startHorn() {
-  if (!cfg.horn) return;
+// A successful WLED acknowledgement and a goal GIF never prove that sound
+// was requested or that the DAC accepted it. Log this independent outcome
+// on the *same* observed goal event, without creating a new NHL trigger.
+void startHorn(uint32_t eventSequence=0) {
+  GameEventLog::Entry *entry=gameEventHistory.find(eventSequence);
+  if(entry) {
+    entry->audio=GameEventLog::Audio::HORN_DISABLED;
+    entry->audioSource=0;
+    entry->audioFallback=false;
+  }
+  if (!cfg.horn) {
+    Serial.println("[Goal Horn] skipped: live horn disabled");
+    return;
+  }
 #ifdef GLOWDECK_WAVESHARE_S3
-  // Phase 7A: the opt-in real-goal horn uses the same 50% ES8311 path
-  // as the isolated preview. Never replace WLED, overlays or Fire TV.
-  s3Audio.play();
+  const uint8_t source=s3Audio.selectedSource();
+  if(entry)entry->audioSource=source;
+  if(!s3Audio.ready()){
+    if(entry)entry->audio=GameEventLog::Audio::UNAVAILABLE;
+    Serial.printf("[Goal Horn] unavailable: %s\n",s3Audio.error());
+    return;
+  }
+  // Phase 7A/7B: real goals use the persisted WAV choice. The preview is
+  // independent and is deliberately allowed even when cfg.horn is OFF.
+  if(!s3Audio.play()){
+    const bool busy=s3Audio.busyOrCoolingDown();
+    if(entry)entry->audio=busy?GameEventLog::Audio::BUSY:
+                                    GameEventLog::Audio::UNAVAILABLE;
+    Serial.printf("[Goal Horn] play refused: %s (selected slot=%u)\n",
+                  busy?"busy, cooldown or uploading":s3Audio.error(),
+                  unsigned(source));
+    return;
+  }
+  if(entry){
+    entry->audio=GameEventLog::Audio::STARTED;
+    entry->audioFallback=source!=0 &&
+                          strcmp(s3Audio.clipName(),"custom-wav")!=0;
+    hornLogSequence=eventSequence;
+  }
+  Serial.printf("[Goal Horn] started: %s selected=%u event=%lu\n",
+                s3Audio.clipName(),unsigned(source),
+                (unsigned long)eventSequence);
 #else
   hornPlaying = true;
   hornStart = millis();
   hornFrequency = 0;
+  if(entry){
+    entry->audio=GameEventLog::Audio::STARTED;
+    hornLogSequence=eventSequence;
+  }
 #endif
 }
 void tickHorn() {
 #ifdef GLOWDECK_WAVESHARE_S3
   s3Audio.tick();
+  if(hornLogSequence && !s3Audio.playing()){
+    GameEventLog::Entry *entry=gameEventHistory.find(hornLogSequence);
+    if(entry && entry->audio==GameEventLog::Audio::STARTED)
+      entry->audio=s3Audio.lastStreamOk()?
+        GameEventLog::Audio::COMPLETED:GameEventLog::Audio::STREAM_FAILED;
+    hornLogSequence=0;
+  }
   return;
 #else
   if (!hornPlaying) return;
@@ -1855,7 +1904,13 @@ void tickHorn() {
 #endif
     hornFrequency = nextFreq;
   }
-  if (elapsed >= 900) hornPlaying = false;
+  if (elapsed >= 900) {
+    hornPlaying = false;
+    GameEventLog::Entry *entry=gameEventHistory.find(hornLogSequence);
+    if(entry && entry->audio==GameEventLog::Audio::STARTED)
+      entry->audio=GameEventLog::Audio::COMPLETED;
+    hornLogSequence=0;
+  }
 #endif
 }
 
@@ -2625,7 +2680,7 @@ void tickWledCelebrations() {
 // The onboard horn is still handled independently from WLED response codes.
 void celebrate(uint32_t color,uint32_t eventSequence,uint8_t scorerSide) {
   startWledEvent(CelebrationEngine::Event::GOAL,color,eventSequence,scorerSide);
-  startHorn();
+  startHorn(eventSequence);
 }
 
 // Compact score/state fingerprint: redraw only when visible scoreboard values changed.
@@ -5397,6 +5452,9 @@ void registerRoutes() {
       row["goalsDelta"] = e->goalsDelta;
       row["preview"] = e->preview;
       row["rear"] = GameEventLog::rearLabel(e->rear);
+      row["audio"] = GameEventLog::audioLabel(e->audio);
+      row["audioSource"] = e->audioSource;
+      row["audioFallback"] = e->audioFallback;
       JsonArray devices = row.createNestedArray("devices");
       for (uint8_t d = 0; d < MAX_WLED; ++d) {
         JsonObject device = devices.createNestedObject();
@@ -5425,6 +5483,7 @@ void registerRoutes() {
     DynamicJsonDocument doc(4096);
     if (doc.capacity() < 4096) return errorResponse("Status memory unavailable", 503);
     doc["version"] = "0.4.1";
+    doc["hornEnabled"] = cfg.horn;
 #ifdef GLOWDECK_WAVESHARE_S3
     doc["audioSupported"] = true;
     doc["audioReady"] = s3Audio.ready();

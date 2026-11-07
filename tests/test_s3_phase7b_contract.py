@@ -48,7 +48,7 @@ for key in ("soundStorage.begin(goalGif.mounted());",
             'prefs.getUChar("s3Sound",0)',
             'prefs.putUChar("s3Sound",',
             'prefs.putString(("s3Name"+String(soundUploadSlot)).c_str(),soundUploadTitle)',
-            "cfg.s3Sound=0;","s3Audio.play();",
+            "cfg.s3Sound=0;","if(!s3Audio.play())",
             'doc["audioSelectedSource"]',
             'doc["s3Sound"] = s3Audio.selectedSource()'):
     assert key in m,key
