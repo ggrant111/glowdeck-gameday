@@ -64,7 +64,14 @@ inline Hit hitTest(int16_t x, int16_t y, bool summary) {
 constexpr Rect kBroadcastFollow={375,2,52,42};
 constexpr Rect kBroadcastGames={0,272,82,48};
 constexpr Rect kBroadcastSettings={398,272,82,48};
-constexpr Rect kBroadcastDetails={139,90,202,119};
+// The full matchup, both logos and unified lower data strip open Stats.
+// Star/corner controls have priority and remain outside this body zone.
+constexpr Rect kBroadcastDetails={24,88,432,180};
+inline bool broadcastTap(int dx,int dy) {
+  const int ax=dx<0?-dx:dx;
+  const int ay=dy<0?-dy:dy;
+  return ax<=24 && ay<=24;
+}
 constexpr Rect kBroadcastReadoutTop={144,43,192,160};
 constexpr Rect kBroadcastReadoutBottom={48,215,384,53};
 inline Hit broadcastHitTest(int16_t x,int16_t y) {
