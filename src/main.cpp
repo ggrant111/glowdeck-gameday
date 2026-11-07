@@ -96,6 +96,7 @@ struct Settings {
   bool horn = false;
 #ifdef GLOWDECK_WAVESHARE_S3
   uint8_t s3Volume = S3HornPolicy::kVolumePercent;
+  uint8_t s3Sound = 0; // 0 = built-in, 1..3 = persistent WAV slots
 #endif
   bool rearLedEnabled = true;
   bool rearGoal = true;
@@ -122,6 +123,7 @@ Preferences prefs;
 GameDayS3Display tft;
 GameDayS3Touch touch;
 S3GoalAudio s3Audio;
+S3SoundStorage soundStorage;
 #else
 TFT_eSPI tft;
 SPIClass touchSPI(VSPI);
@@ -228,6 +230,11 @@ File goalUpload;
 bool goalUploadFailed = false, goalUploadFinished = false;
 size_t goalUploadBytes = 0;
 String goalUploadError;
+File soundUpload;
+bool soundUploadFailed=false, soundUploadFinished=false;
+uint32_t soundUploadBytes=0;
+uint8_t soundUploadSlot=0;
+String soundUploadError, soundUploadTitle;
 #endif
 uint32_t overlayLastFrame = 0;
 uint32_t overlayCount = 0;
@@ -1435,6 +1442,8 @@ void loadSettings() {
                               S3HornPolicy::kVolumePercent),
                           (int)S3HornPolicy::kMinVolumePercent,
                           (int)S3HornPolicy::kMaxVolumePercent);
+  cfg.s3Sound=constrain((int)prefs.getUChar("s3Sound",0),
+                        0,(int)S3WavPolicy::kSlots);
 #endif
   #ifdef GLOWDECK_WAVESHARE_S3
   cfg.rearLedEnabled = false; // S3 has no CYD-style built-in rear LED.
@@ -4766,6 +4775,8 @@ void registerRoutes() {
     doc["audioLastDurationMs"] = s3Audio.lastDurationMs();
     doc["audioAmpEnabled"] = s3Audio.ampEnabled();
     doc["audioLastClip"] = s3Audio.clipName();
+    doc["audioSelectedSource"] = s3Audio.selectedSource();
+    doc["audioStorageReady"] = soundStorage.mounted();
 #else
     doc["audioSupported"] = false;
 #endif
@@ -4948,6 +4959,7 @@ void registerRoutes() {
     doc["s3Volume"] = s3Audio.volume();
     doc["s3VolumeMin"] = S3HornPolicy::kMinVolumePercent;
     doc["s3VolumeMax"] = S3HornPolicy::kMaxVolumePercent;
+    doc["s3Sound"] = s3Audio.selectedSource();
 #endif
     doc["wledPP"] = cfg.wledPP;
     doc["wledGameStart"] = cfg.wledGameStart;
@@ -5628,6 +5640,8 @@ void setup() {
                 (unsigned)(sizeof(TEAM_LOGOS)/sizeof(TEAM_LOGOS[0])),
                 (unsigned)TEAM_LOGO_SIZE, (unsigned)TEAM_LOGO_SIZE);
   goalGif.beginStorage();
+  soundStorage.begin(goalGif.mounted()); // one shared LittleFS mount
+  s3Audio.setStorageMounted(soundStorage.mounted());
 #else
   tft.init();
 #endif
@@ -5665,6 +5679,14 @@ void setup() {
   if (!s3Audio.setVolume(cfg.s3Volume))
     Serial.printf("[S3 Audio] Saved %u%% gain could not be applied; current %u%%\n",
                   unsigned(cfg.s3Volume),unsigned(s3Audio.volume()));
+  // Keep the horn usable even if a formerly selected WAV disappeared.
+  if(cfg.s3Sound && soundStorage.mounted() &&
+     !soundStorage.available(cfg.s3Sound)){
+    Serial.println("[S3 WAV] selected clip missing; reset to built-in");
+    cfg.s3Sound=0;
+    prefs.putUChar("s3Sound",0);
+  }
+  s3Audio.setSelectedSource(cfg.s3Sound);
 #endif
   // Some ILI9341-compatible CYDs boot with visually inverted colors.
   // Runtime setting is stored in NVS, so the user can change it from web or touch.
