@@ -28,6 +28,19 @@ enum class Audio : uint8_t {
   NA = 0, NOT_ARMED, HORN_DISABLED, UNAVAILABLE, BUSY,
   STARTED, COMPLETED, STREAM_FAILED
 };
+enum class AudioFailure : uint8_t {
+  NONE=0, WAV_OPEN, WAV_HEADER, WAV_READ, WAV_DECODE, I2S_WRITE
+};
+inline const char *audioFailureLabel(AudioFailure failure){
+  switch(failure){
+    case AudioFailure::WAV_OPEN:return "WAV file open failed";
+    case AudioFailure::WAV_HEADER:return "WAV header invalid";
+    case AudioFailure::WAV_READ:return "WAV flash read failed";
+    case AudioFailure::WAV_DECODE:return "WAV decoder stopped";
+    case AudioFailure::I2S_WRITE:return "I2S DMA write failed";
+    default:return "None";
+  }
+}
 inline const char *audioLabel(Audio a){
   switch(a){
     case Audio::NOT_ARMED:return "Not armed for this game";
@@ -121,6 +134,15 @@ struct Entry {
   Audio audio = Audio::NA;
   uint8_t audioSource = 0; // 0 built-in horn; 1..3 selected custom WAV
   bool audioFallback = false; // selected WAV unavailable; built-in used
+  // All values below describe software/DMA output, not acoustic verification.
+  uint32_t audioFrames = 0, audioExpectedFrames = 0;
+  uint32_t audioDurationMs = 0, audioPeak = 0;
+  uint32_t audioReadOffset = 0, audioRetries = 0;
+  int32_t audioI2sCode = 0;
+  uint8_t audioVolume = 0;
+  AudioFailure audioFailure = AudioFailure::NONE;
+  bool audioAmpVerified = false;
+  uint32_t serialFingerprint = 0; // last serial audit revision, not exposed in JSON
   Wled wled[kDevices] = {}; // Eight controller slots; NA is zero
   uint8_t wledAcknowledgedMask = 0; // Retained even after restore/failure
 };
