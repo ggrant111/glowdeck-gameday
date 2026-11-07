@@ -2789,109 +2789,114 @@ void tickWledSceneExpirations(uint32_t now,uint32_t elapsed){
   }
 }
 
+// Try the highest priority queued event, preserving its original game ID.
+// Back off failed WLED network requests instead of blocking the NHL loop.
+bool startQueuedWledEvent(uint32_t now){
+  static uint32_t lastAttempt=0;
+  if(!wledPriorityQueue.count || (lastAttempt &&
+     uint32_t(now-lastAttempt)<1500UL))return false;
+  lastAttempt=now;
+  MultiGameArming::Request item;
+  while(wledPriorityQueue.pop(item,armedGames)){
+    if(item.gameId && !isArmedGame(item.gameId))continue;
+    if(startWledEvent(item.event,item.color,item.sequence,
+                      item.side,item.gameId))return true;
+    if(!wledPriorityQueue.add(item,armedGames))++wledQueuedDrops;
+    break;
+  }
+  return false;
+}
 void tickWledCelebrations() {
-  const uint32_t now = millis();
-  uint32_t powerPlayColor = 0;
-  uint8_t powerPlaySide=WledZonePolicy::kUnknownSide;
-  const bool testPP = wledPpTestUntil && int32_t(wledPpTestUntil - now) > 0;
-  bool hasPP = false;
-  if (testPP) {
-    hasPP = true;
-    powerPlayColor = wledEventColor;
-    powerPlaySide=wledEventSide;
-  } else if (int32_t(wledSuppressPpUntil - now) <= 0) {
-    powerPlaySide=currentWledPowerPlay(powerPlayColor);
-    hasPP = powerPlaySide!=0;
+  const uint32_t now=millis();
+  uint32_t ppColor=0,ppGameId=0,ppSeq=0;
+  uint8_t ppSide=0;
+  const bool testPP=wledPpTestUntil &&
+                   int32_t(wledPpTestUntil-now)>0;
+  if(testPP) {
+    ppColor=wledEventColor;ppSide=wledEventSide;
+    ppGameId=0; // Diagnostic, not an armed NHL event.
+  }else if(int32_t(wledSuppressPpUntil-now)<=0){
+    ppSide=currentWledPowerPlay(ppColor,ppGameId,ppSeq);
   }
-  // Manual stop applies to the current armed PP until its end. A different
-  // game or a confirmed non-PP sample releases the stop latch automatically.
-  if(wledPpManuallyStoppedGameId){
-    const PowerPlayLogPolicy::Watch *watch=
-        getPowerPlayLogWatch(wledPpManuallyStoppedGameId);
-    // An absent NHL situation sample is NOT proof that the PP ended.
-    // Only a debounced PP end or switching armed games releases the latch.
-    const bool confirmedEnd=watch && watch->initialized &&
-                             watch->side==0 && !hasPP;
-    if(wledPpManuallyStoppedGameId!=selectedGameId || confirmedEnd)
-      wledPpManuallyStoppedGameId=0;
-    else hasPP=false;
-  }
-  if (wledActiveEvent != CelebrationEngine::Event::NONE &&
-      CelebrationEngine::temporary(wledActiveEvent)) {
-    const uint32_t elapsed = uint32_t(now - wledEventStart);
-    if (elapsed < wledEventDuration) {
+  const bool hasPP=ppSide!=0;
+
+  if(wledActiveEvent!=CelebrationEngine::Event::NONE &&
+     CelebrationEngine::temporary(wledActiveEvent)){
+    const uint32_t elapsed=uint32_t(now-wledEventStart);
+    if(elapsed<wledEventDuration){
       tickWledSceneExpirations(now,elapsed);
-      const uint8_t nextPhase = CelebrationEngine::phase(
-          wledActiveEvent, elapsed, wledEventDuration, cfg.wledGoalStyle);
-      if (nextPhase != wledPhase) {
-        wledPhase = nextPhase;
-        for (uint8_t i = 0; i < MAX_WLED; ++i) {
-          if (!restoring[i] || wledDdp[i].active ||
-              !wledParticipates(i, wledActiveEvent))
-            continue;
+      const uint8_t nextPhase=CelebrationEngine::phase(
+          wledActiveEvent,elapsed,wledEventDuration,cfg.wledGoalStyle);
+      if(nextPhase!=wledPhase){
+        wledPhase=nextPhase;
+        wledDispatchGameId=wledActiveGameId?wledActiveGameId:selectedGameId;
+        for(uint8_t i=0;i<MAX_WLED;++i){
+          if(!restoring[i] || wledDdp[i].active ||
+             !wledParticipates(i,wledActiveEvent))continue;
           uint16_t phaseTouched=0;
           const String body=wledEffectBody(savedState[i],wledActiveEvent,
                  wledEventColor,wledPhase,i,wledEventSide,phaseTouched,
                  wledRestoredSceneSegments[i]);
           wledTouchedSegments[i]|=phaseTouched;
           wledCurrentSceneSegments[i]|=phaseTouched;
-          if (!body.isEmpty() && postWled(cfg.wled[i], body))
-            wledDeviceResult[i] = "Playing";
-          else {
-            wledDeviceResult[i] = "Phase update failed";
-            markWledEvent(wledEventOwner[i], i,
+          if(!body.isEmpty() && postWled(cfg.wled[i],body))
+            wledDeviceResult[i]="Playing";
+          else{
+            wledDeviceResult[i]="Phase update failed";
+            markWledEvent(wledEventOwner[i],i,
                           GameEventLog::Wled::COMMAND_FAILED);
           }
         }
       }
       return;
     }
-    // A final result can arrive in the same score poll as a winning goal.
-    // Finish the goal celebration before playing the queued final animation.
-    if (queuedWledEvent != CelebrationEngine::Event::NONE) {
-      const CelebrationEngine::Event pending = queuedWledEvent;
-      const uint32_t pendingColor = queuedWledColor;
-      queuedWledEvent = CelebrationEngine::Event::NONE;
-      if (startWledEvent(pending, pendingColor, queuedWledLogSeq)) {
-        queuedWledLogSeq = 0;
-        return;
-      }
-      queuedWledLogSeq = 0;
+    // The temporary goal/final/start finished. Dispatch waiting goals before
+    // resuming the highest-ranked still-active PP. Original WLED snapshots
+    // are only discarded after full controller restoration.
+    if(wledPriorityQueue.count){
+      if(startQueuedWledEvent(now))return;
+      scheduleWledRestoreAll();return;
     }
-    // After goal or game-start, return to power-play breathing if NHL still
-    // reports an advantage, otherwise restore the original WLED state.
-    if (hasPP && startWledEvent(CelebrationEngine::Event::POWER_PLAY,
-                                powerPlayColor, armedPpLogSeq,
-                                powerPlaySide)) {
-      return;
-    }
-    scheduleWledRestoreAll();
-    return;
+    if(hasPP && startWledEvent(CelebrationEngine::Event::POWER_PLAY,
+                               ppColor,ppSeq,ppSide,ppGameId))return;
+    scheduleWledRestoreAll();return;
   }
-  if (wledActiveEvent == CelebrationEngine::Event::POWER_PLAY) {
-    if (!hasPP) {
+
+  if(wledPriorityQueue.count &&
+     (wledActiveEvent==CelebrationEngine::Event::NONE ||
+      wledActiveEvent==CelebrationEngine::Event::POWER_PLAY)){
+    if(startQueuedWledEvent(now))return;
+  }
+  if(wledActiveEvent==CelebrationEngine::Event::POWER_PLAY){
+    if(!hasPP){
+      // The owner PP ended or became stale: release DDP and restore.
       scheduleWledRestoreAll();
-    } else if (wledEventColor != powerPlayColor) {
-      startWledEvent(CelebrationEngine::Event::POWER_PLAY,powerPlayColor,
-                     0,powerPlaySide);
-    }
-  } else if (hasPP && wledActiveEvent == CelebrationEngine::Event::NONE &&
-             wledEligibleCount(CelebrationEngine::Event::POWER_PLAY) > 0) {
-    // Avoid re-triggering a failed WLED every 5ms; NHL situation updates are
-    // already throttled and each event transition can initiate up to 4 HTTPs.
-    static uint32_t lastPpAttempt = 0;
-    if (uint32_t(now - lastPpAttempt) > 8000UL) {
-      lastPpAttempt = now;
-      // Repeated WLED retries update the *same* observed PP event row.
+    }else if(wledActiveGameId!=ppGameId ||
+             wledEventColor!=ppColor || wledEventSide!=ppSide){
+      // Another ranked armed PP took over; restore old game segments first.
       startWledEvent(CelebrationEngine::Event::POWER_PLAY,
-                     powerPlayColor,armedPpLogSeq,powerPlaySide);
+                     ppColor,ppSeq,ppSide,ppGameId);
+    }
+  }else if(hasPP && wledActiveEvent==CelebrationEngine::Event::NONE &&
+           !wledPriorityQueue.count &&
+           wledEligibleCount(CelebrationEngine::Event::POWER_PLAY)>0){
+    static uint32_t lastPpAttempt=0;
+    if(uint32_t(now-lastPpAttempt)>8000UL){
+      lastPpAttempt=now;
+      startWledEvent(CelebrationEngine::Event::POWER_PLAY,
+                     ppColor,ppSeq,ppSide,ppGameId);
     }
   }
 }
 
-// The onboard horn is still handled independently from WLED response codes.
-void celebrate(uint32_t color,uint32_t eventSequence,uint8_t scorerSide) {
-  startWledEvent(CelebrationEngine::Event::GOAL,color,eventSequence,scorerSide);
+// Horn remains independent of WLED network success. Only a real observed
+// goal from an armed NHL game enters the per-game priority queue.
+void celebrate(uint32_t color,uint32_t eventSequence,
+               uint8_t scorerSide,uint32_t gameId) {
+  if(gameId)queueArmedWledEvent(CelebrationEngine::Event::GOAL,color,
+                               eventSequence,scorerSide,gameId);
+  else startWledEvent(CelebrationEngine::Event::GOAL,color,eventSequence,
+                      scorerSide,0); // Existing local hardware preview.
   startHorn(eventSequence);
 }
 
