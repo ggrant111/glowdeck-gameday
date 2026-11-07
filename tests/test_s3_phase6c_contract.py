@@ -56,6 +56,7 @@ assert "kOverlayClose" in layout
 assert "tft.setTextDatum(previousDatum);" in pages
 assert "tft.setTextColor(color);" in pages
 assert "cfg.overlayLogos" in pages
+assert "drawTeamLogo(tft,String(e.team),12,129,56);" in pages
 assert "S3BroadcastPages::kStandingsRowCount" in pages
 # GIF stays native, never stretched, and original animations resume as before.
 assert "tft.fillRect(viewport.x,viewport.y,viewport.w,viewport.h,TFT_BLACK);" in pages
