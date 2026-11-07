@@ -19,10 +19,18 @@ particular NHL event. One unassigned LED, gap, overlap, opposite-team
 segment, duplicate segment ID or unsupported WLED strip disables DDP
 for that event. The native-JSON scene builder remains fully usable.
 
-The DDP transmitter sends RGB24 frames with the [official 10-byte
-header](https://kno.wled.ge/interfaces/ddp/): version/push `0x41`,
-sequence, type **`0x0B`**, destination `0x01`, big-endian byte offset
-zero and big-endian payload length. Network destination is **UDP 4048**.
+The DDP transmitter uses RGB24 data with the [official 10-byte
+header](https://kno.wled.ge/interfaces/ddp/) on **UDP 4048**. Each frame
+is split into consecutive chunks of at most **480 RGB pixels / 1,440
+channel bytes**. Each chunk has DDP v1 flags `0x40`, except the **last
+chunk only**, which uses `0x41` (PUSH) to display the full frame.
+Sequences advance per packet through 1–15 (never zero); data type is
+`0x0B` (RGB24) and destination ID `0x01`. The 32-bit big-endian
+channel offset is `startingPixel * 3`; the 16-bit big-endian data
+length is the number of RGB bytes **in that packet**, not the whole
+frame. Neither an optional timecode nor a PC/server is required.
+Packets are at most **1,450 bytes** total and fit ordinary 1,500-byte
+Ethernet MTU links without IP fragmentation.
 It is implemented locally on the S3/CYD; no PC, server or cloud
 software is needed. RGBW strip output is deliberately excluded.
 
@@ -52,12 +60,13 @@ No scene is automatically modified by the upgrade.
 | Parameter | Default / limit |
 | --- | --- |
 | DDP enabled | **False** until exclusive-use confirmation |
-| LEDs per DDP controller | **1–300 RGB pixels** |
+| LEDs per DDP controller | **1–4,096 RGB pixels** (implementation cap) |
 | Frame rate | 10, **15**, or 20 FPS |
 | Simultaneous DDP streams | **2** per S3/CYD |
 | Maximum DDP event duration | **30 seconds** |
 | Manual Test Lab preview | **3 seconds**, then stop/restore |
-| Max UDP packet | **910 bytes** (10 header + 300×3), MTU-safe |
+| Max UDP packet | **1,450 bytes** (10 header + 480×3), MTU-safe |
+| DDP packets per full frame | **1–9** (at most 480 LEDs per packet) |
 | Native JSON controllers | **Up to 8**, unchanged |
 | WLED source | Local same-subnet IP only, verified `/json/info` |
 
@@ -77,7 +86,9 @@ JSON behavior is removed or that any extra game is armed.
 3. Confirm in WLED itself that all RGB pixels are described by existing
    **non-overlapping segments** covering LEDs 0 to N−1; assign each
    segment Home, Away or Neutral in GameDay.
-4. Set frame rate: **15 FPS** suggested for Wi-Fi. Enable the DDP checkbox.
+4. Set frame rate: **10 FPS recommended for 1,000+ LEDs**; 15 FPS is the
+   default and 20 FPS should be used only when your LAN and controller
+   handle the load smoothly. Enable the DDP checkbox.
    Review and approve the explicit warning that **all pixels may be
    overwritten**, and choose **Save DDP preference**.
 5. GameDay checks WLED `/json/info`, original `/json/state`, that
@@ -103,7 +114,7 @@ All routes require the existing dashboard Basic Auth or permitted
 GlowDeck setup hotspot:
 
 - `GET /api/wled/ddp?slot=0`: configured, enabled, FPS, streaming
-  status, frame count, LED count and fallback reason
+  status, frame count, packet count, chunks/frame, LED count and fallback reason
 - `POST /api/wled/ddp/config`: `{"slot":0,"enabled":true,
   "fps":15,"exclusiveConfirmed":true}`
 - `POST /api/wled/ddp/test`: `{"slot":0}` — manual three-second
@@ -122,6 +133,7 @@ effect perfectly.
 ## Tests and deferred physical acceptance
 
 CI tests **DDP byte order and framing**, frame length/MTU,
+480-pixel boundaries, last-chunk PUSH, sequence wrap, 1,000–4,096 LEDs,
 Home/Away/Neutral ownership, missing/overlapping/duplicate ranges,
 role-policy fallback, RGB brightness scaling, 10–20 FPS limits,
 authenticated routes, and unchanged NHL eligibility. Builds run for
@@ -131,17 +143,18 @@ When your WLED devices are available, verify all the following:
 
 1. On a **non-dedicated** Home+Away segmented controller, a Home goal
    must use native JSON, leaving the Away LEDs untouched.
-2. On a dedicated all-Home strip of at most 300 LEDs, enable DDP and
+2. On a dedicated all-Home RGB strip of 1,000 LEDs, enable DDP and
    verify the manual three-second realtime test and state restoration.
 3. On a dedicated full-strip Home+Away layout, test Game Start. Check
    the Home and Away regions show their team colors and previous
    effects return; goal events should fall back to JSON when the
    opposite side's pixels need protection.
-4. Test missing/unassigned LEDs, RGBW controller, over-300 LEDs and
+4. Test missing/unassigned LEDs, RGBW controller, over-4,096 LEDs and
    controller OFF: DDP must not turn on, and status should explain why.
 5. Try different 8C zone duration settings and confirm native JSON
    fallback when a single DDP lifetime cannot safely represent them.
-6. Test 10/15/20 FPS and 1–2 streams; confirm the NHL scoreboard,
+6. Test 10/15/20 FPS and 1–2 streams at 480, 1,000, 2,048 and 4,096
+   LEDs; confirm the NHL scoreboard,
    goal horn, S3 case LEDs and Wi-Fi remain responsive.
 7. Unplug Wi-Fi or reboot WLED midstream; verify status/restore
    behavior, original WLED effects and no persistent realtime lock.
@@ -156,6 +169,23 @@ When your WLED devices are available, verify all the following:
 **Hardware behavior is not certified by CI.** This release requires
 explicit user acceptance on real WLED controllers before using DDP
 on lighting that also serves another system.
+
+## Performance and limitations
+
+DDP has no 300-pixel protocol ceiling. The 4,096 RGB pixel cap is a
+conservative, explicit GlowDeck firmware setting (not a WLED limit).
+Chunking limits packet sizes but does **not** compress RGB frames or
+remove Wi-Fi bandwidth requirements. As a rough sender-side example,
+4,096 pixels at 20 FPS is ~246 kB/s of RGB payload **per device**, or
+~1.97 Mbit/s before UDP/IP, Wi-Fi overhead and retransmission effects.
+Two such streams plus normal NHL/API and web traffic can overload a
+2.4-GHz ESP32 or a busy wireless LAN; prefer 10 FPS and test real
+hardware. Each controller's frame is transmitted sequentially without
+a pixel-sized framebuffer; packets can be dropped because DDP uses UDP.
+A missing chunk can produce an incomplete frame, but the next full
+frame replaces it. Packet counts in Test Lab help diagnose traffic;
+they do not guarantee remote receipt. Native JSON safety fallback and
+NHL event eligibility are unchanged.
 
 Sources:
 - https://kno.wled.ge/interfaces/ddp/
