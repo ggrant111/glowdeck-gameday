@@ -26,8 +26,10 @@ enum Fail : uint8_t {
   DUPLICATE_ID=8
 };
 struct Range {
-  uint16_t start=0,stop=0;
-  uint8_t id=0,role=0;
+  uint16_t start,stop;
+  uint8_t id,role;
+  Range(uint16_t a=0,uint16_t b=0,uint8_t c=0,uint8_t d=0):
+      start(a),stop(b),id(c),role(d){}
 };
 struct Layout {
   Range ranges[kMaxRanges];
@@ -35,8 +37,10 @@ struct Layout {
   uint16_t pixels=0;
 };
 struct Style {
-  uint32_t color=0;
-  uint8_t fx=0,speed=128,intensity=128,brightness=128;
+  uint32_t color;
+  uint8_t fx,speed,intensity,brightness;
+  Style(uint32_t c=0,uint8_t f=0,uint8_t s=128,uint8_t i=128,
+        uint8_t b=128):color(c),fx(f),speed(s),intensity(i),brightness(b){}
 };
 inline bool validFps(int fps) {
   return fps>=kMinFps && fps<=kMaxFps;
