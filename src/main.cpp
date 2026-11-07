@@ -1944,6 +1944,45 @@ uint8_t activeDdpCount(){
   for(uint8_t i=0;i<MAX_WLED;++i)if(wledDdp[i].active)++active;
   return active;
 }
+// Shared, read-only WLED geometry parser. Quick Setup uses this to check
+// strip coverage without changing a controller's existing WLED segments.
+bool readWledDdpLayout(const String &snapshot,uint16_t pixels,
+                       uint32_t zoneMap,uint8_t overrideRole,
+                       WledDdpPolicy::Layout &layout,String &reason){
+  DynamicJsonDocument filter(384);
+  filter["on"]=true;
+  JsonObject shape=filter["seg"][0].to<JsonObject>();
+  shape["id"]=true;shape["start"]=true;shape["stop"]=true;shape["len"]=true;
+  DynamicJsonDocument state(3072);
+  if(deserializeJson(state,snapshot,DeserializationOption::Filter(filter))){
+    reason="Unable to read WLED LED segments";return false;
+  }
+  if(!(state["on"]|false)){reason="Turn this WLED device on first";return false;}
+  JsonArray segments=state["seg"].as<JsonArray>();
+  if(segments.isNull()||segments.size()==0||
+     segments.size()>WledDdpPolicy::kMaxRanges){
+    reason="WLED needs 1–16 existing LED segments";return false;
+  }
+  layout=WledDdpPolicy::Layout();
+  layout.pixels=pixels;
+  for(uint8_t j=0;j<segments.size();++j){
+    JsonObject seg=segments[j];
+    const int id=seg["id"]|(int)j;
+    const int first=seg["start"]|0;
+    int last=seg["stop"]|0;
+    if(last<=first)last=first+(seg["len"]|0);
+    if(!WledZonePolicy::validSegment(id)||first<0||last<0||
+       first>65535||last>65535){
+      reason="WLED segment has an invalid LED range";return false;
+    }
+    WledDdpPolicy::Range &range=layout.ranges[layout.count++];
+    range.start=uint16_t(first);range.stop=uint16_t(last);
+    range.id=uint8_t(id);
+    range.role=overrideRole?overrideRole:
+      WledZonePolicy::role(zoneMap,uint8_t(id));
+  }
+  return true;
+}
 bool prepareWledDdp(uint8_t slot,CelebrationEngine::Event event,
                     uint32_t color,uint8_t scorerSide,
                     const String &snapshot,WledDdpSession &plan){
@@ -1970,38 +2009,12 @@ bool prepareWledDdp(uint8_t slot,CelebrationEngine::Event event,
                  "Native JSON (over "+String(WledDdpPolicy::kMaxPixels)+" LEDs)";
     return false;
   }
-  DynamicJsonDocument filter(384);
-  filter["on"]=true;
-  JsonObject slice=filter["seg"][0].to<JsonObject>();
-  slice["id"]=true;slice["start"]=true;slice["stop"]=true;slice["len"]=true;
-  DynamicJsonDocument state(3072);
-  if(deserializeJson(state,snapshot,DeserializationOption::Filter(filter))||
-     !(state["on"]|false)){
-    wledDdp[slot].status="Native JSON (WLED off or bad snapshot)";
-    return false;
-  }
   WledDdpPolicy::Layout layout;
-  layout.pixels=info.ledCount;
-  JsonArray segments=state["seg"].as<JsonArray>();
-  if(segments.isNull()||segments.size()>WledDdpPolicy::kMaxRanges){
-    wledDdp[slot].status="Native JSON (unsupported WLED segments)";
+  String layoutReason;
+  if(!readWledDdpLayout(snapshot,info.ledCount,cfg.wledZoneMap[slot],0,
+                        layout,layoutReason)){
+    wledDdp[slot].status="Native JSON ("+layoutReason+")";
     return false;
-  }
-  for(uint8_t j=0;j<segments.size();++j){
-    JsonObject seg=segments[j];
-    const int id=seg["id"]|(int)j;
-    const int first=seg["start"]|0;
-    int end=seg["stop"]|0;
-    if(end<=first)end=first+(seg["len"]|0);
-    if(!WledZonePolicy::validSegment(id)||first<0||end<0||
-       first>65535||end>65535){
-      wledDdp[slot].status="Native JSON (invalid segment geometry)";
-      return false;
-    }
-    WledDdpPolicy::Range &range=layout.ranges[layout.count++];
-    range.start=uint16_t(first);range.stop=uint16_t(end);
-    range.id=uint8_t(id);
-    range.role=WledZonePolicy::role(cfg.wledZoneMap[slot],uint8_t(id));
   }
   const WledDdpPolicy::Fail safety=
       WledDdpPolicy::validate(layout,uint8_t(event),scorerSide);
