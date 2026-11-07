@@ -32,6 +32,8 @@
 #include "GameDetailMode.h"
 #include "StandingsCarousel.h"
 #include "LiveCarousel.h"
+#include "CarouselHoldPolicy.h"
+#include "GameDayIcons.h"
 #include "NhlFetchPolicy.h"
 #include "CelebrationEngine.h"
 #include "WledDiscoveryPolicy.h"
@@ -188,6 +190,7 @@ uint32_t rearTestPpUntil = 0, rearTestPpColor = 0;
 uint32_t rearDiagnosticUntil = 0, rearDiagnosticColor = 0;
 uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
 uint8_t carouselSlide = 0; // Independent of armed game and detail index.
+CarouselHoldPolicy::State carouselHold; // Only rotation stops, never live polling.
 LiveCarousel::Plan carouselPlan; // 28 fixed entries, no heap or sprite buffer.
 uint32_t lastCarouselAdvance = 0;
 uint32_t lastBackgroundOverlayAt = 0;
@@ -253,6 +256,7 @@ uint32_t wledScanStarted=0,wledLastScanStarted=0;
 String wledScanError;
 String lastArmedGameState;
 uint32_t wledPpTestUntil = 0, wledSuppressPpUntil = 0;
+uint32_t wledPpManuallyStoppedGameId = 0;
 CelebrationEngine::Event queuedWledEvent = CelebrationEngine::Event::NONE;
 uint32_t queuedWledColor = 0;
 bool restoring[MAX_WLED] = {false, false, false, false};
@@ -330,6 +334,13 @@ struct SeasonStanding {
 // Outside live action: retain the existing all-games + 8-standings rotation.
 uint8_t carouselPageCount() { return carouselPlan.count; }
 LiveCarousel::Page currentCarouselPage() {
+  // Keep pinned game full-screen even if it leaves the live-first plan at FINAL.
+  const uint8_t held=carouselHold.index(games,gameCount);
+  if(held!=255){
+    LiveCarousel::Page p;
+    p.kind=LiveCarousel::Kind::GAME; p.index=held;
+    return p;
+  }
   return carouselPlan.at(carouselSlide);
 }
 bool showingStandingsPage() {
@@ -350,12 +361,33 @@ void rebuildCarouselPlan() {
     featuredIndex = page.index;
 }
 void advanceCarousel(int direction) {
-  carouselSlide = LiveCarousel::advance(carouselSlide, carouselPlan, direction);
-  const LiveCarousel::Page page = currentCarouselPage();
-  if (page.kind == LiveCarousel::Kind::GAME) featuredIndex = page.index;
-  lastCarouselAdvance = millis();
-  partialLiveUpdate = false;
-  needsDraw = true;
+  uint8_t from=carouselSlide;
+  if(carouselHold.paused){
+    const uint8_t located=LiveCarousel::locateGame(
+        carouselPlan,games,carouselHold.gameId);
+    if(located!=255)from=located;
+  }
+  carouselSlide=LiveCarousel::advance(from,carouselPlan,direction);
+  const LiveCarousel::Page page=carouselPlan.at(carouselSlide);
+  carouselHold.navigatedTo(page.kind==LiveCarousel::Kind::GAME &&
+      page.index<gameCount ? games[page.index].id : 0);
+  if(page.kind==LiveCarousel::Kind::GAME)featuredIndex=page.index;
+  lastCarouselAdvance=millis();
+  partialLiveUpdate=false;
+  needsDraw=true;
+}
+void toggleCarouselHold(){
+  const LiveCarousel::Page page=currentCarouselPage();
+  if(page.kind!=LiveCarousel::Kind::GAME || page.index>=gameCount)return;
+  const uint32_t id=games[page.index].id;
+  carouselHold.toggle(id);
+  if(!carouselHold.paused){
+    const uint8_t found=LiveCarousel::locateGame(carouselPlan,games,id);
+    if(found!=255)carouselSlide=found;
+  }
+  lastCarouselAdvance=millis();
+  partialLiveUpdate=false;
+  needsDraw=true;
 }
 
 SeasonStanding seasonStandings[32];
@@ -908,6 +940,7 @@ PowerPlayLogPolicy::Watch *getPowerPlayLogWatch(uint32_t id) {
   return nullptr; // Full (normally one slot per game on the date).
 }
 
+void scheduleWledRestoreAll(); // Verified PP end must stop WLED too.
 void observePowerPlayEvents() {
   for (uint8_t i = 0; i < gameCount; ++i) {
     const Game &g = games[i];
@@ -925,7 +958,12 @@ void observePowerPlayEvents() {
       const uint32_t seq = addGameEvent(
           g, GameEventLog::Type::POWER_PLAY_END, team, 0).sequence;
       queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_END, team, seq, true);
-      if (g.id == selectedGameId) armedPpLogSeq = 0;
+      if(g.id==selectedGameId){
+        armedPpLogSeq=0;
+        // Previously only the overlay/event log knew the PP had ended.
+        if(wledActiveEvent==CelebrationEngine::Event::POWER_PLAY)
+          scheduleWledRestoreAll();
+      }
     }
     if (change.started) {
       const String &team = change.started == 1 ? g.home : g.away;
@@ -998,6 +1036,7 @@ void prepareNewScoreboardDate(const String &today) {
     gamePage = 0;
     featuredIndex = 0;
     carouselSlide = 0;
+    carouselHold.reset();
     rebuildCarouselPlan();
     lastCarouselAdvance = millis();
     needDetailLoad = false;
@@ -2604,6 +2643,13 @@ void tickWledCelebrations() {
     powerPlaySide=currentWledPowerPlay(powerPlayColor);
     hasPP = powerPlaySide!=0;
   }
+  // Manual stop applies to the current armed PP until its end. A different
+  // game or a confirmed non-PP sample releases the stop latch automatically.
+  if(wledPpManuallyStoppedGameId){
+    if(wledPpManuallyStoppedGameId!=selectedGameId || !hasPP)
+      wledPpManuallyStoppedGameId=0;
+    else hasPP=false;
+  }
   if (wledActiveEvent != CelebrationEngine::Event::NONE &&
       CelebrationEngine::temporary(wledActiveEvent)) {
     const uint32_t elapsed = uint32_t(now - wledEventStart);
@@ -3024,6 +3070,7 @@ void pollNhl() {
   if (newDay) {
     featuredIndex = 0;
     carouselSlide = 0;
+    carouselHold.reset();
     lastCarouselAdvance = millis();
     needDetailLoad = false;
     detail.loaded = false;
@@ -3055,6 +3102,8 @@ void pollNhl() {
   // the armed game. A live slate intentionally hides standings slides.
   carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings,
                                      cfg.favoriteTeams);
+  if(carouselHold.paused && carouselHold.index(games,gameCount)==255)
+    carouselHold.reset();
   carouselSlide = newDay ? 0 : LiveCarousel::restore(
       carouselPlan, games, oldSlideKind, previouslyShownGameId,
       previousStandingsIndex, featuredIndex);
@@ -7171,8 +7220,8 @@ void registerRoutes() {
   });
   server.on("/api/wled/ddp/stop", HTTP_POST, []() {
     if(!authorized())return;
-    // Emergency stop also safely retires any active WLED JSON celebration.
-    // DDP never leaves the controller in endless realtime mode by design.
+    // Do not restart the same power play on the following NHL polling tick.
+    wledPpManuallyStoppedGameId=selectedGameId;
     scheduleWledRestoreAll();
     StaticJsonDocument<96> response;
     response["ok"]=true;response["restoreRequested"]=true;
@@ -7601,7 +7650,7 @@ void loop() {
     needsDraw = true;
   }
   if (!overlayController.active() && screen == Screen::LIVE &&
-      cfg.cycleGames && carouselPageCount() > 1 &&
+      cfg.cycleGames && !carouselHold.paused && carouselPageCount() > 1 &&
       uint32_t(now - lastCarouselAdvance) >= uint32_t(cfg.cycleSeconds) * 1000UL) {
     advanceCarousel(1);
   }
