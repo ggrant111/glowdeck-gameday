@@ -86,7 +86,7 @@ class S3GoalAudio {
       return logFailure();
     }
     // No speaker pop at boot; start at 70% reference gain, PA remains OFF.
-    if(xTaskCreatePinnedToCore(taskEntry,"s3_goal_audio",4096,this,2,
+    if(xTaskCreatePinnedToCore(taskEntry,"s3_goal_audio",6144,this,2,
                               &task_,1)!=pdPASS){
       error_=Error::TASK;
       i2s_driver_uninstall(I2S_NUM_0);
