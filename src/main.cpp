@@ -33,6 +33,7 @@
 #include "LiveCarousel.h"
 #include "NhlFetchPolicy.h"
 #include "CelebrationEngine.h"
+#include "WledDiscoveryPolicy.h"
 #include "TeamGradient.h"
 #include "GameEventLog.h"
 #include "PowerPlayLogPolicy.h"
@@ -64,7 +65,7 @@ constexpr uint8_t PIN_RGB_R = RearLedPattern::kRedPin,
                   PIN_RGB_G = RearLedPattern::kGreenPin,
                   PIN_RGB_B = RearLedPattern::kBluePin;
 constexpr uint8_t RGB_CH_R = 2, RGB_CH_G = 3, RGB_CH_B = 4;
-constexpr uint8_t MAX_GAMES = GameFollowPolicy::kMaxDailyGames, MAX_WLED = 4;
+constexpr uint8_t MAX_GAMES = GameFollowPolicy::kMaxDailyGames, MAX_WLED = WledDiscoveryPolicy::kMaxDevices;
 constexpr uint8_t MAX_FOLLOWED_GAMES = MAX_GAMES; // Can follow every game.
 constexpr uint16_t BG = 0x0841, PANEL = 0x10A2, WHITE = 0xFFFF;
 constexpr uint16_t MUTED = 0x9CF3, TEAL = 0x340F, ORANGE = 0xFD20;
@@ -86,9 +87,10 @@ struct Game {
 struct Settings {
   String ssid, wifiPassword, adminPassword;
   String wled[MAX_WLED];
-  bool wledEnabled[MAX_WLED] = {false, false, false, false};
+  bool wledEnabled[MAX_WLED] = {};
   // Masked opt-in for every connected controller: goal / PP / start / final.
-  uint8_t wledEvents[MAX_WLED] = {15, 15, 15, 15};
+  uint8_t wledEvents[MAX_WLED] = {15,15,15,15,15,15,15,15};
+  String wledName[MAX_WLED];
   bool wledPP = true, wledGameStart = true, wledFinal = true;
   uint8_t wledGoalStyle = 0; // 0 strobe+chase, 1 strobe, 2 chase, 3 solid
   uint8_t favoriteSide = 0; // home 0 / away 1; for start and final outcomes
@@ -1478,6 +1480,7 @@ void loadSettings() {
   cfg.adminPassword = prefs.getString("admin", apPassword);
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     cfg.wled[i] = prefs.getString(("ip" + String(i)).c_str(), "");
+    cfg.wledName[i] = prefs.getString(("wname" + String(i)).c_str(), "");
     cfg.wledEnabled[i] = prefs.getBool(("enable" + String(i)).c_str(), false);
     cfg.wledEvents[i] = prefs.getUChar(("event" + String(i)).c_str(),
                                          CelebrationEngine::ALL_EVENTS) &
@@ -1558,6 +1561,7 @@ void saveSettings() {
   prefs.putString("admin", cfg.adminPassword);
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     prefs.putString(("ip" + String(i)).c_str(), cfg.wled[i]);
+    prefs.putString(("wname" + String(i)).c_str(), cfg.wledName[i]);
     prefs.putBool(("enable" + String(i)).c_str(), cfg.wledEnabled[i]);
     prefs.putUChar(("event" + String(i)).c_str(), cfg.wledEvents[i]);
   }
@@ -5074,6 +5078,7 @@ void registerRoutes() {
     for (uint8_t i = 0; i < MAX_WLED; ++i) {
       JsonObject d = wled.createNestedObject();
       d["ip"] = cfg.wled[i];
+      d["name"] = cfg.wledName[i];
       d["enabled"] = cfg.wledEnabled[i];
       d["events"] = cfg.wledEvents[i];
     }
@@ -5173,6 +5178,9 @@ void registerRoutes() {
       IPAddress parsed;
       if (!ip.isEmpty() && !parsed.fromString(ip))
         return errorResponse("WLED address must be an IPv4 address");
+      String label=arr[i]["name"] | cfg.wledName[i];
+      label.trim();
+      if(label.length()>32)return errorResponse("WLED name must be at most 32 characters");
       const bool enable = arr[i]["enabled"] | cfg.wledEnabled[i];
       const uint8_t mask = constrain((int)(arr[i]["events"] | cfg.wledEvents[i]),
                                       0, CelebrationEngine::ALL_EVENTS);
@@ -5184,6 +5192,7 @@ void registerRoutes() {
         }
       }
       cfg.wled[i] = ip;
+      cfg.wledName[i] = label;
       cfg.wledEnabled[i] = enable;
       cfg.wledEvents[i] = mask;
     }
