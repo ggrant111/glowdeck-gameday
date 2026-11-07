@@ -597,6 +597,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <button id="rearFullAway">Celebrate away goal</button>
 <button id="rearFullPpHome">Home power play + sound</button>
 <button id="rearFullPpAway">Away power play + sound</button>
+<button id="rearFullStart">Game start + slot 3 audio</button>
 <button id="rearFullTeam" class="primary">Celebrate chosen team</button>
 <button id="rearFullStop">Stop / restore all</button>
 </div>
@@ -2224,7 +2225,7 @@ function renderRearTestControls(){
     ?(armed?"Armed matchup: ":"Featured matchup: ")+
       "Away "+fmt(g.away)+" @ Home "+fmt(g.home)
     :"No game available. Choose a team below for color tests.";
-  for(const id of ["rearTestHome","rearTestAway","rearTestPP","rearFullHome","rearFullAway","rearFullPpHome","rearFullPpAway"])
+  for(const id of ["rearTestHome","rearTestAway","rearTestPP","rearFullHome","rearFullAway","rearFullPpHome","rearFullPpAway","rearFullStart"])
     $(id).disabled=!g;
   $("rearTestHome").textContent=g?"Flash home "+fmt(g.home):"No home team";
   $("rearTestAway").textContent=g?"Flash away "+fmt(g.away):"No away team";
@@ -2633,6 +2634,7 @@ $("rearFullHome").onclick=()=>fullPreview("goal","home");
 $("rearFullAway").onclick=()=>fullPreview("goal","away");
 $("rearFullPpHome").onclick=()=>fullPreview("pp","home");
 $("rearFullPpAway").onclick=()=>fullPreview("pp","away");
+$("rearFullStart").onclick=()=>fullPreview("start","home");
 $("rearFullTeam").onclick=()=>fullPreview("goal","home",selectedRearTeam());
 $("rearFullStop").onclick=()=>fullPreview("stop");
 $("testHome").onclick=()=>perform(async()=>{await post("/api/test",{side:"home"});message("Home color test started")});
