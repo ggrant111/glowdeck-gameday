@@ -13,11 +13,11 @@ constexpr uint16_t kFrameChunk=256;
 constexpr uint8_t kVolumePercent=70;
 constexpr uint8_t kMinVolumePercent=30;
 constexpr uint8_t kMaxVolumePercent=80;
-inline bool validVolume(uint8_t percent){
+constexpr bool validVolume(uint8_t percent){
   return percent>=kMinVolumePercent && percent<=kMaxVolumePercent;
 }
 // Match Waveshare's ES8311 voice_volume_set mapping: register 0x32.
-inline uint8_t codecVolumeRegister(uint8_t percent){
+constexpr uint8_t codecVolumeRegister(uint8_t percent){
   return percent==0?0:static_cast<uint8_t>((uint32_t(percent)*256UL/100UL)-1UL);
 }
 constexpr uint32_t kRetriggerMs=1200UL;
