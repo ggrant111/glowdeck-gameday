@@ -1065,32 +1065,63 @@ function createEventElement(row){
     ?row.away+" "+row.awayScore+" – "+row.homeScore+" "+row.home
     :"Manual preview";
   score.textContent=matchup+(row.period?" · Period "+row.period:"")+
-    ((row.goalsDelta||0)>1?" · "+row.goalsDelta+" score increase":"");
+    ((row.goalsDelta||0)>1?" · "+row.goalsDelta+" score increase":"")+
+    (row.id?" · Event #"+row.id:"")+
+    (row.gameId?" · NHL game "+row.gameId:"");
   score.style.margin="8px 0";
   card.append(score);
   const builtIn=document.createElement("div");builtIn.className="small";
   builtIn.textContent=(currentStatus?.audioSupported?"On-device LED":"CYD rear LED")+
     ": "+(row.rear||"Not applicable");
   card.append(builtIn);
-  if(row.type==="Goal" || row.type==="Goal preview"){
-    const sound=document.createElement("div");
-    sound.className="small";
+  // Every NHL event and preview needs explicit audio visibility. In
+  // particular, a verified PP WAV must not disappear from the Activity UI.
+  {
+    const sound=document.createElement("div");sound.className="small";
     sound.style.marginTop="5px";
     const ppAudio=row.type==="Power play started"||row.type==="Power-play preview";
     const startAudio=row.type==="Game started"||row.type==="Game-start preview";
-    const finishAudio=row.type==="Final win"||row.type==="Final loss"||row.type==="Final-win preview"||row.type==="Final-loss preview";
+    const finishAudio=row.type==="Final — win"||row.type==="Final — loss"||
+      row.type==="Final-win preview"||row.type==="Final-loss preview";
+    const goalAudio=row.type==="Goal"||row.type==="Goal preview";
     const source=row.audioSource>0?"Custom WAV slot "+row.audioSource:
-      (ppAudio?"No PP WAV assigned":currentStatus?.audioSupported?"Built-in S3 horn":"CYD tone");
-    sound.textContent=(ppAudio?"Power-play audio: ":startAudio?"Game-start audio: ":finishAudio?"Game-finish audio: ":"Goal horn: ")+(row.audio||"Not recorded on this firmware")+
-      (row.audio&&row.audio!=="Not applicable"?" · "+source:"")+
-      (row.audioFallback?" · selected WAV unavailable, built-in fallback":"");
+      ppAudio?"No PP WAV assigned":currentStatus?.audioSupported?
+      "Built-in S3 horn":"CYD tone";
+    const label=ppAudio?"Power-play audio":startAudio?"Game-start audio":
+      finishAudio?"Game-finish audio":goalAudio?"Goal horn":"Audio";
+    const outcome=row.audio||"Not recorded on this firmware";
+    sound.textContent=label+": "+outcome+
+      (outcome!=="Not applicable"?" · "+source:"")+
+      (row.audioFallback?" · built-in horn fallback":"");
     card.append(sound);
+    // These are software measurements only. An I2S-complete WAV can still
+    // be inaudible; no onboard microphone verifies speaker output.
+    if(row.audioExpectedFrames>0 || row.audioFrames>0 ||
+       (row.audioFailure&&row.audioFailure!=="None")){
+      const detail=document.createElement("div");
+      detail.className="small muted";
+      detail.style.marginTop="5px";
+      detail.textContent="Playback diagnostics: "+
+        (row.audioFrames||0)+"/"+(row.audioExpectedFrames||0)+
+        " frames · "+(row.audioDurationMs||0)+" ms"+
+        " · PCM peak "+(row.audioPeak||0)+
+        " · I2S retries "+(row.audioRetries||0)+
+        " · I2S code "+(row.audioI2sCode||0)+
+        " · flash offset "+(row.audioReadOffset||0)+
+        " · volume "+(row.audioVolume||0)+"%"+
+        " · PA latch "+(row.audioAmpVerified?"verified":"not verified")+
+        " · failure: "+(row.audioFailure||"None")+
+        " · speaker audibility not verified";
+      card.append(detail);
+    }
   }
   const devices=document.createElement("div");devices.className="small muted";
   devices.style.marginTop="5px";
+  // Preserve historical event results even after WLED is reconfigured.
   const configured=currentConfig?.wled||[];
   const selected=(row.devices||[]).filter(d=>{
-    const w=configured[d.slot-1]; return !!w?.enabled && !!w?.ip;
+    const w=configured[d.slot-1];
+    return (d.result&&d.result!=="Not triggered") || !!w?.enabled && !!w?.ip;
   });
   devices.textContent=selected.length
     ?selected.map(d=>
@@ -2402,8 +2433,15 @@ async function readS3AudioProbe(){
       " · PA="+((d.ampOutput&128)?"HIGH":"LOW"),
     "Audio ready: "+!!d.ready+" · Playing: "+!!d.playing+
       " · Last clip: "+(d.lastClip||"none"),
-    "I2S streamed: "+(d.framesWritten||0)+" frames"+
-      " · complete="+!!d.streamOk+" · "+(d.streamDurationMs||0)+"ms",
+    "I2S streamed: "+(d.framesWritten||0)+"/"+(d.expectedFrames||0)+
+      " frames · complete="+!!d.streamOk+" · "+(d.streamDurationMs||0)+"ms",
+    "PCM peak: "+(d.peakSample||0)+" · I2S retries: "+(d.writeRetries||0)+
+      " · I2S code: "+(d.i2sCode||0),
+    "Flash read offset: "+(d.readFailureOffset||0)+
+      " · failure: "+(d.failureReason||"None")+
+      " · fallback: "+!!d.fallbackUsed,
+    "PA verified at playback start: "+!!d.ampVerifiedAtStart+
+      " · speaker audibility: NOT VERIFIED",
     "Error: "+(d.error||"None")
   ].join("\n");
 }
