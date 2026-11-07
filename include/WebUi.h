@@ -1843,7 +1843,8 @@ async function refreshDdpTestStatus(){
   $("wledDdpLabStatus").textContent=
     (data.enabled?"DDP enabled":"DDP disabled")+
     " · "+data.fps+" FPS · "+(data.running?"STREAMING":"Idle")+
-    " · "+data.pixels+" LEDs · "+data.frames+" frames · "+data.mode;
+    " · "+data.pixels+" LEDs · "+data.chunksPerFrame+" chunks/frame"+
+    " · "+data.frames+" frames / "+data.packets+" packets · "+data.mode;
 }
 $("wledDdpLabSlot").onchange=()=>perform(refreshDdpTestStatus);
 $("wledDdpLabRefresh").onclick=()=>perform(refreshDdpTestStatus);
@@ -1872,7 +1873,8 @@ async function openWledDdpSettings(slot,host){
   const intro=document.createElement("p");intro.className="small muted";
   intro.textContent="DDP v1 RGB24 · UDP 4048. This mode is only for a "+
     "dedicated controller where every LED belongs to an assigned Home, "+
-    "Away or Neutral zone. Maximum 300 LEDs and two concurrent streams. "+
+    "Away or Neutral zone. Up to "+data.maxPixels+" RGB LEDs, sent in "+
+    data.pixelsPerChunk+"-LED DDP chunks; two concurrent streams. "+
     "Home/Away goal layouts that would overwrite the other team fall "+
     "back to safe native JSON automatically.";
   const status=document.createElement("p");status.className="small muted";
@@ -1891,6 +1893,10 @@ async function openWledDdpSettings(slot,host){
   });
   fps.value=String(data.fps||15);
   const fpsWrap=sceneControl("DDP frame rate",fps);
+  const tip=document.createElement("p");tip.className="small muted";
+  tip.textContent="For longer strips (1,000+ LEDs), start at 10 FPS; "+
+    "use 15–20 FPS only after confirming smooth Wi-Fi and scoreboard response. "+
+    "DDP packets use byte offsets and final-chunk PUSH to display one complete frame.";
   const warning=document.createElement("p");warning.className="wled-scene-warning";
   warning.textContent="When DDP is active, all pixels on this WLED may "+
     "be temporarily replaced. Do NOT enable on shared ambient lights, "+
@@ -1928,7 +1934,7 @@ async function openWledDdpSettings(slot,host){
     perform(refreshDdpTestStatus);
   };
   buttons.append(save,link);
-  box.append(heading,intro,status,toggleWrap,fpsWrap,warning,buttons);
+  box.append(heading,intro,status,toggleWrap,fpsWrap,tip,warning,buttons);
   host.append(box);
 }
 function renderWledControllerResults(){

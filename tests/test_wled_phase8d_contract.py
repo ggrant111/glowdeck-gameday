@@ -6,15 +6,19 @@ s=Path("src/main.cpp").read_text()
 ui=Path("include/WebUi.h").read_text()
 policy=Path("include/WledDdpPolicy.h").read_text()
 for required in (
-  "kPort=4048","kMaxPixels=300","kMaxConcurrent=2",
+  "kPort=4048","kMaxPixels=4096","kChunkPixels=480",
+  "kMaxPackets=","kMaxConcurrent=2",
   "kMinFps=10,kMaxFps=20","kPreviewMs=3000UL",
   "kMaxLiveMs=30000UL","kHeaderBytes=10",
-  "out[0]=0x41","out[2]=0x0B","out[3]=0x01",
-  "out[8]=uint8_t(channels>>8)","out[9]=uint8_t(channels)",
+  "out[0]=(firstPixel+count==layout.pixels)?0x41:0x40",
+  "out[1]=uint8_t(sequence%15U+1U)",
+  "out[2]=0x0B","out[3]=0x01",
+  "out[8]=uint8_t(bytes>>8)","out[9]=uint8_t(bytes)",
+  "uint32_t(firstPixel)*3U","used=kHeaderBytes+bytes",
   "GAP_OR_OVERLAP","NOT_TARGETED","UNASSIGNED",
   "WledZonePolicy::target(true,",
-  "if(occupied[pixel])return GAP_OR_OVERLAP",
-  "if(!occupied[pixel])return GAP_OR_OVERLAP",
+  "r.start<prior.stop && prior.start<r.stop",
+  "covered==layout.pixels?OK:GAP_OR_OVERLAP",
 ):
     assert required in policy,required
 for required in (
@@ -36,8 +40,12 @@ for required in (
   "WledDdpPolicy::validate(layout,uint8_t(event),scorerSide)",
   'wledDdp[slot].status="Native JSON (different zone durations)"',
   "wledDdpUdp.beginPacket(target,WledDdpPolicy::kPort)",
+  "WledDdpPolicy::frameChunk(session.layout,rendered,elapsed,",
+  "first=uint16_t(first+WledDdpPolicy::kChunkPixels)",
   "wledDdpUdp.write(wledDdpPacket,bytes)==bytes",
   "wledDdpUdp.endPacket()==1",
+  'result["chunksPerFrame"]=WledDdpPolicy::packetCount(',
+  'result["packets"]=wledDdp[slot].packets',
   'postWled(ip,"{',
   "const bool ddpReleased=releaseWledDdp(i)",
   "wledDdp[i].active && !releaseWledDdp(i)",
