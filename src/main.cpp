@@ -1596,14 +1596,6 @@ void loadSettings() {
   rebuildCarouselPlan(); // Standings-only fallback until the first NHL fetch.
 }
 
-bool saveWledSceneSlot(uint8_t slot){
-  if(slot>=MAX_WLED)return false;
-  uint8_t blob[WledScenePolicy::kBlobBytes]={};
-  WledScenePolicy::encode(cfg.wledScenes[slot],blob);
-  const String key="scene"+String(slot);
-  return prefs.putBytes(key.c_str(),blob,sizeof(blob))==sizeof(blob);
-}
-
 void saveSettings() {
   prefs.putString("ssid", cfg.ssid);
   prefs.putString("wpass", cfg.wifiPassword);
