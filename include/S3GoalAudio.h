@@ -377,7 +377,7 @@ class S3GoalAudio {
                        total-offset,&written,pdMS_TO_TICKS(220));
       if(written>total-offset || (written%4)!=0){
         i2sCode=int32_t(result);
-        Serial.printf("[S3 Audio] I2S invalid byte count: %u/%u at frame=%lu\\n",
+        Serial.printf("[S3 Audio] I2S invalid byte count: %u/%u at frame=%lu\n",
                       unsigned(written),unsigned(total-offset),
                       (unsigned long)frame);
         return false;
@@ -391,7 +391,7 @@ class S3GoalAudio {
       i2sCode=int32_t(result);
       if(written)stalled=0;
       else if(++stalled>=3){
-        Serial.printf("[S3 Audio] I2S write failed: code=%ld bytes=%u/%u frame=%lu retries=%lu\\n",
+        Serial.printf("[S3 Audio] I2S write failed: code=%ld bytes=%u/%u frame=%lu retries=%lu\n",
                       (long)i2sCode,unsigned(offset),unsigned(total),
                       (unsigned long)frame,(unsigned long)retryCount);
         return false;
@@ -474,7 +474,7 @@ class S3GoalAudio {
           // unreadable. PP/start/final clips never impersonate a goal horn.
           fallback=true;
           self->usedFallback_.store(true);
-          Serial.printf("[S3 Audio] GOAL WAV slot %u failed: %s at offset=%lu; built-in fallback\\n",
+          Serial.printf("[S3 Audio] GOAL WAV slot %u failed: %s at offset=%lu; built-in fallback\n",
                         unsigned(slot),failureName(failure),
                         (unsigned long)readOffset);
           i2s_zero_dma_buffer(I2S_NUM_0);
@@ -498,7 +498,7 @@ class S3GoalAudio {
       self->readFailureOffset_.store(readOffset);
       if(!complete)self->streamError_.store(true);
       Serial.printf("[S3 Audio] %s stream %s source=%u frames=%lu/%lu elapsed=%lums"
-                    " peak=%lu retries=%lu i2s=%ld failure=%s readOffset=%lu fallback=%u PAstart=%u\\n",
+                    " peak=%lu retries=%lu i2s=%ld failure=%s readOffset=%lu fallback=%u PAstart=%u\n",
                     initiallyCustom?"custom-wav":test?"test-tone":"goal-horn",
                     complete?"complete":"FAILED",unsigned(slot),
                     (unsigned long)cursor,(unsigned long)frames,
