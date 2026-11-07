@@ -92,7 +92,7 @@ for x in (
  assert x.lower() in ui.lower(),x
 
 # Old 8B role routing, original armed-only goal dispatch and presets unchanged.
-assert 'const bool armedForGoal = g.id == selectedGameId' in s
+assert 'const bool armedForGoal = isArmedGame(g.id)' in s
 assert 'if (armedForGoal) celebrate(teamRgb(scorer)' in s
 assert 'CelebrationEngine::eligible(cfg.wledEnabled[i], cfg.wledEvents[i], event)' in s
 assert 'const bool followed = rearFollows(g.id);' in s
