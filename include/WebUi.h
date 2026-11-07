@@ -404,12 +404,15 @@ header{padding:19px 17px}
 </div></div>
 <div class="card" id="s3AudioCard" hidden style="display:none">
 <h2>Onboard speaker · ESP32-S3</h2>
-<p>Play an original, synthesized hockey goal horn through the ES8311 speaker at a fixed 50% codec volume. This test only uses the onboard speaker: no NHL events, screen takeovers, WLED lights or remote sound systems are triggered.</p>
+<p>Improved, harmonically richer goal horn for the small Waveshare speaker. Adjust ES8311 output level from 30% to 80%; start at 70%, then tune for clear sound without distortion. Test sounds never trigger WLED, game events or screen takeovers.</p>
 <p id="s3AudioStatus" class="small muted">Checking speaker...</p>
-<div class="actions"><button type="button" id="s3AudioPreview">Preview goal horn · 50%</button>
+<label for="s3AudioVolume">Speaker volume · <b id="s3AudioVolumeValue">70%</b></label>
+<div class="actions"><input type="range" id="s3AudioVolume" min="30" max="80" step="5" value="70" style="flex:1;min-width:180px">
+<button type="button" id="s3AudioVolumeApply">Apply volume</button></div>
+<div class="actions"><button type="button" id="s3AudioPreview">Preview goal horn</button>
 <button type="button" id="s3AudioTone">Test speaker · 1 kHz</button>
 <button type="button" id="s3AudioProbe">Check audio diagnostics</button></div>
-<p class="small muted">If you hear no horn, try the brighter 1 kHz test tone. Both play locally at the same fixed codec volume, without WLED or NHL events.</p>
+<p class="small muted">The new horn contains brighter upper harmonics and a stronger digital signal. Both previews use your saved volume, while the device amplifier is off when idle.</p>
 <pre id="s3AudioDiagnostics" class="small muted" style="white-space:pre-wrap;word-break:break-word">No diagnostic check run yet.</pre>
 <p class="small muted">Use the horn checkbox above and Save settings to enable audio for actual followed/armed NHL goals. Custom WAV uploads are planned for Phase 7B.</p>
 </div>
@@ -604,14 +607,16 @@ function renderStatus(){
   audioCard.style.display=s.audioSupported?"":"none";
   if(s.audioSupported){
     $("hornLabel").textContent="Enable onboard S3 goal horn (ES8311)";
-    $("hornHelp").textContent="Actual armed/followed goals use the S3 speaker at 50% volume; preview works even when this is unchecked.";
+    const gain=Number(s.audioVolume??70);
+    $("hornHelp").textContent="Actual followed/armed goals use the saved S3 speaker volume; preview works even when the horn setting is off.";
     $("s3AudioStatus").textContent=s.audioReady?
-      (s.audioPlaying?(s.audioLastClip||"Audio")+" playing · 50%":
+      (s.audioPlaying?(s.audioLastClip||"Audio")+" playing · "+gain+"%":
        (s.audioHasPlayed?(s.audioLastStreamOk?"I2S stream finished":"Audio stream incomplete"):"Codec initialized · speaker not yet tested")+
-       " · 50% volume"):
+       " · "+gain+"% volume"):
       "Speaker unavailable: "+(s.audioError||"Codec not initialized");
     $("s3AudioPreview").disabled=!s.audioReady||!!s.audioPlaying;
     $("s3AudioTone").disabled=!s.audioReady||!!s.audioPlaying;
+    $("s3AudioVolumeApply").disabled=!s.audioReady||!!s.audioPlaying;
   }else{
     $("hornLabel").textContent="Enable built-in horn (GPIO26 speaker)";
     $("hornHelp").textContent="The CYD plays a simple GPIO26 tone sequence; custom WAV playback is not included.";
@@ -1003,6 +1008,10 @@ async function loadConfig(){
   $("brightValue").textContent=currentConfig.brightness+" / 255";
   $("seconds").value=currentConfig.seconds;
   $("horn").checked=!!currentConfig.horn;
+  if(currentConfig.s3Volume!==undefined){
+    $("s3AudioVolume").value=String(currentConfig.s3Volume);
+    $("s3AudioVolumeValue").textContent=currentConfig.s3Volume+"%";
+  }
   $("wledPP").checked=currentConfig.wledPP!==false;
   $("wledGameStart").checked=currentConfig.wledGameStart!==false;
   $("wledFinal").checked=currentConfig.wledFinal!==false;
@@ -1060,7 +1069,9 @@ async function readS3AudioProbe(){
   const hex=v=>"0x"+Number(v||0).toString(16).toUpperCase().padStart(2,"0");
   $("s3AudioDiagnostics").textContent=[
     "ES8311 I2C: "+(d.codecRead?"OK":"READ FAILED")+" · id="+hex(d.codecId1)+"/"+hex(d.codecId2),
-    "Codec volume reg: "+hex(d.codecVolume)+" (expected 0x7F for 50%)",
+    "Codec volume reg: "+hex(d.codecVolume)+
+      " (expected "+hex(Math.floor((d.volumePercent||70)*256/100)-1)+
+      " for "+(d.volumePercent||70)+"%)",
     "DAC mute reg: "+hex(d.codecMute)+" (bits 5/6 should be clear)",
     "TCA9554: "+(d.expanderRead?"OK":"READ FAILED")+
       " · P7 direction="+((d.ampDirection&128)?"INPUT":"OUTPUT")+
@@ -1072,6 +1083,16 @@ async function readS3AudioProbe(){
     "Error: "+(d.error||"None")
   ].join("\n");
 }
+$("s3AudioVolume").oninput=()=>
+  $("s3AudioVolumeValue").textContent=$("s3AudioVolume").value+"%";
+$("s3AudioVolumeApply").onclick=()=>perform(async()=>{
+  const requested=Number($("s3AudioVolume").value);
+  const response=await post("/api/audio/volume",{percent:requested});
+  currentConfig.s3Volume=response.volume;
+  $("s3AudioVolumeValue").textContent=response.volume+"%";
+  message("S3 speaker volume saved at "+response.volume+"% — preview to test");
+  await refresh();
+});
 $("s3AudioPreview").onclick=()=>perform(async()=>{
   const result=await post("/api/audio/preview",{});
   $("s3AudioStatus").textContent="Goal horn playing · "+result.volume+"%";
