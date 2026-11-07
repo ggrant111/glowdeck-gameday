@@ -30,9 +30,13 @@ inline Rect summaryStar(uint8_t n) {
   return {420, static_cast<int16_t>(kSummaryFirstY + n * kSummaryStride),
           48, kSummaryHeight};
 }
+inline Rect summaryArm(uint8_t n) {
+  return {300,static_cast<int16_t>(kSummaryFirstY+n*kSummaryStride+26),
+          65,23};
+}
 enum class Action : uint8_t {
   NONE, MENU, FOLLOW, PREVIOUS, NEXT, GAMES, PAUSE, DETAILS,
-  SUMMARY_DETAILS, SUMMARY_FOLLOW, BACK, ARM, SETUP,
+  SUMMARY_DETAILS, SUMMARY_FOLLOW, SUMMARY_ARM, BACK, ARM, SETUP,
   TEST, TOUCH_CHECK, COLOR_MODE, RESET_CHECK
 };
 struct Hit {
@@ -51,6 +55,8 @@ inline Hit hitTest(int16_t x, int16_t y, bool summary) {
     for (uint8_t row = 0; row < kSummaryRows; ++row) {
       if (summaryStar(row).contains(x, y))
         return {Action::SUMMARY_FOLLOW, row};
+      if (summaryArm(row).contains(x,y))
+        return {Action::SUMMARY_ARM,row};
       if (summaryRow(row).contains(x, y))
         return {Action::SUMMARY_DETAILS, row};
     }
