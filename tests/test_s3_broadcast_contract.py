@@ -59,7 +59,7 @@ assert "drawLiveReadout(" in main
 assert "s3ScoreOnlyFrame = true;" in main
 assert "tft.presentRegion(top.x,top.y,top.w,top.h);" in main
 assert "tft.presentRegion(bottom.x,bottom.y,bottom.w,bottom.h);" in main
-assert "if(overlayController.active())" in main
+assert "overlayController.active()" in main
 assert "constexpr Rect kBroadcastReadoutTop={144,43,192,160};" in layout
 assert "constexpr Rect kBroadcastReadoutBottom={48,215,384,53};" in layout
 assert "enum class Phase" in header
