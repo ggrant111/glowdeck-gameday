@@ -431,11 +431,21 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <div class="toggle" style="margin-top:13px"><input id="wledFinal" type="checkbox"><label for="wledFinal">Final win/loss effects</label></div>
 <p class="small muted">Goal priority overrides power-play effects, then the pulse resumes if the advantage is still active. When an effect ends, each controller returns to its previous WLED state. WLED's own UDP broadcasting is suppressed for these commands so non-participating devices are not accidentally included.</p>
 </div>
-<div class="card"><h2>Select participating WLED devices</h2>
-<p>Enter up to four local IP addresses. Switch on only the controllers you want involved, then choose which NHL events each one receives.</p>
+<div class="card"><h2>Discover &amp; connect WLED devices</h2>
+<p>Find WLED controllers on this Wi-Fi network, verify their identity and choose which ones participate. Up to eight saved devices. Existing configured devices are retained; discovered devices are never enabled automatically.</p>
+<div class="actions">
+<button type="button" id="wledScan">Scan Wi-Fi for WLED</button>
+<input type="text" id="wledManualIp" inputmode="decimal" placeholder="Manual IPv4 · 192.168.1.71" aria-label="Manual WLED local IP address">
+<button type="button" id="wledManualCheck">Verify IP</button>
+</div>
+<p class="small muted" id="wledScanStatus" role="status">No discovery run yet. WLED must be on the same Wi-Fi subnet; manual entry remains available.</p>
+<div id="wledDiscovered" aria-live="polite"></div>
+</div>
+<div class="card"><h2>Saved WLED controllers</h2>
+<p>Assign a friendly name, adjust the IP, enable the controller and choose which NHL events it receives. Discovered controllers are OFF until you opt in and save.</p>
 <div id="deviceList"></div>
 <div class="actions"><button class="primary" id="saveDevices">Save celebration settings</button></div>
-<p class="small muted">All active segments on each selected WLED controller participate. You can use different WLED LED counts and segment layouts across devices.</p>
+<p class="small muted">Existing celebrations still target all valid segments in participating controllers. Segment-by-segment zone assignments are the next release, Phase 8B. Saving a new controller does not trigger lights.</p>
 </div>
 <div class="card"><h2>Preview celebrations</h2>
 <p>Test all opted-in controllers at once, without waiting for a game. The selected game's team colors are used, or Utah's color when no game is armed.</p>
@@ -857,12 +867,12 @@ function trackPortalChanges(){
   ["customize","device"].forEach(panelId=>{
     $(panelId).addEventListener("change",event=>{
       const id=event.target.id||"";
-      if(stored.has(id)||/^(ip[0-3]|enabled[0-3]|event[0-3]_(goal|pp|start|final))$/.test(id))
+      if(stored.has(id)||/^(ip[0-7]|wname[0-7]|enabled[0-7]|event[0-7]_(goal|pp|start|final))$/.test(id))
         setPortalDirty(true);
     });
     $(panelId).addEventListener("input",event=>{
       const id=event.target.id||"";
-      if(stored.has(id)||/^ip[0-3]$/.test(id))setPortalDirty(true);
+      if(stored.has(id)||/^(ip|wname)[0-7]$/.test(id))setPortalDirty(true);
     });
   });
 }
@@ -1320,13 +1330,15 @@ function renderDevices(){
   const list=$("deviceList");list.replaceChildren();
   (currentConfig.wled||[]).forEach((device,i)=>{
     const card=document.createElement("div");card.className="item";
-    const title=document.createElement("h3");title.textContent="WLED "+(i+1);
+    const title=document.createElement("h3");title.textContent="Controller "+(i+1)+(device.name?" · "+device.name:"");
+    const nameLabel=document.createElement("label");nameLabel.htmlFor="wname"+i;nameLabel.textContent="Friendly name";
+    const name=document.createElement("input");name.id="wname"+i;name.placeholder="e.g. TV Backlights";name.maxLength=32;name.value=device.name||"";
     const label=document.createElement("label");label.htmlFor="ip"+i;label.textContent="Local IP address";
     const ip=document.createElement("input");ip.id="ip"+i;ip.placeholder="192.168.1.71";ip.value=device.ip||"";ip.inputMode="decimal";
     const row=document.createElement("div");row.className="toggle";row.style.marginTop="10px";
     const enable=document.createElement("input");enable.id="enabled"+i;enable.type="checkbox";enable.checked=!!device.enabled;
     const lbl=document.createElement("label");lbl.htmlFor=enable.id;lbl.textContent="Include this WLED device in celebrations";
-    row.append(enable,lbl);card.append(title,label,ip,row);
+    row.append(enable,lbl);card.append(title,nameLabel,name,label,ip,row);
     const flags=document.createElement("div");flags.className="row";flags.style.marginTop="10px";
     const events=[
       ["goal",1,"Goals"],["pp",2,"Power plays"],
@@ -1349,6 +1361,76 @@ function renderDevices(){
   });
   renderWledControllerResults();
 }
+function availableWledSlot(ip){
+  const saved=currentConfig?.wled||[];
+  const duplicate=saved.findIndex((d,i)=>$("ip"+i)?.value.trim()===ip);
+  if(duplicate>=0)return {slot:duplicate,exists:true};
+  const free=saved.findIndex((d,i)=>!$("ip"+i)?.value.trim());
+  return {slot:free,exists:false};
+}
+function stageWledDevice(ip,name){
+  const target=availableWledSlot(ip);
+  if(target.slot<0)throw Error("All eight WLED slots are occupied. Clear one before adding.");
+  const i=target.slot;
+  $("ip"+i).value=ip;
+  if(!target.exists)$("wname"+i).value=name||"WLED";
+  // Auto-discovery MUST NOT enable participation or issue a light command.
+  if(!target.exists)$("enabled"+i).checked=false;
+  setPortalDirty(true);
+  message(target.exists?"Already saved in controller "+(i+1):
+    "Staged "+(name||ip)+" in controller "+(i+1)+". Choose events and Save settings.");
+  tab("customize","zone-wled");
+}
+function renderDiscoveredWled(report){
+  const host=$("wledDiscovered");host.replaceChildren();
+  (report.devices||[]).forEach(device=>{
+    const row=document.createElement("div");row.className="item";
+    const header=document.createElement("div");header.className="row";
+    const name=document.createElement("strong");
+    name.textContent=device.name||"WLED";
+    const state=document.createElement("span");state.className="small muted";
+    state.textContent=device.online?"Verified WLED":"Offline / not verified";
+    header.append(name,state);row.append(header);
+    const detail=document.createElement("p");detail.className="small muted";
+    detail.textContent=device.ip+" · "+
+      (device.online?device.leds+" LEDs · "+device.version:"No JSON response");
+    row.append(detail);
+    if(device.online){
+      const choose=document.createElement("button");choose.type="button";
+      choose.textContent=device.savedSlot>=0?"Already saved · slot "+(device.savedSlot+1):
+        "Add to GameDay";
+      choose.disabled=device.savedSlot>=0;
+      choose.onclick=()=>stageWledDevice(device.ip,device.name);
+      row.append(choose);
+    }
+    host.append(row);
+  });
+  $("wledScanStatus").textContent=report.scanning?
+    "Checking local WLEDs "+(report.checked||0)+" / "+(report.candidateCount||0)+"…":
+    report.complete?
+      (report.found||0)+" verified device(s) · "+(report.error||"Scan complete"):
+      "Ready to discover. "+(report.error||"");
+}
+$("wledScan").onclick=()=>perform(async()=>{
+  $("wledScan").disabled=true;
+  try{
+    await post("/api/wled/discover",{});
+    for(let i=0;i<30;++i){
+      const report=await api("/api/wled/discovery");
+      renderDiscoveredWled(report);
+      if(!report.scanning)return;
+      await new Promise(resolve=>setTimeout(resolve,700));
+    }
+    message("Scan continues on your device. Refresh status to see the results.");
+  }finally{$("wledScan").disabled=false;}
+});
+$("wledManualCheck").onclick=()=>perform(async()=>{
+  const ip=$("wledManualIp").value.trim();
+  if(!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip))
+    throw Error("Enter a WLED IPv4 address.");
+  const info=await post("/api/wled/probe",{ip});
+  stageWledDevice(info.ip,info.name);
+});
 function renderWledControllerResults(){
   if(!currentStatus)return;
   const statuses=currentStatus.wledResults||[];
@@ -1467,11 +1549,11 @@ $("saveFavorites").onclick=()=>perform(async()=>{
   message(popcount(data.favoriteTeams)+" favorite teams saved");
 });
 function deviceSettings(){
-  return Array.from({length:4},(_,i)=>{
+  return Array.from({length:(currentConfig?.wled?.length||8)},(_,i)=>{
     const choices=[["goal",1],["pp",2],["start",4],["final",8]];
     const events=choices.reduce((mask,[name,bit])=>
       mask+($("event"+i+"_"+name).checked?bit:0),0);
-    return {ip:$("ip"+i).value.trim(),enabled:$("enabled"+i).checked,events};
+    return {ip:$("ip"+i).value.trim(),name:$("wname"+i).value.trim(),enabled:$("enabled"+i).checked,events};
   });
 }
 function formConfig(){

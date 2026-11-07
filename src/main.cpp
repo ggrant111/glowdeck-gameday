@@ -33,6 +33,7 @@
 #include "LiveCarousel.h"
 #include "NhlFetchPolicy.h"
 #include "CelebrationEngine.h"
+#include "WledDiscoveryPolicy.h"
 #include "TeamGradient.h"
 #include "GameEventLog.h"
 #include "PowerPlayLogPolicy.h"
@@ -64,7 +65,7 @@ constexpr uint8_t PIN_RGB_R = RearLedPattern::kRedPin,
                   PIN_RGB_G = RearLedPattern::kGreenPin,
                   PIN_RGB_B = RearLedPattern::kBluePin;
 constexpr uint8_t RGB_CH_R = 2, RGB_CH_G = 3, RGB_CH_B = 4;
-constexpr uint8_t MAX_GAMES = GameFollowPolicy::kMaxDailyGames, MAX_WLED = 4;
+constexpr uint8_t MAX_GAMES = GameFollowPolicy::kMaxDailyGames, MAX_WLED = WledDiscoveryPolicy::kMaxDevices;
 constexpr uint8_t MAX_FOLLOWED_GAMES = MAX_GAMES; // Can follow every game.
 constexpr uint16_t BG = 0x0841, PANEL = 0x10A2, WHITE = 0xFFFF;
 constexpr uint16_t MUTED = 0x9CF3, TEAL = 0x340F, ORANGE = 0xFD20;
@@ -86,9 +87,10 @@ struct Game {
 struct Settings {
   String ssid, wifiPassword, adminPassword;
   String wled[MAX_WLED];
-  bool wledEnabled[MAX_WLED] = {false, false, false, false};
+  bool wledEnabled[MAX_WLED] = {};
   // Masked opt-in for every connected controller: goal / PP / start / final.
-  uint8_t wledEvents[MAX_WLED] = {15, 15, 15, 15};
+  uint8_t wledEvents[MAX_WLED] = {15,15,15,15,15,15,15,15};
+  String wledName[MAX_WLED];
   bool wledPP = true, wledGameStart = true, wledFinal = true;
   uint8_t wledGoalStyle = 0; // 0 strobe+chase, 1 strobe, 2 chase, 3 solid
   uint8_t favoriteSide = 0; // home 0 / away 1; for start and final outcomes
@@ -207,6 +209,20 @@ CelebrationEngine::Event wledActiveEvent = CelebrationEngine::Event::NONE;
 uint32_t wledEventStart = 0, wledEventColor = 0, wledEventDuration = 0;
 uint8_t wledPhase = 0;
 String wledDeviceResult[MAX_WLED];
+// On-demand WLED discovery. Cached probes are deliberately bounded; no
+// automatic background network sweep or controller activation.
+struct WledScanEntry {
+  String ip,name,version;
+  uint16_t ledCount=0;
+  uint8_t maxSegments=0;
+  bool online=false;
+};
+WledScanEntry wledScan[WledDiscoveryPolicy::kMaxCandidates];
+String wledScanCandidates[WledDiscoveryPolicy::kMaxCandidates];
+uint8_t wledScanTotal=0,wledScanNext=0,wledScanFound=0;
+bool wledScanning=false,wledScanPendingMdns=false,wledScanFinished=false;
+uint32_t wledScanStarted=0,wledLastScanStarted=0;
+String wledScanError;
 String lastArmedGameState;
 uint32_t wledPpTestUntil = 0, wledSuppressPpUntil = 0;
 CelebrationEngine::Event queuedWledEvent = CelebrationEngine::Event::NONE;
@@ -1478,6 +1494,7 @@ void loadSettings() {
   cfg.adminPassword = prefs.getString("admin", apPassword);
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     cfg.wled[i] = prefs.getString(("ip" + String(i)).c_str(), "");
+    cfg.wledName[i] = prefs.getString(("wname" + String(i)).c_str(), "");
     cfg.wledEnabled[i] = prefs.getBool(("enable" + String(i)).c_str(), false);
     cfg.wledEvents[i] = prefs.getUChar(("event" + String(i)).c_str(),
                                          CelebrationEngine::ALL_EVENTS) &
@@ -1558,6 +1575,7 @@ void saveSettings() {
   prefs.putString("admin", cfg.adminPassword);
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     prefs.putString(("ip" + String(i)).c_str(), cfg.wled[i]);
+    prefs.putString(("wname" + String(i)).c_str(), cfg.wledName[i]);
     prefs.putBool(("enable" + String(i)).c_str(), cfg.wledEnabled[i]);
     prefs.putUChar(("event" + String(i)).c_str(), cfg.wledEvents[i]);
   }
@@ -1668,6 +1686,93 @@ String getWledState(const String &ip) {
   // Avoid holding a giant or malformed snapshot in scarce ESP32 RAM.
   if (result.length() < 2 || result.length() > 14000 || result[0] != '{') return "";
   return result;
+}
+
+bool validWledLocalIp(const IPAddress &ip){
+  const IPAddress here=WiFi.localIP(),mask=WiFi.subnetMask();
+  return WiFi.status()==WL_CONNECTED &&
+    WledDiscoveryPolicy::sameSubnet(uint32_t(ip),uint32_t(here),
+                                    uint32_t(mask)) &&
+    ip[0]!=0 && ip[0]!=127 && ip[0]!=224 && ip[0]!=255;
+}
+bool probeWledInfo(const String &ip,WledScanEntry &out,
+                   uint16_t timeoutMs=WledDiscoveryPolicy::kManualProbeTimeoutMs){
+  IPAddress parsed;
+  if(!parsed.fromString(ip) || !validWledLocalIp(parsed))return false;
+  WiFiClient client;
+  HTTPClient http;
+  if(!http.begin(client,"http://"+ip+"/json/info"))return false;
+  http.setConnectTimeout(timeoutMs);
+  http.setTimeout(timeoutMs);
+  const int code=http.GET();
+  if(code!=HTTP_CODE_OK || http.getSize()>4000){
+    http.end();return false;
+  }
+  const String body=http.getString();
+  http.end();
+  if(body.isEmpty()||body.length()>4000)return false;
+  DynamicJsonDocument parsedJson(3072);
+  if(deserializeJson(parsedJson,body))return false;
+  const String brand=parsedJson["brand"]|String("");
+  const String version=parsedJson["ver"]|String("");
+  const uint32_t leds=parsedJson["leds"]["count"]|0UL;
+  if(!WledDiscoveryPolicy::validInfo(brand.c_str(),version.c_str(),leds))
+    return false;
+  out.ip=ip;
+  out.online=true;
+  out.version=version.substring(0,24);
+  out.name=String(parsedJson["name"]|String("WLED"));
+  out.name.trim();
+  if(out.name.isEmpty())out.name="WLED";
+  if(out.name.length()>32)out.name=out.name.substring(0,32);
+  out.ledCount=uint16_t(leds);
+  out.maxSegments=uint8_t(constrain((int)(parsedJson["leds"]["maxseg"]|1),1,32));
+  return true;
+}
+void addWledScanCandidate(const String &ip){
+  if(wledScanTotal>=WledDiscoveryPolicy::kMaxCandidates)return;
+  IPAddress addr;
+  if(!addr.fromString(ip)||!validWledLocalIp(addr))return;
+  for(uint8_t i=0;i<wledScanTotal;++i)
+    if(wledScanCandidates[i]==ip)return;
+  wledScanCandidates[wledScanTotal++]=ip;
+}
+void tickWledDiscovery(){
+  if(!wledScanning || WiFi.status()!=WL_CONNECTED)return;
+  // Avoid colliding with live WLED effects, restoration or an NHL poll.
+  if(wledActiveEvent!=CelebrationEngine::Event::NONE)return;
+  for(uint8_t i=0;i<MAX_WLED;++i)
+    if(restoring[i])return;
+  if(wledScanPendingMdns){
+    wledScanPendingMdns=false;
+    // Existing controller IPs remain visible even when mDNS is unavailable.
+    for(uint8_t i=0;i<MAX_WLED;++i)
+      if(!cfg.wled[i].isEmpty())addWledScanCandidate(cfg.wled[i]);
+    if(mdnsStarted){
+      // WLED advertises _wled._tcp. ESPmDNS queryService performs one
+      // bounded on-demand DNS-SD round; never do this on the main ticker.
+      const int found=MDNS.queryService("wled","tcp");
+      for(int i=0;i<found &&
+          wledScanTotal<WledDiscoveryPolicy::kMaxCandidates;++i)
+        addWledScanCandidate(MDNS.IP(i).toString());
+    }else wledScanError="mDNS not connected; checking configured IPs";
+  }
+  if(wledScanNext<wledScanTotal){
+    const uint8_t n=wledScanNext++;
+    WledScanEntry info;
+    info.ip=wledScanCandidates[n];
+    if(!probeWledInfo(info.ip,info,WledDiscoveryPolicy::kScanProbeTimeoutMs)){
+      info.name="Offline or not WLED";
+      info.online=false;
+    }else ++wledScanFound;
+    wledScan[n]=info;
+  }
+  if(wledScanNext>=wledScanTotal){
+    wledScanning=false;
+    wledScanFinished=true;
+    Serial.printf("[WLED] discovery complete: %u verified / %u candidates\n",
+                  unsigned(wledScanFound),unsigned(wledScanTotal));
+  }
 }
 
 void startHorn() {
@@ -5074,6 +5179,7 @@ void registerRoutes() {
     for (uint8_t i = 0; i < MAX_WLED; ++i) {
       JsonObject d = wled.createNestedObject();
       d["ip"] = cfg.wled[i];
+      d["name"] = cfg.wledName[i];
       d["enabled"] = cfg.wledEnabled[i];
       d["events"] = cfg.wledEvents[i];
     }
@@ -5173,6 +5279,9 @@ void registerRoutes() {
       IPAddress parsed;
       if (!ip.isEmpty() && !parsed.fromString(ip))
         return errorResponse("WLED address must be an IPv4 address");
+      String label=arr[i]["name"] | cfg.wledName[i];
+      label.trim();
+      if(label.length()>32)return errorResponse("WLED name must be at most 32 characters");
       const bool enable = arr[i]["enabled"] | cfg.wledEnabled[i];
       const uint8_t mask = constrain((int)(arr[i]["events"] | cfg.wledEvents[i]),
                                       0, CelebrationEngine::ALL_EVENTS);
@@ -5184,6 +5293,7 @@ void registerRoutes() {
         }
       }
       cfg.wled[i] = ip;
+      cfg.wledName[i] = label;
       cfg.wledEnabled[i] = enable;
       cfg.wledEvents[i] = mask;
     }
@@ -5802,6 +5912,69 @@ void registerRoutes() {
     response["hex"] = rgbHex(color);
     sendJson(response);
   });
+  server.on("/api/wled/discovery", HTTP_GET, []() {
+    if(!authorized())return;
+    DynamicJsonDocument doc(2900);
+    doc["scanning"]=wledScanning;
+    doc["complete"]=wledScanFinished;
+    doc["candidateCount"]=wledScanTotal;
+    doc["checked"]=wledScanNext;
+    doc["found"]=wledScanFound;
+    doc["maxSaved"]=MAX_WLED;
+    doc["error"]=wledScanError;
+    JsonArray arr=doc.createNestedArray("devices");
+    for(uint8_t i=0;i<wledScanNext &&
+        i<WledDiscoveryPolicy::kMaxCandidates;++i){
+      const WledScanEntry &p=wledScan[i];
+      JsonObject x=arr.createNestedObject();
+      x["ip"]=p.ip;x["name"]=p.name;x["version"]=p.version;
+      x["online"]=p.online;x["leds"]=p.ledCount;
+      x["maxSegments"]=p.maxSegments;
+      x["savedSlot"]=-1;
+      for(uint8_t j=0;j<MAX_WLED;++j)
+        if(cfg.wled[j]==p.ip){x["savedSlot"]=j;break;}
+    }
+    if(doc.overflowed())return errorResponse("Discovery list too large",503);
+    sendJson(doc);
+  });
+  server.on("/api/wled/discover", HTTP_POST, []() {
+    if(!authorized())return;
+    if(WiFi.status()!=WL_CONNECTED)
+      return errorResponse("Connect GameDay to Wi-Fi before discovering WLED",503);
+    if(wledScanning)return errorResponse("Discovery already running",409);
+    if(wledScanFinished &&
+       uint32_t(millis()-wledLastScanStarted)<WledDiscoveryPolicy::kScanCooldownMs)
+      return errorResponse("Wait 15 seconds before scanning again",429);
+    wledScanTotal=wledScanNext=wledScanFound=0;
+    wledScanError="";
+    wledScanStarted=wledLastScanStarted=millis();
+    wledScanFinished=false;
+    wledScanPendingMdns=true;
+    wledScanning=true;
+    StaticJsonDocument<96> response;
+    response["ok"]=true;response["started"]=true;
+    sendJson(response);
+  });
+  server.on("/api/wled/probe", HTTP_POST, []() {
+    if(!authorized())return;
+    if(wledScanning)return errorResponse("Finish device discovery first",409);
+    StaticJsonDocument<160> request;
+    if(deserializeJson(request,server.arg("plain")))
+      return errorResponse("Invalid WLED probe JSON",400);
+    const String ip=request["ip"]|String("");
+    IPAddress addr;
+    if(!addr.fromString(ip)||!validWledLocalIp(addr))
+      return errorResponse("Use a WLED IPv4 on the GameDay Wi-Fi subnet",400);
+    WledScanEntry info;
+    if(!probeWledInfo(ip,info))
+      return errorResponse("No compatible WLED JSON response at that IP",404);
+    StaticJsonDocument<300> response;
+    response["ok"]=true;
+    response["ip"]=info.ip;response["name"]=info.name;
+    response["version"]=info.version;response["leds"]=info.ledCount;
+    response["maxSegments"]=info.maxSegments;
+    sendJson(response);
+  });
   server.on("/api/wled/preview", HTTP_POST, []() {
     if (!authorized()) return;
     StaticJsonDocument<256> request;
@@ -6143,6 +6316,7 @@ void loop() {
   tickCaseLeds();
 #endif
   tickWledCelebrations();
+  tickWledDiscovery();
 
   const uint32_t now = millis();
   const bool connected = WiFi.status() == WL_CONNECTED;
@@ -6172,6 +6346,7 @@ void loop() {
       mdnsAttempted = true;
       mdnsStarted = MDNS.begin(mdnsName.c_str());
       if (mdnsStarted) MDNS.addService("http", "tcp", 80);
+      // WLED 8A discovery uses this existing responder; no new server.
       needsDraw = true;
       Serial.printf("STA: http://%s/\n", WiFi.localIP().toString().c_str());
     }
