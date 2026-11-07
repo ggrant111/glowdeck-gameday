@@ -75,7 +75,22 @@ int main() {
   assert(broadcastHitTest(24,301).action==Action::GAMES);
   assert(broadcastHitTest(453,301).action==Action::MENU);
   assert(broadcastHitTest(240,148).action==Action::DETAILS);
-  assert(broadcastHitTest(110,240).action==Action::NONE);
+  assert(broadcastHitTest(80,144).action==Action::DETAILS);  // Away logo
+  assert(broadcastHitTest(393,144).action==Action::DETAILS); // Home logo
+  assert(broadcastHitTest(110,240).action==Action::DETAILS); // Away SOG
+  assert(broadcastHitTest(365,240).action==Action::DETAILS); // Home SOG
+  assert(broadcastHitTest(240,258).action==Action::DETAILS); // PP/EN
+  assert(broadcastHitTest(20,155).action==Action::NONE);
+  assert(broadcastHitTest(240,270).action==Action::NONE);
+  assert(broadcastHitTest(401,23).action==Action::FOLLOW);
+  assert(broadcastHitTest(24,301).action==Action::GAMES);
+  assert(broadcastHitTest(453,301).action==Action::MENU);
+  assert(broadcastTap(0,0));
+  assert(broadcastTap(23,-24));
+  assert(!broadcastTap(25,0));
+  assert(!broadcastTap(0,25));
+  assert(!broadcastTap(-55,33)); // diagonal drag, not a tap
+  assert(!broadcastTap(50,100)); // not a swipe or a tap
   assert(broadcastHitTest(479,319).action==Action::MENU);
   assert(broadcastHitTest(480,300).action==Action::NONE);
   assert(broadcastHitTest(-1,150).action==Action::NONE);
