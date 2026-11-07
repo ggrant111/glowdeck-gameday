@@ -2971,11 +2971,12 @@ void tickWledCelebrations() {
 // goal from an armed NHL game enters the per-game priority queue.
 void celebrate(uint32_t color,uint32_t eventSequence,
                uint8_t scorerSide,uint32_t gameId) {
+  // Start audio before WLED networking; audio and visuals run concurrently.
+  startHorn(eventSequence);
   if(gameId)queueArmedWledEvent(CelebrationEngine::Event::GOAL,color,
                                eventSequence,scorerSide,gameId);
   else startWledEvent(CelebrationEngine::Event::GOAL,color,eventSequence,
                       scorerSide,0); // Existing local hardware preview.
-  startHorn(eventSequence);
 }
 
 // Compact score/state fingerprint: redraw only when visible scoreboard values changed.
@@ -7698,6 +7699,11 @@ void registerRoutes() {
                         previewType, previewTeam);
     bool wledStarted = false, rearStarted = false, overlayStarted = false;
     bool audioStarted = false;
+    // Start audio before WLED HTTP and display operations.
+    if(combined && event == CelebrationEngine::Event::GOAL)
+      startHorn(previewRow.sequence);
+    else if(combined && event == CelebrationEngine::Event::POWER_PLAY)
+      startPowerPlaySound(previewRow.sequence);
     if (event == CelebrationEngine::Event::NONE) {
       // The ordinary WLED Stop & restore button must not restart the same PP
       // when its former 30-second suppression interval expires.
@@ -7751,13 +7757,7 @@ void registerRoutes() {
     if (overlayKind != EventOverlay::Kind::NONE)
       overlayStarted = queueGameOverlay(requestedTeam.length() ? nullptr : previewGame,
                                        overlayKind, previewTeam, previewRow.sequence);
-    // Full rehearsal can exercise the goal horn OR PP announcement, while
-    // remaining a PREVIEW event that changes no NHL eligibility or follow state.
-    if (combined && event == CelebrationEngine::Event::GOAL) {
-      startHorn(previewRow.sequence);
-    } else if (combined && event == CelebrationEngine::Event::POWER_PLAY) {
-      startPowerPlaySound(previewRow.sequence);
-    }
+    // Still a PREVIEW event: no fabricated NHL event or follow change.
     audioStarted = previewRow.audio == GameEventLog::Audio::STARTED;
     StaticJsonDocument<512> response;
     response["event"] = CelebrationEngine::label(wledActiveEvent);
