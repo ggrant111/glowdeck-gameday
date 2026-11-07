@@ -28,10 +28,11 @@ int main(){
 
   // Zero extra frames on a static scoreboard; selective SPI when only
   // one of the independent live data regions changed.
-  Snapshot g1{1001,0x01u,0x0Au,true};
-  Snapshot clock{1001,0x02u,0x0Au,true};
-  Snapshot special{1001,0x02u,0x0Bu,true};
-  Snapshot g2{1002,0x02u,0x0Bu,true};
+  Snapshot g1;
+  g1.gameId=1001;g1.top=0x01u;g1.bottom=0x0Au;g1.valid=true;
+  Snapshot clock=g1;clock.top=0x02u;
+  Snapshot special=clock;special.bottom=0x0Bu;
+  Snapshot g2=special;g2.gameId=1002;
   assert(changed(g1,g1)==NONE);
   assert(!needsFullScene(g1,g1));
   assert(changed(g1,clock)==TOP);
