@@ -10,6 +10,9 @@ struct Reader {
   std::vector<uint8_t> b;
   size_t pos=0;
   uint32_t reads=0;
+  size_t maxPerRead=0; // 0 = unrestricted
+  uint32_t zeroEvery=0; // simulate a transient flash read returning zero
+  bool alwaysZero=false;
   uint32_t size()const{return static_cast<uint32_t>(b.size());}
   bool seek(uint32_t p){
     if(p>b.size())return false;
@@ -17,7 +20,9 @@ struct Reader {
   }
   size_t read(uint8_t *out,size_t n){
     ++reads;
+    if(alwaysZero || (zeroEvery && reads%zeroEvery==0))return 0;
     if(n>b.size()-pos)return 0;
+    if(maxPerRead && n>maxPerRead)n=maxPerRead;
     std::memcpy(out,b.data()+pos,n);
     pos+=n;return n;
   }
@@ -124,6 +129,25 @@ int main(){
   // 44.1k stereo 1-second audio must read in ~345 buffered chunks,
   // NOT 44,100 per-sample LittleFS operations while I2S is active.
   assert(large.reads-beforeReads<500);
+  // A real LittleFS stream may return short reads while HTTPS/WLED is
+  // active. The PCM decode must preserve every sample and remain bounded.
+  Reader partial=large;
+  partial.maxPerRead=31;
+  partial.zeroEvery=7;
+  Stream<Reader> tolerant;
+  assert(tolerant.begin(partial,info));
+  for(uint32_t i=0;i<info.outputFrames;++i)
+    assert(tolerant.next(sample));
+  assert(!tolerant.readFailed());
+  assert(!tolerant.next(sample));
+  // A permanently failed flash read must fail promptly and report offset.
+  Reader broken=large;
+  broken.alwaysZero=true;
+  Stream<Reader> failed;
+  assert(!failed.begin(broken,info));
+  assert(failed.readFailed());
+  assert(failed.readFailureOffset()==info.dataOffset);
+  assert(broken.reads<=4);
   std::cout<<"PASS S3 7B PCM RIFF parser, 8/16/22.05/32/44.1/48kHz, mono/stereo, "
               "bounded resampler, corrupt headers and truncated files\n";
 }
