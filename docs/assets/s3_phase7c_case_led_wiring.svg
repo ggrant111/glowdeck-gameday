@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1520 940" width="1520" height="940" role="img" aria-labelledby="title desc">
+<title id="title">GlowDeck GameDay Phase 7C — Waveshare S3 left/home and right/away LED strip wiring</title>
+<desc id="desc">Waveshare ESP32-S3-Touch-LCD-3.5 ST7796 expansion GPIO17 header pin 14 and GPIO18 header pin 16 feed a 74AHCT125 level shifter powered at 5V. Two shifter outputs with 330 ohm resistors feed independent left and right 5V WS2812B RGB LED strips. Separate fused 5V supply powers the LEDs and shifter, with common ground to the ESP32-S3. Do not connect external 5V to board 5V or battery pin.</desc>
+<defs>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#eaf4fb}
+    .k{font-weight:bold;letter-spacing:1.3px;font-size:16px;fill:#6ce5cf}
+    .h{font-size:23px;font-weight:bold}
+    .label{font-size:17px;font-weight:bold}
+    .body{font-size:15px}
+    .sub{font-size:13px;fill:#b4cbd9}
+    .tiny{font-size:12px;fill:#a5bed0}
+    .pin{font-family:monospace;font-size:15px;fill:#fbfaf4}
+    .signal{stroke:#eec15b;stroke-width:5;fill:none;stroke-linecap:round;stroke-linejoin:round}
+    .power{stroke:#fb6670;stroke-width:5;fill:none;stroke-linecap:round;stroke-linejoin:round}
+    .ground{stroke:#9eb1be;stroke-width:4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+    .line{stroke:#526d81;stroke-width:2;fill:none}
+    .panel{fill:#142a39;stroke:#356073;stroke-width:2}
+    .chip{fill:#213e4a;stroke:#8fb8c6;stroke-width:2}
+    .strip{fill:#0a2631;stroke:#47816e;stroke-width:2}
+    .note{font-size:14px;fill:#c6d9e2}
+  </style>
+  <marker id="dArrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L9 3L0 6Z" fill="#eec15b"/></marker>
+  <marker id="pArrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L9 3L0 6Z" fill="#fb6670"/></marker>
+</defs>
+<rect width="1520" height="940" fill="#0d1926"/>
+<rect width="1520" height="9" fill="#2dbfa4"/>
+<text x="62" y="60" font-size="33" font-weight="bold">GLOWDECK GAMEDAY · PHASE 7C</text>
+<text x="62" y="88" class="body" fill="#bed2de">Waveshare ESP32-S3-Touch-LCD-3.5 (SPI ST7796) · Independent left/right addressable case lighting</text>
+<rect x="56" y="115" width="1408" height="46" rx="9" fill="#293f49"/>
+<text x="75" y="144" class="label" fill="#ffcf79">PROPOSED WIRING — NOT PHYSICALLY VERIFIED · KEEP CASE LEDs DISABLED UNTIL BUILT</text>
+
+<!-- Waveshare board -->
+<rect class="panel" x="70" y="193" width="395" height="365" rx="17"/>
+<text x="97" y="236" class="k">WAVESHARE ESP32-S3</text>
+<text x="97" y="272" class="h">3.5-inch · ST7796</text>
+<text x="97" y="297" class="sub">32-pin expansion header · board V1/V2 verify</text>
+<rect x="96" y="333" width="345" height="63" rx="6" fill="#214252"/>
+<text x="108" y="358" class="pin">J1 pin 14  →  GPIO17</text>
+<text x="108" y="382" class="sub">LEFT / HOME data output (3.3 V logic)</text>
+<rect x="96" y="416" width="345" height="63" rx="6" fill="#214252"/>
+<text x="108" y="441" class="pin">J1 pin 16  →  GPIO18</text>
+<text x="108" y="465" class="sub">RIGHT / AWAY data output (3.3 V logic)</text>
+<text x="104" y="512" class="pin">J1 GND: pin 3 / 4 / 28 / 29</text>
+<text x="104" y="540" class="tiny">Board powered separately by its normal USB-C</text>
+
+<!-- Level shifter -->
+<rect class="chip" x="595" y="193" width="378" height="365" rx="18"/>
+<text x="620" y="235" class="k">LOGIC LEVEL SHIFTER</text>
+<text x="620" y="270" class="h">74AHCT125</text>
+<text x="620" y="297" class="sub">DIP-14 or breakout · VCC = +5 V</text>
+<text x="620" y="344" class="pin">Pin 2  1A   →   Pin 3  1Y</text>
+<text x="620" y="372" class="sub">Pin 1 (1OE) to GND · output enabled</text>
+<text x="620" y="423" class="pin">Pin 5  2A   →   Pin 6  2Y</text>
+<text x="620" y="451" class="sub">Pin 4 (2OE) to GND · output enabled</text>
+<text x="620" y="490" class="pin">Pin 14 VCC = +5 V</text>
+<text x="620" y="517" class="pin">Pin 7  GND = common ground</text>
+<text x="620" y="541" class="tiny">Disable unused gates: 3OE pin 10, 4OE pin 13 → +5 V</text>
+
+<!-- LED strips -->
+<rect class="strip" x="1110" y="193" width="344" height="170" rx="15"/>
+<text x="1136" y="228" class="k">LEFT CASE · HOME</text>
+<text x="1136" y="262" class="h">5 V WS2812B RGB</text>
+<text x="1136" y="291" class="body">DIN ← resistor ← 1Y</text>
+<g transform="translate(1141 314)">
+  <rect width="34" height="29" rx="5" fill="#f0b5a1"/><rect x="52" width="34" height="29" rx="5" fill="#bbd3e9"/><rect x="104" width="34" height="29" rx="5" fill="#6ca2d0"/><rect x="156" width="34" height="29" rx="5" fill="#ffd25f"/><rect x="208" width="34" height="29" rx="5" fill="#a5ec8b"/>
+  <text x="3" y="19" font-size="12" fill="#122430">01</text><text x="55" y="19" font-size="12" fill="#122430">02</text><text x="107" y="19" font-size="12" fill="#122430">03</text><text x="159" y="19" font-size="12" fill="#122430">04</text><text x="211" y="19" font-size="12" fill="#122430">05</text>
+</g>
+<rect class="strip" x="1110" y="390" width="344" height="168" rx="15"/>
+<text x="1136" y="424" class="k">RIGHT CASE · AWAY</text>
+<text x="1136" y="458" class="h">5 V WS2812B RGB</text>
+<text x="1136" y="487" class="body">DIN ← resistor ← 2Y</text>
+<g transform="translate(1141 512)">
+  <rect width="34" height="29" rx="5" fill="#76e1c7"/><rect x="52" width="34" height="29" rx="5" fill="#b5a1e9"/><rect x="104" width="34" height="29" rx="5" fill="#f3b36d"/><rect x="156" width="34" height="29" rx="5" fill="#97d5fa"/><rect x="208" width="34" height="29" rx="5" fill="#ea9cbb"/>
+</g>
+
+<!-- data paths routed in gutter -->
+<path class="signal" d="M441 352 H516 V337 H595"/>
+<text x="478" y="329" class="tiny">3.3 V DATA</text>
+<path class="signal" d="M441 434 H543 V411 H595"/>
+<text x="480" y="411" class="tiny">3.3 V DATA</text>
+<path class="signal" d="M973 336 H1010 L1020 326 L1030 346 L1040 326 L1050 346 L1060 326 L1071 336 H1110" marker-end="url(#dArrow)"/>
+<text x="994" y="315" class="tiny">330 Ω</text>
+<path class="signal" d="M973 418 H1010 V469 H1020 L1030 459 L1040 479 L1050 459 L1060 479 L1071 469 H1110" marker-end="url(#dArrow)"/>
+<text x="995" y="452" class="tiny">330 Ω</text>
+<!-- POWER AREA -->
+<rect x="70" y="610" width="1384" height="245" rx="16" fill="#192d3a" stroke="#456374" stroke-width="2"/>
+<text x="96" y="648" class="k">POWER &amp; GROUND · SEPARATE FROM S3 USB-C POWER</text>
+<rect x="95" y="676" width="319" height="127" rx="11" fill="#293742" stroke="#6d9dad" stroke-width="2"/>
+<text x="115" y="708" class="label">External regulated 5 V DC</text>
+<text x="115" y="735" class="body">3 A supply suggested (up to 16/side)</text>
+<text x="115" y="762" class="sub">+5 V out → inline 3 A fuse</text>
+<text x="115" y="787" class="sub">GND out → common ground bus</text>
+<!-- external power rails -->
+<path class="power" d="M414 721 H453 L465 707 L477 735 L489 707 L501 721 H915"/>
+<text x="450" y="696" class="tiny">3 A FUSE</text>
+<path class="power" d="M915 721 H1368"/>
+<path class="power" d="M840 721 V558"/>
+<path class="power" d="M1178 721 V363"/>
+<path class="power" d="M1392 721 V558"/>
+<text x="885" y="708" class="tiny">+5 V BUS</text>
+<path class="ground" d="M414 783 H1441"/>
+<path class="ground" d="M905 783 V558"/>
+<path class="ground" d="M1322 783 V363"/>
+<path class="ground" d="M1441 783 V558"/>
+<path class="ground" d="M255 558 V783"/>
+<text x="550" y="808" class="tiny">COMMON GND: PSU, level shifter, BOTH LED strips and Waveshare S3 GND</text>
+<text x="1149" y="748" class="tiny">+5 V to LED VDD</text>
+<!-- caps -->
+<path class="power" d="M1065 721 V733"/><path stroke="#e2e9ef" stroke-width="4" d="M1047 740 H1083 M1047 751 H1083"/><path class="ground" d="M1065 758 V783"/>
+<text x="997" y="827" class="tiny">0.1 µF at 74AHCT125</text>
+<path class="power" d="M1259 721 V734"/><path stroke="#e2e9ef" stroke-width="4" d="M1240 740 H1278 M1240 751 H1278"/><path class="ground" d="M1259 758 V783"/>
+<text x="1186" y="827" class="tiny">≥1000 µF near strips</text>
+
+<text x="70" y="895" class="note">IMPORTANT: connect only GPIO17, GPIO18 and GND to the S3. Never connect external +5 V to S3 GPIO, 3V3, BAT, speaker, USB, or board +5 V pin.</text>
+<text x="70" y="918" class="tiny">Verify the physical 32-pin header and the V1/V2 schematic before wiring. LED arrows must face from DIN to DOUT. ESP32 outputs default OFF until explicitly enabled in GlowDeck Settings.</text>
+</svg>

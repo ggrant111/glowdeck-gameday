@@ -433,6 +433,40 @@ header{padding:19px 17px}
 <div class="actions"><button type="submit" class="primary" id="s3SoundUploadButton">Upload WAV</button></div>
 </form>
 </div>
+<div class="card" id="s3CaseLedCard" hidden style="display:none">
+<h2>Case lighting · Waveshare S3 · Phase 7C</h2>
+<p><strong>Not wired or hardware-tested yet.</strong> Both GPIO outputs remain disabled until you explicitly confirm completed wiring and enable this feature. HOME is the left side (GPIO17, header 14); AWAY is the right side (GPIO18, header 16).</p>
+<p class="small muted">Requires independent 5 V WS2812B/NeoPixel strips, a 74AHCT125 3.3 V-to-5 V level shifter, shared ground, signal resistors and a fused external 5 V supply. Do not power strips from S3 GPIO or its 3.3 V pins.</p>
+<p id="s3CaseLedStatus" class="small muted">Case LED wiring not yet validated</p>
+<div class="toggle"><input type="checkbox" id="s3CaseEnabled">
+<label for="s3CaseEnabled">Enable LEFT/HOME and RIGHT/AWAY external LED data pins after wiring</label></div>
+<label for="s3CasePixels">LED count per side (1–16)</label>
+<input id="s3CasePixels" type="number" min="1" max="16" step="1" value="8">
+<label for="s3CaseBrightness">LED brightness · <strong id="s3CaseBrightValue">96 / 128</strong></label>
+<input id="s3CaseBrightness" type="range" min="1" max="128" step="1" value="96">
+<label for="s3CaseSeconds">Goal celebration duration (seconds)</label>
+<input id="s3CaseSeconds" type="number" min="2" max="12" step="1" value="6">
+<div class="toggle"><input id="s3CaseGoal" type="checkbox" checked><label for="s3CaseGoal">Followed/armed goals · team color, strobe and chase</label></div>
+<div class="toggle"><input id="s3CasePP" type="checkbox" checked><label for="s3CasePP">Verified power plays · team color pulse</label></div>
+<div class="toggle"><input id="s3CaseStart" type="checkbox" checked><label for="s3CaseStart">Armed game start · both team colors</label></div>
+<div class="toggle"><input id="s3CaseFinal" type="checkbox" checked><label for="s3CaseFinal">Armed game final · winning team color</label></div>
+<div class="actions"><button type="button" id="s3CaseSave" class="primary">Save case lighting configuration</button></div>
+<p class="small muted">Isolated diagnostic previews only change physical case LEDs, not the NHL event log, WLED, goal GIF or speaker. After wiring, use RED / GREEN / BLUE to verify channel order before testing live team colors.</p>
+<div class="actions">
+<button type="button" class="s3-case-test" data-case-mode="goal" data-case-side="home">Test HOME / left goal</button>
+<button type="button" class="s3-case-test" data-case-mode="goal" data-case-side="away">Test AWAY / right goal</button>
+<button type="button" class="s3-case-test" data-case-mode="pp" data-case-side="home">Test left power play</button>
+<button type="button" class="s3-case-test" data-case-mode="pp" data-case-side="away">Test right power play</button>
+<button type="button" class="s3-case-test" data-case-mode="red" data-case-side="home">Left RED</button>
+<button type="button" class="s3-case-test" data-case-mode="green" data-case-side="home">Left GREEN</button>
+<button type="button" class="s3-case-test" data-case-mode="blue" data-case-side="home">Left BLUE</button>
+<button type="button" class="s3-case-test" data-case-mode="red" data-case-side="away">Right RED</button>
+<button type="button" class="s3-case-test" data-case-mode="green" data-case-side="away">Right GREEN</button>
+<button type="button" class="s3-case-test" data-case-mode="blue" data-case-side="away">Right BLUE</button>
+<button type="button" id="s3CaseOff">All case LEDs OFF</button>
+</div>
+<p class="small muted">See <a href="https://github.com/ggrant111/glowdeck-gameday/blob/main/docs/S3_PHASE7C_CASE_LEDS.md" target="_blank" rel="noopener noreferrer">Phase 7C wiring and acceptance guide</a>.</p>
+</div>
 <div class="card" id="s3GoalGifCard" hidden style="display:none">
 <h2>Hockey goal GIF · ESP32-S3</h2>
 <p>Play your hockey goal-and-siren animation whenever a real NHL goal or GOAL preview appears on the touchscreen. Team-colored borders, score, and WLED celebrations stay synchronized. The GIF itself is silent; the separate ES8311 onboard horn can play during an armed game's real goal when enabled.</p>
@@ -619,6 +653,17 @@ function renderStatus(){
     (s.overlayEvent||"Event")+" "+(s.overlayTeam||"")+
     " · "+Math.ceil((s.overlayRemainingMs||0)/1000)+"s":"Idle";
   $("overlayQueued").textContent=String(s.overlayQueue??0);
+  const caseCard=$("s3CaseLedCard");
+  caseCard.hidden=!s.audioSupported;
+  caseCard.style.display=s.audioSupported?"":"none";
+  if(s.audioSupported){
+    $("s3CaseLedStatus").textContent=s.caseLedEnabled
+      ? "GPIO17/18 output ENABLED · physical wiring still unverified"
+      : "Safe / OFF · GPIO17 and GPIO18 not driven";
+    document.querySelectorAll(".s3-case-test").forEach(b=>
+      b.disabled=!s.caseLedEnabled);
+    $("s3CaseOff").disabled=!s.caseLedEnabled;
+  }
   const audioCard=$("s3AudioCard");
   audioCard.hidden=!s.audioSupported;
   audioCard.style.display=s.audioSupported?"":"none";
@@ -1309,6 +1354,64 @@ $("scanWifi").onclick=()=>perform(async()=>{
   message("Wi-Fi scan complete");
 });
 $("networks").onchange=e=>{if(e.target.value)$("ssid").value=e.target.value};
+async function loadS3CaseLeds(){
+  const res=await fetch("/api/case-led",{cache:"no-store"});
+  if(!res.ok)return; // CYD has no S3 case hardware
+  const state=await res.json();
+  $("s3CaseEnabled").checked=!!state.enabled;
+  $("s3CasePixels").value=String(state.pixelsPerSide||8);
+  $("s3CaseBrightness").value=String(state.brightness||96);
+  $("s3CaseBrightValue").textContent=$("s3CaseBrightness").value+" / 128";
+  $("s3CaseSeconds").value=String(state.goalSeconds||6);
+  $("s3CaseGoal").checked=!!state.goal;
+  $("s3CasePP").checked=!!state.powerPlay;
+  $("s3CaseStart").checked=!!state.gameStart;
+  $("s3CaseFinal").checked=!!state.final;
+  $("s3CaseLedStatus").textContent=state.enabled?
+    "Case outputs ENABLED · GPIO17 LEFT and GPIO18 RIGHT · physical result unverified":
+    "Case outputs OFF · safe until case wiring is completed";
+}
+$("s3CaseBrightness").oninput=()=>
+  $("s3CaseBrightValue").textContent=$("s3CaseBrightness").value+" / 128";
+$("s3CaseSave").onclick=()=>perform(async()=>{
+  const enable=$("s3CaseEnabled").checked;
+  const wasEnabled=!!currentStatus?.caseLedEnabled;
+  let wiredConfirmed=false;
+  if(enable&&!wasEnabled){
+    wiredConfirmed=confirm(
+      "Only enable after you have wired both 5V LED strips using a 74AHCT125 level shifter, " +
+      "330-ohm signal resistors, external fused 5V supply and a common ground. " +
+      "Are the case LEDs safely installed and ready for testing?");
+    if(!wiredConfirmed){
+      $("s3CaseEnabled").checked=false;
+      return;
+    }
+  }
+  const data={
+    enabled:enable,wiredConfirmed,
+    pixelsPerSide:Number($("s3CasePixels").value),
+    brightness:Number($("s3CaseBrightness").value),
+    goalSeconds:Number($("s3CaseSeconds").value),
+    goal:$("s3CaseGoal").checked,powerPlay:$("s3CasePP").checked,
+    gameStart:$("s3CaseStart").checked,final:$("s3CaseFinal").checked
+  };
+  await post("/api/case-led/config",data);
+  await refresh();await loadS3CaseLeds();
+  message(enable?"Case LED GPIO outputs enabled":"Case LED outputs disabled");
+});
+document.querySelectorAll(".s3-case-test").forEach(btn=>
+  btn.onclick=()=>perform(async()=>{
+    await post("/api/case-led/test",{
+      mode:btn.dataset.caseMode,side:btn.dataset.caseSide
+    });
+    message("Case LED "+btn.dataset.caseSide+" "+btn.dataset.caseMode+
+            " preview started (no WLED or NHL events)");
+  })
+);
+$("s3CaseOff").onclick=()=>perform(async()=>{
+  await post("/api/case-led/test",{mode:"off",side:"home"});
+  message("All case LED effects stopped");
+});
 async function loadGoalGif(){
   const res=await fetch("/api/goal-gif");
   if(!res.ok)return; // The legacy CYD has no GIF hardware capability.
@@ -1356,7 +1459,7 @@ $("reboot").onclick=()=>perform(async()=>{
   await api("/api/reboot",{method:"POST"});message("Restart requested");
 });
 (async()=>{
-  try{await loadConfig();await refresh();await loadGoalGif();await loadSoundLibrary()}
+  try{await loadConfig();await refresh();await loadGoalGif();await loadSoundLibrary();await loadS3CaseLeds()}
   catch(err){message("Cannot load device: "+err.message)}
   setInterval(()=>refresh().catch(()=>{}),15000);
 })();
