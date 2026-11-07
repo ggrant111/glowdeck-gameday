@@ -77,6 +77,7 @@ for source,target in (
     ("rearFollowedList","mount-favorites"),
     ("cycleGames","mount-screen"),
     ("overlayEnabled","mount-screen"),
+    ("wledScan","mount-wled"),
     ("deviceList","mount-wled"),
     ("wledGoalStyle","mount-wled"),
     ("s3AudioCard","mount-audio"),
@@ -92,6 +93,22 @@ for source,target in (
     ("rearFullHome","mount-lab-full")
 ):
     assert (source,target) in mount_targets,(source,target)
+
+# Regression: Phase 7D accidentally left discovery in the invisible legacy
+# devices panel. Ensure the original scan *and* manual-IP controls are in
+# the card moved into the visible WLED Customize destination.
+discovery=html.split('id="wledScan"',1)[0].rsplit('<div class="card"',1)[-1]
+assert 'Find &amp; add WLED devices' in discovery
+assert 'id="wledManualIp"' in html
+assert 'id="wledManualCheck"' in html
+assert 'id="wledDiscovered"' in html
+assert 'id="wledScanStatus"' in html
+assert mount_block.index('moveCard("wledScan","mount-wled")') < mount_block.index(
+    'moveCard("deviceList","mount-wled")')
+assert '$("wledScan").onclick=' in js
+assert '"/api/wled/discover"' in js
+assert '"/api/wled/discovery"' in js
+assert '"/api/wled/probe"' in js
 
 # Actual test buttons are reparented, NOT duplicated or issued on boot.
 for test,target in (
