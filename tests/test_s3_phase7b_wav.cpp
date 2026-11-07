@@ -85,7 +85,7 @@ int main(){
   file=wav(4000);assert(!parse(file,info));
   file=wav();file.b[34]=8;file.b[35]=0;assert(!parse(file,info));
   file=wav();file.b[32]=3;assert(!parse(file,info));
-  file=wav();file.b[28]=0;assert(!parse(file,info));
+  file=wav();file.b[28]^=1;assert(!parse(file,info));
   file=wav();file.b[40]=255;assert(!parse(file,info));
   file=wav();file.b.resize(46);assert(!parse(file,info));
   file=wav();file.b[4]=0xFF;file.b[5]=0xFF;assert(!parse(file,info));
