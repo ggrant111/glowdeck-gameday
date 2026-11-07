@@ -142,6 +142,7 @@ int main(){
   assert(!tolerant.next(sample));
   // A permanently failed flash read must fail promptly and report offset.
   Reader broken=large;
+  broken.reads=0; // The fixture must not inherit previous decode counters.
   broken.alwaysZero=true;
   Stream<Reader> failed;
   assert(!failed.begin(broken,info));
