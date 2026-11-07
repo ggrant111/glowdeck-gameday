@@ -10,7 +10,7 @@
 namespace S3CaseLedPolicy {
 enum class Side : uint8_t { HOME=0, AWAY=1 };
 enum class Event : uint8_t { IDLE=0, GOAL=1, POWER_PLAY=2,
-                              GAME_START=3, FINAL=4, TEST=5 };
+                              GAME_START=3, FINAL=4, TEST=5, TEST_PP=6 };
 constexpr uint8_t kDefaultPixels=8;
 constexpr uint8_t kMaxPixels=16;
 constexpr uint8_t kDefaultBrightness=96;
@@ -90,6 +90,7 @@ class Controller {
         }
         break;
       case Event::POWER_PLAY:level=pulse(now);break;
+      case Event::TEST_PP:level=pulse(elapsed);break;
       case Event::GAME_START:
         level=(elapsed/190UL)%2U?80:210;
         break;
