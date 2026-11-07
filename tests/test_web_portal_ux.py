@@ -49,8 +49,7 @@ for page,names in zones.items():
         assert name in ids,(page,name)
         assert f'id="{name}"' in panel,(page,name)
         assert f'data-jump="{name}"' in panel,(page,name)
-        assert 'querySelectorAll("[data-jump]")' in js or
-               'document.querySelectorAll("[data-jump]")' in js
+        assert 'document.querySelectorAll("[data-jump]")' in js
 for key in ("mount-favorites","mount-screen","mount-wled",
             "mount-audio","mount-hardware","mount-lab-screen",
             "mount-lab-audio","mount-lab-wled","mount-lab-hardware",
