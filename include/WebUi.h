@@ -189,6 +189,31 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
  .save-dock{padding:10px 12px}
  .save-dock button{white-space:nowrap}
 }
+
+/* Broadcast-scoreboard language: home/away hierarchy and live chips
+   echo the 480x320 native S3 arena UI without loading remote images. */
+.arena-scoreboard{margin:16px 0 18px;border:1px solid #45657a;border-radius:14px;background:radial-gradient(ellipse at 50% 45%,#204157 0%,#102334 62%,#0a1b2b);overflow:hidden}
+.arena-topline,.arena-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 15px;background:#0c1a2a9c;color:#9ebdcc;font-size:10px;font-weight:800;letter-spacing:.12em}
+.arena-topline{border-bottom:1px solid #304d62}.arena-footer{border-top:1px solid #304d62}
+.arena-state{padding:4px 9px;border:1px solid #477488;border-radius:5px;color:#d6ebf1}
+.arena-state.is-live{color:#ffd5b6;background:#5b332555;border-color:#9a533d}
+.arena-teams{display:grid;grid-template-columns:minmax(0,1fr) minmax(100px,auto) minmax(0,1fr);align-items:center;gap:12px;padding:19px 20px 23px}
+.arena-team{display:flex;align-items:center;gap:12px;min-width:0}
+.arena-team.home{flex-direction:row-reverse;text-align:right}
+.arena-mark{--team-accent:#78cbd9;width:62px;height:62px;flex:none;display:grid;place-items:center;border-radius:11px;border:1px solid var(--team-accent);font-size:17px;font-weight:950;letter-spacing:-.035em;color:#fff;background:linear-gradient(145deg,var(--team-accent),#15293a 91%);box-shadow:0 0 18px #0004}
+.arena-team-label{font-size:10px;font-weight:850;letter-spacing:.13em;color:#a2c0d0}
+.arena-team-label strong{display:block;font-size:21px;font-weight:900;letter-spacing:.02em;color:#fff}
+.arena-score{font-size:clamp(31px,5vw,50px);font-weight:950;letter-spacing:-.09em;text-align:center;white-space:nowrap;font-variant-numeric:tabular-nums;color:#f3fafc;text-shadow:0 0 20px #9edfe62d}
+.tab.has-dirty:after{content:"";width:7px;height:7px;background:#fbd18b;border-radius:50%;margin-left:4px}
+@media(max-width:650px){
+ .arena-teams{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:5px;padding:17px 10px}
+ .arena-team{flex-direction:column;gap:5px;text-align:center}
+ .arena-team.home{flex-direction:column;text-align:center}
+ .arena-mark{width:43px;height:43px;font-size:12px}
+ .arena-team-label strong{font-size:17px}
+ .arena-score{font-size:29px;letter-spacing:-.09em}
+ .arena-topline,.arena-footer{font-size:9px;padding:8px 10px}
+}
 </style>
 </head>
 <body>
@@ -213,14 +238,28 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 </nav>
 <section id="dashboard" class="panel active">
 <div class="section-intro"><div class="eyebrow">LIVE CONTROL CENTER</div><h2>Your game day at a glance</h2><p>Scores, favorites and celebrations—without changing what your lights are following.</p></div>
-<div class="card hero"><div class="kicker">Today's NHL</div><h2>You're connected to the action</h2>
+<div class="card hero"><div class="kicker">NHL BROADCAST CENTER</div>
+<h2>Today's arena</h2>
+<div class="arena-scoreboard" aria-label="Featured NHL game">
+<div class="arena-topline"><span id="heroLiveTag" class="arena-state">LOADING</span><span id="heroGameMode">GLOWDECK · GAME CENTER</span></div>
+<div class="arena-teams">
+<div class="arena-team"><div class="arena-mark" id="heroAwayMark">AWY</div>
+<div class="arena-team-label">AWAY <strong id="heroAway">—</strong></div></div>
+<div class="arena-score" id="heroScore" aria-live="polite">— : —</div>
+<div class="arena-team home"><div class="arena-mark" id="heroHomeMark">HME</div>
+<div class="arena-team-label">HOME <strong id="heroHome">—</strong></div></div>
+</div>
+<div class="arena-footer"><span id="heroStatus">Connecting to the NHL feed…</span><span id="heroArmStatus">NO GAME ARMED</span></div>
+</div>
 <div class="stats">
 <div class="stat"><span>Games live</span><b id="dashLiveCount">—</b></div>
 <div class="stat"><span>Favorite teams</span><b id="dashFavoriteCount">—</b></div>
 <div class="stat"><span>Games followed</span><b id="dashFollowCount">—</b></div>
 <div class="stat"><span>On-screen alerts</span><b id="dashDisplayMode">—</b></div>
 </div>
-<div class="actions"><button class="primary" data-tab="games">Browse games</button><button data-tab="display">Manage favorite teams</button><button data-tab="devices">Control WLED</button></div>
+<div class="actions"><button class="primary" data-tab="games">Browse games</button>
+<button data-tab="customize" data-anchor="zone-favorites">Customize</button>
+<button data-tab="lab" data-anchor="lab-full">Run a test</button></div>
 </div>
 <div class="card"><h2>Device &amp; network health</h2>
 <div class="stats">
@@ -242,7 +281,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <div id="recentGameEvents"><p class="muted">No events recorded yet.</p></div>
 <button data-tab="events">View complete event log</button></div>
 <div class="card"><h2>Armed game · WLED goal triggers</h2>
-<p>Choose which side of the <strong>armed matchup</strong> triggers WLED. Starring a different live game follows it for rear RGB alerts and screen celebrations, without re-arming WLED.</p>
+<p>The armed matchup controls WLED. Following (★) another game adds its screen and eligible on-device LED alerts without changing the WLED target.</p>
 <div class="actions" id="modeButtons">
 <button data-mode="0">Off</button><button data-mode="1">Home</button><button data-mode="2">Away</button><button data-mode="3">Both</button>
 </div>
@@ -940,6 +979,37 @@ async function loadEventLog(){
   $("eventNewer").disabled=eventOffset===0;
   $("eventOlder").disabled=eventOffset+12>=eventPageTotal;
 }
+function renderBroadcastHero(){
+  const s=currentStatus;
+  if(!s)return;
+  const armed=currentGames.find(g=>g.id===s.selectedId);
+  const shown=armed||
+    currentGames.find(g=>g.state==="LIVE"||g.state==="CRIT")||
+    currentGames[0];
+  const isLive=shown&&(shown.state==="LIVE"||shown.state==="CRIT");
+  const status=shown?(shown.status||shown.state||"NHL"):
+    s.scoreboardLoaded?"NO GAMES TODAY":"CONNECTING";
+  $("heroLiveTag").textContent=isLive?"● LIVE":status;
+  $("heroLiveTag").classList.toggle("is-live",!!isLive);
+  $("heroGameMode").textContent=armed?"ARMED MATCHUP":
+    shown?"FEATURED MATCHUP":"NHL SCOREBOARD";
+  $("heroAway").textContent=shown?shown.away:"—";
+  $("heroHome").textContent=shown?shown.home:"—";
+  $("heroAwayMark").textContent=shown?shown.away:"NHL";
+  $("heroHomeMark").textContent=shown?shown.home:"NHL";
+  const teamColor=team=>{
+    const entry=rearPalette.find(t=>t.abbr===team);
+    return /^#[0-9a-fA-F]{6}$/.test(entry?.hex||"")?entry.hex:"#77cbd9";
+  };
+  $("heroAwayMark").style.setProperty("--team-accent",teamColor(shown?.away));
+  $("heroHomeMark").style.setProperty("--team-accent",teamColor(shown?.home));
+  const upcoming=shown&&(shown.state==="FUT"||shown.state==="PRE");
+  $("heroScore").textContent=shown&&!upcoming?
+    shown.awayScore+" : "+shown.homeScore:"— : —";
+  $("heroStatus").textContent=shown?status:
+    "The scoreboard will appear when NHL games are available";
+  $("heroArmStatus").textContent=armed?"ARMED FOR WLED":"DISPLAY ONLY";
+}
 function renderStatus(){
   if(!currentStatus)return;
   const s=currentStatus, game=currentGames.find(g=>g.id===s.selectedId);
@@ -1000,6 +1070,14 @@ function renderStatus(){
       b.disabled=!s.caseLedEnabled);
     $("s3CaseOff").disabled=!s.caseLedEnabled;
   }
+  const s3=!!s.audioSupported;
+  $("platformTag").textContent=s3?"WAVESHARE S3 · 3.5″":"ESP32 CYD · 2.8″";
+  $("rearEnabled").closest(".card").hidden=s3;
+  $("lab-audio").hidden=!s3;
+  $("mount-lab-hardware").hidden=s3;
+  $("mount-lab-case").hidden=!s3;
+  $("goalGifPreview").hidden=!s3;
+  renderBroadcastHero();
   const audioCard=$("s3AudioCard");
   audioCard.hidden=!s.audioSupported;
   audioCard.style.display=s.audioSupported?"":"none";
