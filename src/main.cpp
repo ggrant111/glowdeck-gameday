@@ -3243,12 +3243,14 @@ void drawS3ArenaScoreboard(const Game &g) {
   if(!s3Arena.restore(tft))return;
   const uint16_t away=to565(teamRgb(g.away));
   const uint16_t home=to565(teamRgb(g.home));
-  // No persistent top banner or bottom button bar.
-  // Official logo and vivid 3px team accents sit above the arena template.
+  // Larger, native-resolution 96px NHL artwork (previously 80px).
+  // Center each logo on the softly shaded arena plinth at (86,144)
+  // and (394,144), without encroaching on the center score or labels.
+  drawTeamLogo(tft,g.away,38,96,96);
+  drawTeamLogo(tft,g.home,346,96,96);
+  // Team-primary accents stay crisp, above the artwork's lower edge.
   tft.fillRoundRect(36,189,105,3,1,away);
   tft.fillRoundRect(339,189,105,3,1,home);
-  drawTeamLogo(tft,g.away,48,101,80);
-  drawTeamLogo(tft,g.home,352,101,80);
   tft.setTextDatum(MC_DATUM);
   drawS3ArenaFitted(g.away,88,204,100,4,WHITE);
   drawS3ArenaFitted(g.home,392,204,100,4,WHITE);
