@@ -2029,7 +2029,7 @@ async function openWledDdpSettings(slot,host){
   const zoneHint=make("p","small muted wled-quick-hint");
   const explain=()=>{
     zoneHint.textContent=choice.value==="3"?
-      "Easiest choice: every LED can celebrate either team. GameDay assigns all existing WLED segments to Neutral; their ranges and effects remain unchanged.":
+      "Easiest choice: every LED celebrates in the triggering team\'s NHL color. GameDay assigns all existing WLED segments to Neutral; their ranges and saved scene settings remain unchanged.":
       choice.value==="0"?
       "Your Home/Away/Neutral assignments stay exactly as saved. If a goal would overwrite another team's zone, GameDay safely uses native WLED effects instead.":
       (choice.value==="1"?"Home":"Away")+
