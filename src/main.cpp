@@ -35,6 +35,7 @@
 #include "CelebrationEngine.h"
 #include "WledDiscoveryPolicy.h"
 #include "WledZonePolicy.h"
+#include "WledScenePolicy.h"
 #include "TeamGradient.h"
 #include "GameEventLog.h"
 #include "PowerPlayLogPolicy.h"
@@ -94,6 +95,7 @@ struct Settings {
   String wledName[MAX_WLED];
   bool wledZoneEnabled[MAX_WLED] = {}; // OFF for migrated 8A/legacy slots
   uint32_t wledZoneMap[MAX_WLED] = {}; // 2-bit per existing WLED segment ID
+  WledScenePolicy::Scene wledScenes[MAX_WLED][WledScenePolicy::kSceneCount];
   bool wledPP = true, wledGameStart = true, wledFinal = true;
   uint8_t wledGoalStyle = 0; // 0 strobe+chase, 1 strobe, 2 chase, 3 solid
   uint8_t favoriteSide = 0; // home 0 / away 1; for start and final outcomes
@@ -209,6 +211,9 @@ uint32_t lastTouch = 0;
 String savedState[MAX_WLED];
 String savedWledIp[MAX_WLED];
 uint16_t wledTouchedSegments[MAX_WLED] = {};
+uint16_t wledCurrentSceneSegments[MAX_WLED] = {};
+uint16_t wledRestoredSceneSegments[MAX_WLED] = {};
+uint32_t lastWledSceneExpiryCheck=0;
 bool wledRestoreMapped[MAX_WLED] = {};
 uint8_t wledEventSide=WledZonePolicy::kUnknownSide;
 uint8_t queuedWledSide=WledZonePolicy::kUnknownSide;
@@ -1507,6 +1512,16 @@ void loadSettings() {
     cfg.wledName[i] = prefs.getString(("wname" + String(i)).c_str(), "");
     cfg.wledZoneEnabled[i] = prefs.getBool(("zoneOn"+String(i)).c_str(),false);
     cfg.wledZoneMap[i] = prefs.getUInt(("zoneMap"+String(i)).c_str(),0);
+    // 8C scene templates live in one CRC-validated NVS blob per slot.
+    // Missing/corrupt blobs keep all 15 entries in INHERIT mode.
+    const String key="scene"+String(i);
+    if(prefs.getBytesLength(key.c_str())==WledScenePolicy::kBlobBytes){
+      uint8_t raw[WledScenePolicy::kBlobBytes]={};
+      if(prefs.getBytes(key.c_str(),raw,sizeof(raw))==sizeof(raw) &&
+         !WledScenePolicy::decode(raw,sizeof(raw),cfg.wledScenes[i]))
+        Serial.printf("[WLED Scene] invalid scene blob slot=%u; defaults retained\n",
+                     unsigned(i));
+    }
     cfg.wledEnabled[i] = prefs.getBool(("enable" + String(i)).c_str(), false);
     cfg.wledEvents[i] = prefs.getUChar(("event" + String(i)).c_str(),
                                          CelebrationEngine::ALL_EVENTS) &
@@ -1579,6 +1594,14 @@ void loadSettings() {
   cfg.touchY1 = prefs.getInt("ty1", 3800);
   selectedGameId = prefs.getUInt("game", 0);
   rebuildCarouselPlan(); // Standings-only fallback until the first NHL fetch.
+}
+
+bool saveWledSceneSlot(uint8_t slot){
+  if(slot>=MAX_WLED)return false;
+  uint8_t blob[WledScenePolicy::kBlobBytes]={};
+  WledScenePolicy::encode(cfg.wledScenes[slot],blob);
+  const String key="scene"+String(slot);
+  return prefs.putBytes(key.c_str(),blob,sizeof(blob))==sizeof(blob);
 }
 
 void saveSettings() {
