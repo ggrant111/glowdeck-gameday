@@ -2121,9 +2121,22 @@ void tickHorn() {
   s3Audio.tick();
   if(hornLogSequence && !s3Audio.playing()){
     GameEventLog::Entry *entry=gameEventHistory.find(hornLogSequence);
-    if(entry && entry->audio==GameEventLog::Audio::STARTED)
+    if(entry && entry->audio==GameEventLog::Audio::STARTED){
       entry->audio=s3Audio.lastStreamOk()?
         GameEventLog::Audio::COMPLETED:GameEventLog::Audio::STREAM_FAILED;
+      entry->audioFallback=entry->audioFallback || s3Audio.usedFallback();
+      entry->audioFrames=s3Audio.writtenFrames();
+      entry->audioExpectedFrames=s3Audio.expectedFrames();
+      entry->audioDurationMs=s3Audio.lastDurationMs();
+      entry->audioPeak=s3Audio.peakSample();
+      entry->audioRetries=s3Audio.writeRetries();
+      entry->audioReadOffset=s3Audio.readFailureOffset();
+      entry->audioI2sCode=s3Audio.lastI2sCode();
+      entry->audioVolume=s3Audio.volume();
+      entry->audioAmpVerified=s3Audio.ampVerifiedAtStart();
+      entry->audioFailure=static_cast<GameEventLog::AudioFailure>(
+          static_cast<uint8_t>(s3Audio.lastFailure()));
+    }
     hornLogSequence=0;
   }
   return;
@@ -5894,8 +5907,8 @@ void registerRoutes() {
     const int limit = constrain(server.arg("limit").toInt(), 1, 16);
     const String category = server.hasArg("category")
         ? server.arg("category") : String("all");
-    DynamicJsonDocument doc(11000);
-    if (doc.capacity() < 11000)
+    DynamicJsonDocument doc(16000);
+    if (doc.capacity() < 16000)
       return errorResponse("Event history memory unavailable", 503);
     doc["capacity"] = GameEventLog::kCapacity;
     doc["sessionOnly"] = true;
@@ -5929,6 +5942,17 @@ void registerRoutes() {
       row["audio"] = GameEventLog::audioLabel(e->audio);
       row["audioSource"] = e->audioSource;
       row["audioFallback"] = e->audioFallback;
+      row["audioFrames"] = e->audioFrames;
+      row["audioExpectedFrames"] = e->audioExpectedFrames;
+      row["audioDurationMs"] = e->audioDurationMs;
+      row["audioPeak"] = e->audioPeak;
+      row["audioRetries"] = e->audioRetries;
+      row["audioReadOffset"] = e->audioReadOffset;
+      row["audioI2sCode"] = e->audioI2sCode;
+      row["audioVolume"] = e->audioVolume;
+      row["audioAmpVerified"] = e->audioAmpVerified;
+      row["audioFailure"] = GameEventLog::audioFailureLabel(e->audioFailure);
+      row["speakerVerified"] = false;
       JsonArray devices = row.createNestedArray("devices");
       for (uint8_t d = 0; d < MAX_WLED; ++d) {
         JsonObject device = devices.createNestedObject();
@@ -6843,6 +6867,15 @@ void registerRoutes() {
     doc["framesWritten"]=s3Audio.writtenFrames();
     doc["streamOk"]=s3Audio.lastStreamOk();
     doc["streamDurationMs"]=s3Audio.lastDurationMs();
+    doc["expectedFrames"]=s3Audio.expectedFrames();
+    doc["peakSample"]=s3Audio.peakSample();
+    doc["writeRetries"]=s3Audio.writeRetries();
+    doc["readFailureOffset"]=s3Audio.readFailureOffset();
+    doc["i2sCode"]=s3Audio.lastI2sCode();
+    doc["failureReason"]=S3GoalAudio::failureName(s3Audio.lastFailure());
+    doc["fallbackUsed"]=s3Audio.usedFallback();
+    doc["ampVerifiedAtStart"]=s3Audio.ampVerifiedAtStart();
+    doc["speakerVerified"]=false;
     doc["error"]=s3Audio.error();
     sendJson(doc);
   });
@@ -8145,10 +8178,66 @@ void setup() {
                 cfg.adminPassword.c_str());
 }
 
+// Mirror every event's Activity API results to USB serial after any change.
+// NHL observations, audio completion and WLED restores finish independently.
+// Throttle to 4Hz and avoid heap/flash allocations during live playback.
+void tickEventAudit(){
+  static uint32_t lastAt=0;
+  const uint32_t now=millis();
+  if(uint32_t(now-lastAt)<250UL)return;
+  lastAt=now;
+  for(uint8_t index=0;index<gameEventHistory.size();++index){
+    GameEventLog::Entry *e=gameEventHistory.newest(index);
+    if(!e)continue;
+    uint32_t fingerprint=2166136261UL;
+    const auto mix=[&fingerprint](uint32_t value){
+      fingerprint=(fingerprint^value)*16777619UL;
+    };
+    mix(e->sequence);mix(uint8_t(e->rear));mix(uint8_t(e->audio));
+    mix(e->audioSource);mix(e->audioFallback);mix(e->audioFrames);
+    mix(e->audioExpectedFrames);mix(e->audioDurationMs);mix(e->audioPeak);
+    mix(e->audioRetries);mix(e->audioReadOffset);
+    mix(uint32_t(e->audioI2sCode));mix(e->audioVolume);
+    mix(e->audioAmpVerified);mix(uint8_t(e->audioFailure));
+    mix(e->wledAcknowledgedMask);
+    for(uint8_t i=0;i<MAX_WLED;++i)mix(uint8_t(e->wled[i]));
+    if(fingerprint==e->serialFingerprint)continue;
+    e->serialFingerprint=fingerprint;
+    Serial.printf("[EVENT AUDIT] #%lu type=%s game=%lu %s@%s team=%s"
+                  " score=%u-%u period=%u preview=%u rear=%s\\n",
+      (unsigned long)e->sequence,GameEventLog::typeLabel(e->type),
+      (unsigned long)e->gameId,e->away,e->home,e->team,
+      unsigned(e->awayScore),unsigned(e->homeScore),
+      unsigned(e->period),unsigned(e->preview),
+      GameEventLog::rearLabel(e->rear));
+    Serial.printf("[EVENT AUDIT] #%lu audio=%s source=%u fallback=%u"
+                  " frames=%lu/%lu elapsed=%lums peak=%lu retries=%lu"
+                  " i2sCode=%ld readOffset=%lu volume=%u ampVerified=%u"
+                  " failure=%s speakerVerified=NO\\n",
+      (unsigned long)e->sequence,GameEventLog::audioLabel(e->audio),
+      unsigned(e->audioSource),unsigned(e->audioFallback),
+      (unsigned long)e->audioFrames,(unsigned long)e->audioExpectedFrames,
+      (unsigned long)e->audioDurationMs,(unsigned long)e->audioPeak,
+      (unsigned long)e->audioRetries,(long)e->audioI2sCode,
+      (unsigned long)e->audioReadOffset,unsigned(e->audioVolume),
+      unsigned(e->audioAmpVerified),
+      GameEventLog::audioFailureLabel(e->audioFailure));
+    for(uint8_t i=0;i<MAX_WLED;++i){
+      if(e->wled[i]==GameEventLog::Wled::NA &&
+         !(e->wledAcknowledgedMask&(1U<<i)))continue;
+      Serial.printf("[EVENT AUDIT] #%lu WLED%u=%s commandAccepted=%u\\n",
+        (unsigned long)e->sequence,unsigned(i+1),
+        GameEventLog::wledLabel(e->wled[i]),
+        unsigned((e->wledAcknowledgedMask&(1U<<i))!=0));
+    }
+  }
+}
+
 void loop() {
   server.handleClient();
   handleTouch();
   tickHorn();
+  tickEventAudit();
   tickRestores();
   tickRearLed();
 #ifdef GLOWDECK_WAVESHARE_S3
