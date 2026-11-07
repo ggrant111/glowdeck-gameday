@@ -1069,9 +1069,9 @@ function createEventElement(row){
     const sound=document.createElement("div");
     sound.className="small";
     sound.style.marginTop="5px";
-    const source=row.audioSource>0?"Custom WAV slot "+row.audioSource:
-      (currentStatus?.audioSupported?"Built-in S3 horn":"CYD tone");
     const ppAudio=row.type==="Power play started"||row.type==="Power-play preview";
+    const source=row.audioSource>0?"Custom WAV slot "+row.audioSource:
+      (ppAudio?"No PP WAV assigned":currentStatus?.audioSupported?"Built-in S3 horn":"CYD tone");
     sound.textContent=(ppAudio?"Power-play audio: ":"Goal horn: ")+(row.audio||"Not recorded on this firmware")+
       (row.audio&&row.audio!=="Not applicable"?" · "+source:"")+
       (row.audioFallback?" · selected WAV unavailable, built-in fallback":"");
