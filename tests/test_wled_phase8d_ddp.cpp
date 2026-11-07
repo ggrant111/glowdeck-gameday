@@ -84,7 +84,7 @@ int main(){
                        kChunkPixels:uint16_t(leds-first);
       const uint16_t dataBytes=uint16_t(n*3U);
       const uint32_t byteOffset=uint32_t(first)*3U;
-      assert(used==kHeaderBytes+dataBytes && used<=1450);
+      assert(used==size_t(kHeaderBytes)+dataBytes && used<=1450);
       assert(packet[0]==(first+n==leds?0x41:0x40));
       assert(packet[1]==uint8_t((chunks+14)%15+1));
       assert(packet[2]==0x0B&&packet[3]==1);
