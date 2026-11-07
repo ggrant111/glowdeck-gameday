@@ -20,7 +20,7 @@ def unpack(packed: bytes, x: int, y: int, size: int) -> int:
 
 
 def main() -> None:
-    assert SIZE == 56 and S3_SIZE == 80
+    assert SIZE == 56 and S3_SIZE == 96
     assert len(TEAMS) == 32
     # Synthetic transparent SVG-equivalent proves alpha packing survives both
     # raster resolutions, including every row's stride and palette bounds.
@@ -37,7 +37,7 @@ def main() -> None:
 
     header = (ROOT / "include" / "TeamLogos.h").read_text(encoding="utf-8")
     assert "#ifdef GLOWDECK_WAVESHARE_S3" in header
-    assert "static constexpr uint8_t TEAM_LOGO_SIZE = 80;" in header
+    assert "static constexpr uint8_t TEAM_LOGO_SIZE = 96;" in header
     assert "static constexpr uint8_t TEAM_LOGO_SIZE = 56;" in header
     assert header.count("static const TeamLogoAsset TEAM_LOGOS[] PROGMEM") == 2
     # Sprite-specific overload is essential. The base TFT_eSPI::pushImage
@@ -46,7 +46,7 @@ def main() -> None:
     assert "canvas.drawPixel(x + dx, y + dy" in header
     assert "inline void drawTeamLogo(TFT_eSPI &display" in header
     assert header.count('{"UTA",') == 2
-    print("PASS: 32 NHL teams, 56px CYD/80px S3 packing and sprite render path")
+    print("PASS: 32 NHL teams, 56px CYD/96px S3 packing and sprite render path")
 
 
 if __name__ == "__main__":
