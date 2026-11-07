@@ -8,7 +8,7 @@
 // Device results report *HTTP command acknowledgements*, not optical sensing.
 namespace GameEventLog {
 constexpr uint8_t kCapacity = 64;
-constexpr uint8_t kDevices = 4;
+constexpr uint8_t kDevices = 8;
 
 enum class Type : uint8_t {
   GOAL = 1, POWER_PLAY_START, POWER_PLAY_END, GAME_START, FINAL_WIN,
@@ -100,7 +100,7 @@ struct Entry {
   uint8_t period = 0;
   bool preview = false;
   Rear rear = Rear::NA;
-  Wled wled[kDevices] = {Wled::NA, Wled::NA, Wled::NA, Wled::NA};
+  Wled wled[kDevices] = {}; // Eight controller slots; NA is zero
   uint8_t wledAcknowledgedMask = 0; // Retained even after restore/failure
 };
 class Buffer {
