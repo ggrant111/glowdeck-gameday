@@ -1,5 +1,7 @@
 # Phase 7A — Waveshare ESP32-S3 3.5-inch onboard goal horn
 
+> **Phase 7A.2 update:** The user physically confirmed audible output, but the original horn was too quiet. The current firmware now uses a brighter horn and **adjustable 30–80% ES8311 volume (70% default)**. Earlier references below to a fixed 50% level apply only to the original 7A/7A.1 builds. See [the latest horn and volume guide](S3_PHASE7A2_HORN_LOUDNESS.md).
+
 **Status:** Initial software implementation; GitHub Actions firmware compilation and
 physical speaker confirmation are independent validation gates.
 
