@@ -47,7 +47,7 @@ assert 'length:(currentConfig?.wled?.length||8)' in ui
 assert 'name:$("wname"+i).value.trim()' in ui
 assert "function saveConfig()" in ui
 assert 'startWledEvent(CelebrationEngine::Event::GOAL' in m
-assert 'const bool armedForGoal = g.id == selectedGameId' in m
+assert 'const bool armedForGoal = isArmedGame(g.id)' in m
 assert 'const bool followed = rearFollows(g.id)' in m
 assert 'bool wledParticipates(uint8_t i, CelebrationEngine::Event event)' in m
 assert 'CelebrationEngine::eligible(cfg.wledEnabled[i], cfg.wledEvents[i], event)' in m
