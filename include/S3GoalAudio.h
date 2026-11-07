@@ -23,6 +23,13 @@
 
 class S3GoalAudio {
  public:
+  enum class Clip:uint8_t { HORN=0, TEST_TONE=1 };
+  struct Probe {
+    bool codecRead=false, expanderRead=false;
+    uint8_t codecReset=0, codecMute=0, codecVolume=0;
+    uint8_t codecId1=0, codecId2=0;
+    uint8_t ampOutput=0, ampDirection=0;
+  };
   bool begin() {
     // beginHardware() already initialized Wire on GPIO8/GPIO7.
     // The PA is P7 (active high); never toggle P1 LCD reset.
@@ -91,22 +98,26 @@ class S3GoalAudio {
 
   // Preview and real NHL goals both start the SAME one-shot synthesized horn.
   // Real goal callbacks are still controlled by existing cfg.horn opt-in.
-  bool play(){
-    tick();
-    const uint32_t now=millis();
-    if(!S3HornPolicy::canPlay(ready_,playing_.load(),now,lastStart_,
-                             everPlayed_))return false;
-    if(!setAmp(true)){
-      error_=Error::EXPANDER;
-      return logFailure();
-    }
-    lastStart_=now;
-    everPlayed_=true;
-    streamError_.store(false);
-    playing_.store(true);
-    xTaskNotifyGive(task_);
-    Serial.println("[S3 Audio] Goal horn started (50%, 900ms)");
-    return true;
+  bool play(){return playClip(Clip::HORN);}
+  bool testTone(){return playClip(Clip::TEST_TONE);}
+  Probe probe(){
+    Probe p;
+    p.codecRead=readCodec(0x00,p.codecReset) &&
+                readCodec(0x31,p.codecMute) &&
+                readCodec(0x32,p.codecVolume) &&
+                readCodec(0xFD,p.codecId1) &&
+                readCodec(0xFE,p.codecId2);
+    p.expanderRead=GameDayS3::readExpander(0x03,p.ampDirection) &&
+                   GameDayS3::readExpander(0x01,p.ampOutput);
+    return p;
+  }
+  uint32_t writtenFrames() const {return writtenFrames_.load();}
+  uint32_t lastDurationMs() const {return lastDurationMs_.load();}
+  bool lastStreamOk()const{return lastStreamOk_.load();}
+  bool hasPlayed()const{return everPlayed_;}
+  bool ampEnabled()const{return ampOn_;}
+  const char *clipName()const{
+    return activeClip_.load()==uint8_t(Clip::TEST_TONE)?"test-tone":"goal-horn";
   }
 
   // Call from main loop only: never access Wire from the audio DMA task.
@@ -142,12 +153,47 @@ class S3GoalAudio {
   uint32_t lastStart_=0;
   std::atomic<bool> playing_{false};
   std::atomic<bool> streamError_{false};
+  std::atomic<bool> lastStreamOk_{false};
+  std::atomic<uint32_t> writtenFrames_{0};
+  std::atomic<uint32_t> lastDurationMs_{0};
+  std::atomic<uint8_t> activeClip_{uint8_t(Clip::HORN)};
   Error error_=Error::NONE;
   TaskHandle_t task_=nullptr;
 
   bool logFailure(){
     Serial.printf("[S3 Audio] unavailable: %s\n",error());
     return false;
+  }
+  bool readCodec(uint8_t reg,uint8_t &val){
+    Wire.beginTransmission(kCodecAddress);
+    Wire.write(reg);
+    if(Wire.endTransmission(false)!=0 ||
+       Wire.requestFrom(kCodecAddress,uint8_t(1))!=1)return false;
+    val=Wire.read();
+    return true;
+  }
+  bool playClip(Clip clip) {
+    tick();
+    const uint32_t now=millis();
+    if(!S3HornPolicy::canPlay(ready_,playing_.load(),now,lastStart_,
+                             everPlayed_))return false;
+    if(!setAmp(true)){
+      error_=Error::EXPANDER;
+      return logFailure();
+    }
+    error_=Error::NONE;
+    lastStart_=now;
+    everPlayed_=true;
+    streamError_.store(false);
+    lastStreamOk_.store(false);
+    writtenFrames_.store(0);
+    lastDurationMs_.store(0);
+    activeClip_.store(uint8_t(clip));
+    playing_.store(true);
+    xTaskNotifyGive(task_);
+    Serial.printf("[S3 Audio] %s started (codec 50%%)\n",
+                  clip==Clip::TEST_TONE?"1kHz test tone":"goal horn");
+    return true;
   }
   bool writeCodec(uint8_t reg,uint8_t val){
     Wire.beginTransmission(kCodecAddress);
@@ -163,6 +209,11 @@ class S3GoalAudio {
     if(!GameDayS3::readExpander(0x01,out))return false;
     const uint8_t next=enabled?(out|0x80U):(out&~0x80U);
     if(!GameDayS3::writeExpander(0x01,next))return false;
+    // Read the actual TCA9554 latch back; a successful I2C ACK by itself
+    // does not prove the PA-enable output reached the intended level.
+    uint8_t verify=0;
+    if(!GameDayS3::readExpander(0x01,verify) ||
+       bool(verify&0x80U)!=enabled)return false;
     ampOn_=enabled;
     return true;
   }
@@ -180,10 +231,18 @@ class S3GoalAudio {
       {0x00,0x80},{0x09,0x0C},{0x0A,0x0C}, // slave + 16-bit I2S
       {0x0D,0x01},{0x0E,0x02},{0x12,0x00},{0x13,0x10},
       {0x1C,0x6A},{0x37,0x08}, // analog DAC and bypass EQ
+      {0x17,0xC8},{0x14,0x1A}, // mirror official ES8311 analog-path init
       {0x31,0x00}, // DAC unmute
       {0x32,0x7F}  // 50% volume: (50*256/100)-1
     };
     for(const auto &pair:sequence)if(!writeCodec(pair[0],pair[1]))return false;
+    uint8_t volume=0,mute=0;
+    if(!readCodec(0x32,volume)||!readCodec(0x31,mute))return false;
+    if(volume!=0x7F || (mute&0x60U)){
+      Serial.printf("[S3 Audio] codec readback bad: vol=0x%02X mute=0x%02X\n",
+                    volume,mute);
+      return false;
+    }
     return true;
   }
   static void taskEntry(void *arg){
@@ -194,13 +253,19 @@ class S3GoalAudio {
       ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
       uint32_t cursor=0;
       bool ok=true;
+      const uint32_t started=millis();
+      const bool test=self->activeClip_.load()==uint8_t(Clip::TEST_TONE);
+      const uint32_t frames=test?S3HornPolicy::kTestFrames:
+                                 S3HornPolicy::kFrames;
       int16_t stereo[S3HornPolicy::kFrameChunk*2];
-      while(cursor<S3HornPolicy::kFrames){
-        const uint32_t remaining=S3HornPolicy::kFrames-cursor;
+      while(cursor<frames){
+        const uint32_t remaining=frames-cursor;
         const uint16_t count=remaining<S3HornPolicy::kFrameChunk?
                                 uint16_t(remaining):S3HornPolicy::kFrameChunk;
         for(uint16_t i=0;i<count;++i){
-          const int16_t mono=S3HornPolicy::sample(cursor+i);
+          const int16_t mono=test?
+              S3HornPolicy::diagnosticSample(cursor+i):
+              S3HornPolicy::sample(cursor+i);
           stereo[2*i]=mono;
           stereo[2*i+1]=mono;
         }
@@ -208,14 +273,25 @@ class S3GoalAudio {
         const esp_err_t result=i2s_write(I2S_NUM_0,stereo,
                               size_t(count)*4,&written,pdMS_TO_TICKS(120));
         if(result!=ESP_OK||written!=size_t(count)*4){
-          ok=false;break;
+          ok=false;
+          Serial.printf("[S3 Audio] I2S write failed: code=%d bytes=%u/%u frame=%lu\n",
+                        int(result),unsigned(written),unsigned(size_t(count)*4),
+                        (unsigned long)cursor);
+          break;
         }
         cursor+=count;
+        self->writtenFrames_.store(cursor);
       }
-      // Give the final DMA block time to leave the codec before disabling PA.
+      // Allow the last DMA block to finish before disabling the PA.
       vTaskDelay(pdMS_TO_TICKS(35));
       i2s_zero_dma_buffer(I2S_NUM_0);
+      self->lastDurationMs_.store(millis()-started);
+      self->lastStreamOk_.store(ok && cursor==frames);
       if(!ok)self->streamError_.store(true);
+      Serial.printf("[S3 Audio] %s stream %s, frames=%lu/%lu, elapsed=%lums\n",
+                    test?"test-tone":"goal-horn",ok?"complete":"FAILED",
+                    (unsigned long)cursor,(unsigned long)frames,
+                    (unsigned long)self->lastDurationMs_.load());
       self->playing_.store(false);
     }
   }
