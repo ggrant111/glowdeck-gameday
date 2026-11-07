@@ -5220,14 +5220,31 @@ void registerRoutes() {
   server.on("/api/audio/preview", HTTP_POST, []() {
     if (!authorized()) return;
     if (!s3Audio.ready())return errorResponse(s3Audio.error(),503);
-    if (!s3Audio.play())return errorResponse(
-        s3Audio.playing()?"Horn already playing / cooldown":
-                          "Horn unavailable or on cooldown",409);
-    StaticJsonDocument<128> doc;
+    StaticJsonDocument<96> request;
+    const String body=server.arg("plain");
+    if(body.length() && deserializeJson(request,body))
+      return errorResponse("Invalid preview request");
+    if(request.containsKey("source") && !request["source"].is<int>())
+      return errorResponse("Preview source must be an integer");
+    const int requested=request["source"] | int(s3Audio.selectedSource());
+    if(requested<0 || requested>S3WavPolicy::kSlots)
+      return errorResponse("Invalid sound slot");
+    const uint8_t source=uint8_t(requested);
+    S3WavPolicy::Info meta;
+    if(source && !soundStorage.inspect(source,meta))
+      return errorResponse("WAV slot is empty or invalid",400);
+    // Preview only: never records an NHL event, enqueues an overlay,
+    // changes the selected sound or touches WLED devices.
+    if(!(request.containsKey("source")?s3Audio.playSource(source):
+                                            s3Audio.play()))
+      return errorResponse(s3Audio.playing()?"Audio already playing":
+                           "Speaker unavailable, uploading, or cooldown",409);
+    StaticJsonDocument<160> doc;
     doc["ok"]=true;
     doc["volume"]=s3Audio.volume();
-    doc["durationMs"]=S3HornPolicy::kDurationMs;
-    doc["sound"]="onboard-goal-horn";
+    doc["durationMs"]=source?meta.durationMs:S3HornPolicy::kDurationMs;
+    doc["source"]=source;
+    doc["sound"]=source?"custom-wav":"onboard-goal-horn";
     sendJson(doc);
   });
   // Independent 1kHz audible diagnostic at the same fixed codec gain.
