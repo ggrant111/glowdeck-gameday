@@ -495,7 +495,14 @@ bool isScheduledGame(uint32_t id) {
 // viewing that game. Persist only these five IDs, preserving legacy "game".
 void scheduleWledRestoreAll();
 void persistArmedGames(){
-  selectedGameId=armedGames.primary();
+  const uint32_t primary=armedGames.primary();
+  if(selectedGameId!=primary){
+    // The next observed poll is a baseline for the new #1 game.
+    haveBaseline=false;
+    lastArmedGameState="";
+    armedPpLogSeq=0;
+  }
+  selectedGameId=primary;
   prefs.putUInt("game",selectedGameId);
   for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i)
     prefs.putUInt(("armed"+String(i)).c_str(),armedGames.ids[i]);
