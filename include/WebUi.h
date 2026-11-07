@@ -406,7 +406,11 @@ header{padding:19px 17px}
 <h2>Onboard speaker · ESP32-S3</h2>
 <p>Play an original, synthesized hockey goal horn through the ES8311 speaker at a fixed 50% codec volume. This test only uses the onboard speaker: no NHL events, screen takeovers, WLED lights or remote sound systems are triggered.</p>
 <p id="s3AudioStatus" class="small muted">Checking speaker...</p>
-<div class="actions"><button type="button" id="s3AudioPreview">Preview goal horn · 50%</button></div>
+<div class="actions"><button type="button" id="s3AudioPreview">Preview goal horn · 50%</button>
+<button type="button" id="s3AudioTone">Test speaker · 1 kHz</button>
+<button type="button" id="s3AudioProbe">Check audio diagnostics</button></div>
+<p class="small muted">If you hear no horn, try the brighter 1 kHz test tone. Both play locally at the same fixed codec volume, without WLED or NHL events.</p>
+<pre id="s3AudioDiagnostics" class="small muted" style="white-space:pre-wrap;word-break:break-word">No diagnostic check run yet.</pre>
 <p class="small muted">Use the horn checkbox above and Save settings to enable audio for actual followed/armed NHL goals. Custom WAV uploads are planned for Phase 7B.</p>
 </div>
 <div class="card" id="s3GoalGifCard" hidden style="display:none">
@@ -602,9 +606,12 @@ function renderStatus(){
     $("hornLabel").textContent="Enable onboard S3 goal horn (ES8311)";
     $("hornHelp").textContent="Actual armed/followed goals use the S3 speaker at 50% volume; preview works even when this is unchecked.";
     $("s3AudioStatus").textContent=s.audioReady?
-      (s.audioPlaying?"Horn playing · 50%":"ES8311 ready · 50% volume · idle"):
+      (s.audioPlaying?(s.audioLastClip||"Audio")+" playing · 50%":
+       (s.audioHasPlayed?(s.audioLastStreamOk?"I2S stream finished":"Audio stream incomplete"):"Codec initialized · speaker not yet tested")+
+       " · 50% volume"):
       "Speaker unavailable: "+(s.audioError||"Codec not initialized");
     $("s3AudioPreview").disabled=!s.audioReady||!!s.audioPlaying;
+    $("s3AudioTone").disabled=!s.audioReady||!!s.audioPlaying;
   }else{
     $("hornLabel").textContent="Enable built-in horn (GPIO26 speaker)";
     $("hornHelp").textContent="The CYD plays a simple GPIO26 tone sequence; custom WAV playback is not included.";
@@ -1048,11 +1055,38 @@ $("overlayTestStart").onclick=()=>previewOverlay("start");
 $("overlayTestWin").onclick=()=>previewOverlay("win");
 $("overlayTestLoss").onclick=()=>previewOverlay("loss");
 $("overlayStop").onclick=()=>previewOverlay("stop");
+async function readS3AudioProbe(){
+  const d=await api("/api/audio/diagnostics");
+  const hex=v=>"0x"+Number(v||0).toString(16).toUpperCase().padStart(2,"0");
+  $("s3AudioDiagnostics").textContent=[
+    "ES8311 I2C: "+(d.codecRead?"OK":"READ FAILED")+" · id="+hex(d.codecId1)+"/"+hex(d.codecId2),
+    "Codec volume reg: "+hex(d.codecVolume)+" (expected 0x7F for 50%)",
+    "DAC mute reg: "+hex(d.codecMute)+" (bits 5/6 should be clear)",
+    "TCA9554: "+(d.expanderRead?"OK":"READ FAILED")+
+      " · P7 direction="+((d.ampDirection&128)?"INPUT":"OUTPUT")+
+      " · PA="+((d.ampOutput&128)?"HIGH":"LOW"),
+    "Audio ready: "+!!d.ready+" · Playing: "+!!d.playing+
+      " · Last clip: "+(d.lastClip||"none"),
+    "I2S streamed: "+(d.framesWritten||0)+" frames"+
+      " · complete="+!!d.streamOk+" · "+(d.streamDurationMs||0)+"ms",
+    "Error: "+(d.error||"None")
+  ].join("\n");
+}
 $("s3AudioPreview").onclick=()=>perform(async()=>{
   const result=await post("/api/audio/preview",{});
   $("s3AudioStatus").textContent="Goal horn playing · "+result.volume+"%";
-  message("S3 onboard goal horn preview started at "+result.volume+"% volume");
+  message("S3 goal horn preview started at "+result.volume+"%");
   await refresh();
+});
+$("s3AudioTone").onclick=()=>perform(async()=>{
+  const result=await post("/api/audio/test-tone",{});
+  $("s3AudioStatus").textContent="1 kHz speaker test playing · "+result.volume+"%";
+  message("S3 1 kHz speaker test started at "+result.volume+"%");
+  await refresh();
+});
+$("s3AudioProbe").onclick=()=>perform(async()=>{
+  await readS3AudioProbe();
+  message("S3 codec, amplifier and I2S diagnostics refreshed");
 });
 $("eventCategory").onchange=()=>{eventOffset=0;perform(loadEventLog)};
 $("refreshEventLog").onclick=()=>perform(loadEventLog);

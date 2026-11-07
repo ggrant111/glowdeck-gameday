@@ -42,6 +42,23 @@ inline int16_t sample(uint32_t frame) {
   // volume is separately set to 50%, and the amplifier is off at idle.
   return static_cast<int16_t>((int64_t(sum)*int64_t(env)*10000LL)/(32768LL*1024LL));
 }
+// Audible high-mid diagnostic for small enclosure speakers: 1 kHz at
+// fixed 50% ES8311 DAC gain (PCM peak <16k). Never triggers NHL/WLED.
+constexpr uint16_t kTestDurationMs=1200;
+constexpr uint32_t kTestFrames=kSampleRate*kTestDurationMs/1000UL;
+constexpr uint16_t kDiagnosticHz=1000;
+constexpr uint16_t kTestReleaseFrames=kSampleRate*100UL/1000UL;
+inline int16_t diagnosticSample(uint32_t frame) {
+  if(frame>=kTestFrames)return 0;
+  uint32_t env=1024;
+  if(frame<kAttackFrames)env=frame*1024UL/kAttackFrames;
+  else if(frame>kTestFrames-kTestReleaseFrames)
+    env=(kTestFrames-frame)*1024UL/kTestReleaseFrames;
+  // 1k triangle has a strong speaker-audible fundamental. Fade on/off
+  // avoids the clicks that a sustained square-wave could produce.
+  return static_cast<int16_t>(int64_t(triangle(frame*stepHz(kDiagnosticHz)))*
+                              int64_t(env)*15000LL/(32768LL*1024LL));
+}
 inline bool canPlay(bool ready,bool playing,uint32_t now,uint32_t last,
                     bool everPlayed) {
   return ready && !playing &&

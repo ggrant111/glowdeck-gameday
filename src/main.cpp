@@ -4751,6 +4751,12 @@ void registerRoutes() {
     doc["audioPlaying"] = s3Audio.playing();
     doc["audioVolume"] = s3Audio.volume();
     doc["audioError"] = s3Audio.error();
+    doc["audioHasPlayed"] = s3Audio.hasPlayed();
+    doc["audioLastFrames"] = s3Audio.writtenFrames();
+    doc["audioLastStreamOk"] = s3Audio.lastStreamOk();
+    doc["audioLastDurationMs"] = s3Audio.lastDurationMs();
+    doc["audioAmpEnabled"] = s3Audio.ampEnabled();
+    doc["audioLastClip"] = s3Audio.clipName();
 #else
     doc["audioSupported"] = false;
 #endif
@@ -5196,6 +5202,47 @@ void registerRoutes() {
     doc["volume"]=s3Audio.volume();
     doc["durationMs"]=S3HornPolicy::kDurationMs;
     doc["sound"]="onboard-goal-horn";
+    sendJson(doc);
+  });
+  // Independent 1kHz audible diagnostic at the same fixed codec gain.
+  // No change to cfg.horn, overlays, events, WLED or follow state.
+  server.on("/api/audio/test-tone", HTTP_POST, []() {
+    if (!authorized()) return;
+    if (!s3Audio.ready())return errorResponse(s3Audio.error(),503);
+    if (!s3Audio.testTone())return errorResponse(
+        "Speaker busy, cooldown, or PA check failed",409);
+    StaticJsonDocument<128> doc;
+    doc["ok"]=true;
+    doc["sound"]="test-tone-1khz";
+    doc["volume"]=s3Audio.volume();
+    doc["durationMs"]=S3HornPolicy::kTestDurationMs;
+    sendJson(doc);
+  });
+  // GET gives observable I2C codec registers, expander state and actual
+  // I2S write results. A READY flag by itself does NOT prove speaker audio.
+  server.on("/api/audio/diagnostics", HTTP_GET, []() {
+    if (!authorized()) return;
+    const S3GoalAudio::Probe p=s3Audio.probe();
+    StaticJsonDocument<448> doc;
+    doc["supported"]=true;
+    doc["ready"]=s3Audio.ready();
+    doc["playing"]=s3Audio.playing();
+    doc["codecRead"]=p.codecRead;
+    doc["codecReset"]=p.codecReset;
+    doc["codecMute"]=p.codecMute;
+    doc["codecVolume"]=p.codecVolume;
+    doc["codecId1"]=p.codecId1;
+    doc["codecId2"]=p.codecId2;
+    doc["expanderRead"]=p.expanderRead;
+    doc["ampDirection"]=p.ampDirection;
+    doc["ampOutput"]=p.ampOutput;
+    doc["ampEnabled"]=s3Audio.ampEnabled();
+    doc["lastClip"]=s3Audio.clipName();
+    doc["hasPlayed"]=s3Audio.hasPlayed();
+    doc["framesWritten"]=s3Audio.writtenFrames();
+    doc["streamOk"]=s3Audio.lastStreamOk();
+    doc["streamDurationMs"]=s3Audio.lastDurationMs();
+    doc["error"]=s3Audio.error();
     sendJson(doc);
   });
 #endif
