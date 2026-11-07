@@ -143,7 +143,8 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 .subnav{display:flex;flex-wrap:wrap;gap:8px;padding:11px;background:#0b1a28;border:1px solid var(--edge);border-radius:12px;margin:0 0 22px}
 .subnav button{min-height:38px;padding:7px 12px;background:transparent;border:1px solid transparent;font-size:12px;color:#b8d5dd}
 .subnav button:hover,.subnav button.active{background:#224151;border-color:#426778;color:#f1fdff}
-.portal-zone{scroll-margin-top:20px;margin:27px 0 32px}
+.portal-zone{display:none;scroll-margin-top:20px;margin:27px 0 32px}
+.portal-zone.active-zone{display:block}
 .zone-heading{display:flex;align-items:center;gap:14px;padding:0 0 13px;border-bottom:1px solid #34566a;margin:0 0 16px}
 .zone-heading h3{margin:0 0 2px;font-size:19px;letter-spacing:-.02em}
 .zone-heading p{margin:0;font-size:13px}
@@ -873,16 +874,29 @@ async function api(url, options={}){
 }
 const post = (url,body) => api(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
 async function perform(fn){try{await fn()}catch(err){message("Error: "+err.message)}}
+const PORTAL_DEFAULT_ZONES={
+  customize:"zone-favorites",lab:"lab-screen",device:"zone-network"
+};
+const portalLastZone={};
 function jumpToZone(anchor){
   const section=$(anchor);
   if(!section)return;
-  document.querySelectorAll(".subnav button").forEach(button=>{
+  const panel=section.closest(".panel");
+  if(!panel)return;
+  // Progressive disclosure. Hidden sections retain their original controls,
+  // so a global save always includes all loaded game-day settings.
+  Array.from(panel.children).forEach(node=>{
+    if(node.classList.contains("portal-zone"))
+      node.classList.toggle("active-zone",node===section);
+  });
+  panel.querySelectorAll(".subnav button").forEach(button=>{
     const selected=button.dataset.jump===anchor;
     button.classList.toggle("active",selected);
     button.setAttribute("aria-pressed",String(selected));
   });
+  portalLastZone[panel.id]=anchor;
   const reduced=matchMedia("(prefers-reduced-motion:reduce)").matches;
-  section.scrollIntoView({block:"start",behavior:reduced?"auto":"smooth"});
+  panel.scrollIntoView({block:"start",behavior:reduced?"auto":"smooth"});
 }
 function tab(id,anchor){
   const route=PORTAL_ROUTES[id]||PORTAL_ROUTES.dashboard;
@@ -895,8 +909,10 @@ function tab(id,anchor){
     if(selected)x.setAttribute("aria-current","page");
     else x.removeAttribute("aria-current");
   });
-  if(anchor||route.anchor){
-    requestAnimationFrame(()=>jumpToZone(anchor||route.anchor));
+  const chosenZone=anchor||route.anchor||portalLastZone[page]||
+                   PORTAL_DEFAULT_ZONES[page];
+  if(chosenZone){
+    requestAnimationFrame(()=>jumpToZone(chosenZone));
   }else{
     const reduced=matchMedia("(prefers-reduced-motion:reduce)").matches;
     scrollTo({top:0,behavior:reduced?"auto":"smooth"});
@@ -1075,6 +1091,9 @@ function renderStatus(){
   $("platformTag").textContent=s3?"WAVESHARE S3 · 3.5″":"ESP32 CYD · 2.8″";
   $("rearEnabled").closest(".card").hidden=s3;
   $("lab-audio").hidden=!s3;
+  const audioTab=document.querySelector('[data-jump="lab-audio"]');
+  if(audioTab)audioTab.hidden=!s3;
+  if(!s3 && portalLastZone.lab==="lab-audio")jumpToZone("lab-screen");
   $("mount-lab-hardware").hidden=s3;
   $("mount-lab-case").hidden=!s3;
   $("goalGifPreview").hidden=!s3;
@@ -1880,6 +1899,7 @@ $("reboot").onclick=()=>perform(async()=>{
   try{
     mountPortalModules();
     trackPortalChanges();
+    ["zone-favorites","lab-screen","zone-network"].forEach(jumpToZone);
     await loadConfig();
     await refresh();
     await loadGoalGif();
