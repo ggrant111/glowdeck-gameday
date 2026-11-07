@@ -114,6 +114,7 @@ struct Settings {
   uint8_t s3Volume = S3HornPolicy::kVolumePercent;
   uint8_t s3Sound = 0; // 0 = built-in, 1..3 = persistent WAV slots
   uint8_t s3PpSound = 0; // 0 = no PP audio, 1..3 = independent WAV slot
+  uint8_t s3StartSound = 3; // Default game-start WAV slot; 0 disables
   bool caseLedsEnabled = false; // Explicit opt-in AFTER physical wiring
   bool caseGoal=true,casePp=true,caseStart=true,caseFinal=true;
   uint8_t casePixels=S3CaseLedPolicy::kDefaultPixels;
@@ -1689,6 +1690,8 @@ void loadSettings() {
                         0,(int)S3WavPolicy::kSlots);
   cfg.s3PpSound=constrain((int)prefs.getUChar("s3PpSound",0),
                           0,(int)S3WavPolicy::kSlots);
+  cfg.s3StartSound=constrain((int)prefs.getUChar("s3StartSound",3),
+                             0,(int)S3WavPolicy::kSlots);
   cfg.caseLedsEnabled=prefs.getBool("caseOn",false);
   cfg.caseGoal=prefs.getBool("caseGoal",true);
   cfg.casePp=prefs.getBool("casePP",true);
@@ -2017,6 +2020,33 @@ void startHorn(uint32_t eventSequence=0) {
 // One-shot rink announcement at a verified power-play START only. Separate
 // NVS sound choice from the goal horn; source 0 disables PP sound. The
 // existing cooldown means overlapping audio is reported, not mixed.
+void startGameStartSound(uint32_t eventSequence) {
+  GameEventLog::Entry *entry=gameEventHistory.find(eventSequence);
+  if(entry){entry->audio=GameEventLog::Audio::HORN_DISABLED;
+            entry->audioFallback=false;}
+#ifdef GLOWDECK_WAVESHARE_S3
+  if(entry)entry->audioSource=cfg.s3StartSound;
+  const uint8_t source=cfg.s3StartSound;
+  if(!source)return;
+  if(!s3Audio.ready() || !soundStorage.available(source)){
+    if(entry)entry->audio=GameEventLog::Audio::UNAVAILABLE;
+    Serial.printf("[Game Start Audio] slot %u unavailable\n",unsigned(source));
+    return;
+  }
+  if(!s3Audio.playSource(source)){
+    if(entry)entry->audio=s3Audio.busyOrCoolingDown()?
+      GameEventLog::Audio::BUSY:GameEventLog::Audio::UNAVAILABLE;
+    Serial.printf("[Game Start Audio] slot %u playback refused\n",unsigned(source));
+    return;
+  }
+  if(entry){entry->audio=GameEventLog::Audio::STARTED;
+            hornLogSequence=eventSequence;}
+  Serial.printf("[Game Start Audio] slot %u started event=%lu\n",
+                unsigned(source),(unsigned long)eventSequence);
+#else
+  (void)eventSequence;
+#endif
+}
 void startPowerPlaySound(uint32_t eventSequence) {
   GameEventLog::Entry *entry=gameEventHistory.find(eventSequence);
   if(entry){
@@ -3452,6 +3482,7 @@ void pollNhl() {
               : EventOverlay::Kind::FINAL_WIN;
         GameEventLog::Entry &log=addGameEvent(observed,logType,representative,0);
         log.rear=GameEventLog::Rear::NOT_SELECTED;
+        if(started && secondaryArmed)startGameStartSound(log.sequence);
         queueGameOverlay(&observed,kind,representative,log.sequence,true);
         if(secondaryArmed){
 #ifdef GLOWDECK_WAVESHARE_S3
@@ -3497,6 +3528,8 @@ void pollNhl() {
               ? GameEventLog::Type::FINAL_WIN
               : GameEventLog::Type::FINAL_LOSS;
       GameEventLog::Entry &logged = addGameEvent(*g, eventType, fav);
+      if(transition==CelebrationEngine::Event::GAME_START && isArmedGame(g->id))
+        startGameStartSound(logged.sequence);
       const EventOverlay::Kind kind =
         transition == CelebrationEngine::Event::GAME_START
           ? EventOverlay::Kind::GAME_START
@@ -5901,6 +5934,7 @@ void registerRoutes() {
     doc["audioLastClip"] = s3Audio.clipName();
     doc["audioSelectedSource"] = s3Audio.selectedSource();
     doc["audioPowerPlaySource"] = cfg.s3PpSound;
+    doc["audioGameStartSource"] = cfg.s3StartSound;
     doc["audioStorageReady"] = soundStorage.mounted();
     doc["caseLedEnabled"]=cfg.caseLedsEnabled;
     doc["caseLedActive"]=caseLedDriver.enabled();
@@ -6129,6 +6163,7 @@ void registerRoutes() {
     doc["s3VolumeMax"] = S3HornPolicy::kMaxVolumePercent;
     doc["s3Sound"] = s3Audio.selectedSource();
     doc["s3PpSound"] = cfg.s3PpSound;
+    doc["s3StartSound"] = cfg.s3StartSound;
     doc["caseLedsEnabled"]=cfg.caseLedsEnabled;
     doc["casePixels"]=cfg.casePixels;
     doc["caseBrightness"]=cfg.caseBrightness;
@@ -6486,6 +6521,7 @@ void registerRoutes() {
     doc["storageReady"]=soundStorage.mounted();
     doc["selected"]=s3Audio.selectedSource();
     doc["powerPlaySelected"]=cfg.s3PpSound;
+    doc["gameStartSelected"]=cfg.s3StartSound;
     doc["slots"]=S3WavPolicy::kSlots;
     doc["maxFileBytes"]=S3WavPolicy::kMaxBytes;
     doc["totalBytes"]=soundStorage.totalBytes();
@@ -6535,6 +6571,27 @@ void registerRoutes() {
   });
   // Distinct PP audio assignment. Source 0 disables; it never changes the
   // working goal horn selection or cfg.horn. No NHL eligibility changes.
+  server.on("/api/audio/gamestart-select", HTTP_POST, []() {
+    if(!authorized())return;
+    if(s3Audio.playing() || s3Audio.storageBusy())
+      return errorResponse("Audio busy; retry after playback",409);
+    StaticJsonDocument<96> request;
+    if(deserializeJson(request,server.arg("plain")))
+      return errorResponse("Invalid game-start sound JSON");
+    if(!request.containsKey("source") || !request["source"].is<int>())
+      return errorResponse("Source must be an integer 0 through 3");
+    const int source=request["source"].as<int>();
+    if(source<0 || source>S3WavPolicy::kSlots)
+      return errorResponse("Game-start slot out of range");
+    S3WavPolicy::Info meta;
+    if(source && !soundStorage.inspect(uint8_t(source),meta))
+      return errorResponse("Game-start WAV missing or invalid",400);
+    cfg.s3StartSound=uint8_t(source);
+    prefs.putUChar("s3StartSound",cfg.s3StartSound);
+    StaticJsonDocument<96> response;
+    response["ok"]=true;response["gameStartSelected"]=cfg.s3StartSound;
+    sendJson(response);
+  });
   server.on("/api/audio/powerplay-select", HTTP_POST, []() {
     if(!authorized())return;
     if(s3Audio.playing() || s3Audio.storageBusy())
@@ -6577,6 +6634,10 @@ void registerRoutes() {
       cfg.s3Sound=0; // built-in safety fallback
       s3Audio.setSelectedSource(0);
       prefs.putUChar("s3Sound",0);
+    }
+    if(cfg.s3StartSound==slot){
+      cfg.s3StartSound=0;
+      prefs.putUChar("s3StartSound",0);
     }
     if(cfg.s3PpSound==slot){
       cfg.s3PpSound=0; // Removing a PP WAV disables only that announcement.
@@ -7757,6 +7818,8 @@ void registerRoutes() {
       startHorn(previewRow.sequence);
     } else if (combined && event == CelebrationEngine::Event::POWER_PLAY) {
       startPowerPlaySound(previewRow.sequence);
+    } else if (combined && event == CelebrationEngine::Event::GAME_START) {
+      startGameStartSound(previewRow.sequence);
     }
     audioStarted = previewRow.audio == GameEventLog::Audio::STARTED;
     StaticJsonDocument<512> response;
