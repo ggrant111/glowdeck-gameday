@@ -132,6 +132,11 @@ jobs:
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_phase7b_wav.cpp -o /tmp/glowdeck-s3-7b-wav
           /tmp/glowdeck-s3-7b-wav
           python tests/test_s3_phase7b_contract.py
+      - name: Test S3 Phase 7C independent case LEDs and wiring safety
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_phase7c_case_led.cpp -o /tmp/glowdeck-s3-7c-case-led
+          /tmp/glowdeck-s3-7c-case-led
+          python tests/test_s3_phase7c_contract.py
       - name: Test S3 Phase 5 framebuffer and dirty-region geometry
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_raster_geometry.cpp -o /tmp/glowdeck-s3-raster-test
