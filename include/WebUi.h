@@ -414,7 +414,24 @@ header{padding:19px 17px}
 <button type="button" id="s3AudioProbe">Check audio diagnostics</button></div>
 <p class="small muted">The new horn contains brighter upper harmonics and a stronger digital signal. Both previews use your saved volume, while the device amplifier is off when idle.</p>
 <pre id="s3AudioDiagnostics" class="small muted" style="white-space:pre-wrap;word-break:break-word">No diagnostic check run yet.</pre>
-<p class="small muted">Use the horn checkbox above and Save settings to enable audio for actual followed/armed NHL goals. Custom WAV uploads are planned for Phase 7B.</p>
+<p class="small muted">The checkbox above still controls audio for real followed/armed NHL goals. Previews never trigger lights or game events.</p>
+<div class="divider" style="margin-top:20px"></div>
+<h3>Goal horn sound library</h3>
+<p class="small muted">Keep the built-in horn or install up to three custom WAV sounds. Select one sound for all followed/armed goal celebrations. Team-specific assignments are planned for Phase 7B.3.</p>
+<p id="s3SoundLibraryStatus" class="small muted">Loading audio library...</p>
+<div class="actions"><button type="button" id="s3SoundBuiltInUse">Use built-in horn</button>
+<button type="button" id="s3SoundBuiltInPreview">Preview built-in</button></div>
+<div id="s3SoundLibrarySlots" style="margin:12px 0"></div>
+<form id="s3SoundUploadForm">
+<label for="s3SoundUploadSlot">Upload into library slot</label>
+<select id="s3SoundUploadSlot" required>
+<option value="1">Slot 1</option><option value="2">Slot 2</option><option value="3">Slot 3</option>
+</select>
+<label for="s3SoundUploadFile">Custom WAV file (max 768 KB)</label>
+<input id="s3SoundUploadFile" type="file" name="sound" accept=".wav,audio/wav,audio/x-wav" required>
+<p class="small muted">PCM 16-bit WAV · mono/stereo · 8–48 kHz · up to 10 seconds. Files remain on the device through normal firmware OTA updates. Uploading replaces only the chosen slot.</p>
+<div class="actions"><button type="submit" class="primary" id="s3SoundUploadButton">Upload WAV</button></div>
+</form>
 </div>
 <div class="card" id="s3GoalGifCard" hidden style="display:none">
 <h2>Hockey goal GIF · ESP32-S3</h2>
@@ -617,6 +634,8 @@ function renderStatus(){
     $("s3AudioPreview").disabled=!s.audioReady||!!s.audioPlaying;
     $("s3AudioTone").disabled=!s.audioReady||!!s.audioPlaying;
     $("s3AudioVolumeApply").disabled=!s.audioReady||!!s.audioPlaying;
+    $("s3SoundBuiltInPreview").disabled=!s.audioReady||!!s.audioPlaying;
+    $("s3SoundUploadButton").disabled=!!s.audioPlaying;
   }else{
     $("hornLabel").textContent="Enable built-in horn (GPIO26 speaker)";
     $("hornHelp").textContent="The CYD plays a simple GPIO26 tone sequence; custom WAV playback is not included.";
@@ -1093,10 +1112,104 @@ $("s3AudioVolumeApply").onclick=()=>perform(async()=>{
   message("S3 speaker volume saved at "+response.volume+"% — preview to test");
   await refresh();
 });
+let s3AudioLibrary=null;
+async function loadSoundLibrary(){
+  const response=await fetch("/api/audio/library",{cache:"no-store"});
+  if(!response.ok){
+    $("s3SoundLibraryStatus").textContent="Sound library unavailable on this device.";
+    return;
+  }
+  const lib=await response.json();
+  s3AudioLibrary=lib;
+  $("s3SoundLibraryStatus").textContent=!lib.storageReady?
+    "Flash storage unavailable — built-in horn remains available.":
+    (lib.selected===0?"Built-in horn selected":"Custom slot "+lib.selected+" selected")+
+    " · "+(Math.round((lib.usedBytes||0)/1024))+" KB used of "+
+    Math.round((lib.totalBytes||0)/1024)+" KB flash audio/animation space";
+  $("s3SoundBuiltInUse").disabled=lib.selected===0;
+  const host=$("s3SoundLibrarySlots");
+  host.replaceChildren();
+  (lib.clips||[]).forEach(c=>{
+    const row=document.createElement("div");row.className="item";
+    const title=document.createElement("strong");
+    title.textContent="Slot "+c.slot+" · "+
+      (c.installed?(c.name||"Custom WAV"):"Empty");
+    row.append(title);
+    const detail=document.createElement("p");
+    detail.className="small muted";
+    detail.textContent=c.installed?
+      (c.durationMs/1000).toFixed(1)+" sec · "+c.sampleRate+" Hz · "+
+       (c.channels===1?"mono":"stereo")+" · "+Math.round(c.bytes/1024)+" KB":
+      (c.bytes?"Invalid WAV — replace or delete":"Upload a PCM WAV to this slot");
+    row.append(detail);
+    const actions=document.createElement("div");actions.className="actions";
+    const preview=document.createElement("button");
+    preview.textContent="Preview";
+    preview.disabled=!c.installed;
+    preview.onclick=()=>perform(async()=>{
+      const result=await post("/api/audio/preview",{source:c.slot});
+      message("Playing "+(c.name||"Custom WAV")+" at "+result.volume+"%");
+      await refresh();
+    });
+    actions.append(preview);
+    const select=document.createElement("button");
+    select.textContent=lib.selected===c.slot?"Selected":"Use for goals";
+    select.disabled=!c.installed||lib.selected===c.slot;
+    select.onclick=()=>perform(async()=>{
+      await post("/api/audio/select",{source:c.slot});
+      currentConfig.s3Sound=c.slot;
+      await loadSoundLibrary();
+      message("Goal sound set to slot "+c.slot);
+    });
+    actions.append(select);
+    const remove=document.createElement("button");
+    remove.textContent="Delete";
+    remove.disabled=!c.bytes;
+    remove.onclick=()=>perform(async()=>{
+      if(!confirm("Delete "+(c.name||("slot "+c.slot))+" from device flash?"))return;
+      await post("/api/audio/delete",{slot:c.slot});
+      await loadSoundLibrary();
+      message("Custom WAV removed");
+    });
+    actions.append(remove);row.append(actions);host.append(row);
+  });
+}
+$("s3SoundBuiltInPreview").onclick=()=>perform(async()=>{
+  const result=await post("/api/audio/preview",{source:0});
+  message("Built-in horn preview playing at "+result.volume+"%");
+});
+$("s3SoundBuiltInUse").onclick=()=>perform(async()=>{
+  await post("/api/audio/select",{source:0});
+  currentConfig.s3Sound=0;
+  await loadSoundLibrary();
+  message("Built-in goal horn selected");
+});
+$("s3SoundUploadForm").onsubmit=e=>{e.preventDefault();perform(async()=>{
+  const file=$("s3SoundUploadFile").files[0];
+  const slot=Number($("s3SoundUploadSlot").value);
+  if(!file)throw Error("Choose a WAV file first");
+  if(file.size>786432 || file.size<44)
+    throw Error("WAV must be between 44 bytes and 768 KB");
+  const header=new Uint8Array(await file.slice(0,12).arrayBuffer());
+  const tag=Array.from(header.slice(0,4)).map(x=>String.fromCharCode(x)).join("");
+  const wave=Array.from(header.slice(8,12)).map(x=>String.fromCharCode(x)).join("");
+  if(tag!=="RIFF"||wave!=="WAVE")throw Error("Choose an uncompressed RIFF WAV file");
+  const payload=new FormData();
+  payload.append("sound",file,file.name);
+  $("s3SoundUploadButton").disabled=true;
+  try{
+    const result=await api("/api/audio/upload?slot="+slot,
+                           {method:"POST",body:payload});
+    $("s3SoundUploadFile").value="";
+    await loadSoundLibrary();
+    message("Uploaded "+result.name+" ("+(result.durationMs/1000).toFixed(1)+" sec)");
+  }finally{$("s3SoundUploadButton").disabled=false;}
+})};
 $("s3AudioPreview").onclick=()=>perform(async()=>{
   const result=await post("/api/audio/preview",{});
-  $("s3AudioStatus").textContent="Goal horn playing · "+result.volume+"%";
-  message("S3 goal horn preview started at "+result.volume+"%");
+  $("s3AudioStatus").textContent="Goal sound playing · "+result.volume+"%";
+  message("S3 "+(result.sound==="custom-wav"?"custom WAV":"built-in horn")+
+          " preview started at "+result.volume+"%");
   await refresh();
 });
 $("s3AudioTone").onclick=()=>perform(async()=>{
@@ -1243,7 +1356,7 @@ $("reboot").onclick=()=>perform(async()=>{
   await api("/api/reboot",{method:"POST"});message("Restart requested");
 });
 (async()=>{
-  try{await loadConfig();await refresh();await loadGoalGif()}
+  try{await loadConfig();await refresh();await loadGoalGif();await loadSoundLibrary()}
   catch(err){message("Cannot load device: "+err.message)}
   setInterval(()=>refresh().catch(()=>{}),15000);
 })();
