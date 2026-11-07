@@ -5588,6 +5588,7 @@ void handleTouch() {
     // the previously selected screen or armed NHL game.
     if (!pressed) {
       touchWasDown = false;
+      swallowLiveGesture = false; // Release completed during a queued overlay.
     } else if (!touchWasDown && millis() - lastTouch > 160UL) {
       touchWasDown = true;
       lastTouch = millis();
