@@ -389,7 +389,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 </div>
 </section>
 <section id="games" class="panel">
-<div class="section-intro"><div class="eyebrow">NHL LIVE BOARD</div><h2>Every matchup, one place</h2><p>Tap ☆ to follow any game for rear RGB and screen alerts, even before puck drop. Follow the entire daily schedule if you like. Arm chooses which single game controls WLED.</p></div>
+<div class="section-intro"><div class="eyebrow">NHL LIVE BOARD</div><h2>Every matchup, one place</h2><p>Tap ☆ to follow any game for rear RGB and screen alerts, even before puck drop. Follow the entire daily schedule if you like. Arm up to five games for WLED and goal horns. Priority #1 wins ties; goals outrank finals, starts, and power plays.</p></div>
 <div class="card"><div class="row">
 <div><h2>Today's games</h2><p class="small">Favorite-team games rise to the top of the live carousel.</p></div>
 <div><label for="gameSearch">Search teams</label><input id="gameSearch" type="search" placeholder="Search DAL, Utah, Boston…" autocomplete="off"></div>
@@ -400,6 +400,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <button data-game-filter="favorites" aria-pressed="false">Favorite teams</button>
 <button data-game-filter="following" aria-pressed="false">Following</button>
 </div>
+<div id="armedGameSummary" class="small muted" role="status">Armed: 0 / 5 games</div>
 <div id="gameList"><p>No games loaded yet.</p></div>
 <div id="gameDetail" class="item" hidden></div>
 <button id="refreshGames">Refresh list</button>
@@ -1151,22 +1152,23 @@ function renderStatus(){
   $("connection").className="status "+(s.wifiConnected?"good":"warn");
   $("connection").textContent=s.wifiConnected?"Online":"Setup hotspot";
   $("deviceIp").textContent=s.ip;
-  $("currentGame").textContent=game?game.away+" @ "+game.home:"Not selected";
+  $("currentGame").textContent=(game?game.away+" @ "+game.home:"None selected")+
+    " · "+(s.armedCount||0)+"/"+(s.armedCapacity||5)+" armed";
   $("currentMode").textContent=modes[s.mode]||"Unknown";
   $("wledEventStatus").textContent=s.wledEvent||"IDLE";
   $("wledSelectedCount").textContent=(currentConfig?.wled||[])
-    .filter(d=>d.enabled&&d.ip).length+" / 4";
+    .filter(d=>d.enabled&&d.ip).length+" / 8";
   renderWledControllerResults();
   $("wledDeviceFeedback").textContent=(s.wledResults||[])
     .map((v,i)=>v?"WLED "+(i+1)+": "+v:"").filter(Boolean).join(" · ")
     ||"No recent WLED celebration activity";
   $("rearEvent").textContent=(s.rearEvent||"IDLE").replaceAll("_"," ");
-  $("rearFollowCount").textContent=((s.followed||[]).filter(id=>id!==s.selectedId).length+
-    (s.selectedId?1:0))+" / "+(s.followCapacity||20)+" daily games";
+  $("rearFollowCount").textContent=new Set([...(s.followed||[]),
+    ...(s.armedIds||[])]).size+" / "+(s.followCapacity||20)+" daily games";
   $("dashLiveCount").textContent=String(s.liveGameCount??0);
   $("dashFavoriteCount").textContent=String(popcount(s.favoriteTeams??0));
   $("dashFollowCount").textContent=String(
-    (s.followed||[]).filter(id=>id!==s.selectedId).length+(s.selectedId?1:0));
+    new Set([...(s.followed||[]),...(s.armedIds||[])]).size);
   $("dashDisplayMode").textContent=s.displayAllLiveEvents?"League-wide":"Followed only";
   $("backgroundSkipped").textContent=String(s.backgroundEventsSkipped??0);
   $("overlayDropped").textContent=String(s.overlayEventsDropped??0);
@@ -1270,7 +1272,7 @@ function isFavoriteGame(g){
 }
 function showGame(g){
   const live=g.state==="LIVE"||g.state==="CRIT";
-  const following=g.followed || g.id===currentStatus?.selectedId;
+  const following=g.followed || g.armed;
   const query=$("gameSearch").value.toLowerCase().trim();
   const text=[g.away,g.home,g.awayName,g.homeName].join(" ").toLowerCase();
   return (!query||text.includes(query))&&
@@ -1280,6 +1282,15 @@ function showGame(g){
 }
 function renderGames(){
   const list=$("gameList");list.replaceChildren();
+  const armed=currentStatus?.armedIds||[];
+  const names=armed.map((id,i)=>{
+    const g=currentGames.find(x=>x.id===id);
+    return "#"+(i+1)+" "+(g?g.away+" @ "+g.home:id);
+  });
+  $("armedGameSummary").textContent="Armed "+armed.length+"/"+
+    (currentStatus?.armedCapacity||5)+" · "+
+    (names.length?names.join("  •  "):
+    "Choose up to five games. Earlier ranks win event ties.");
   if(!currentGames.length){
     const p=document.createElement("p");
     p.textContent=currentStatus&&currentStatus.scoreboardLoaded
@@ -1322,28 +1333,49 @@ function renderGames(){
     const flags=[];
     if(isFavoriteGame(g))flags.push("FAVORITE TEAM");
     if(g.followed)flags.push("FOLLOWED");
-    if(g.id===currentStatus?.selectedId)flags.push("ARMED");
+    if(g.armed)flags.push("ARMED #"+g.armedPriority);
     subtitle.textContent=(g.status||g.state)+
       (flags.length?" · "+flags.join(" · "):"");
     detail.append(matchup,subtitle);
     const actions=document.createElement("div");actions.className="actions";
     actions.style.justifyContent="flex-end";
-    const selected=!!currentStatus&&currentStatus.selectedId===g.id;
+    const selected=!!g.armed, rank=Number(g.armedPriority||0);
     const arm=document.createElement("button");
-    arm.textContent=selected?"Armed":"Arm";if(selected)arm.className="selected";
-    arm.title="Choose the game for goal-triggered lights";
+    arm.textContent=selected?"Disarm #"+rank:"Arm";
+    if(selected)arm.className="selected";
+    arm.disabled=!selected && (currentStatus?.armedCount||0)>=(currentStatus?.armedCapacity||5);
+    arm.title=selected?"Remove this game from physical celebrations":
+      "Arm this game for WLED and goal horns (maximum five)";
+    arm.setAttribute("aria-pressed",String(selected));
     arm.onclick=()=>perform(async()=>{
-      await post("/api/select",{id:g.id});
-      message("Goal alerts armed: "+g.away+" @ "+g.home);
+      await post("/api/arm",{id:g.id,armed:!selected});
+      message((selected?"Disarmed ":"Armed ")+g.away+" @ "+g.home);
       await refresh();
     });
+    if(selected){
+      for(const [action,label,disabled] of [
+          ["up","↑",rank===1],
+          ["down","↓",rank===(currentStatus?.armedCount||1)]]){
+        const priority=document.createElement("button");
+        priority.textContent=label;priority.className="ghost";
+        priority.title="Move "+g.away+" @ "+g.home+
+          (action==="up"?" higher":" lower")+" in celebration priority";
+        priority.setAttribute("aria-label",priority.title);
+        priority.disabled=disabled;
+        priority.onclick=()=>perform(async()=>{
+          await post("/api/arm",{id:g.id,action});
+          await refresh();
+        });
+        actions.append(priority);
+      }
+    }
     const star=document.createElement("button");
     const isFollowing=!!g.followed||selected;
     star.className="star-button";
     star.textContent=isFollowing?"★":"☆";
     star.setAttribute("aria-label",(isFollowing?"Unfollow ":"Follow ")+g.away+" at "+g.home);
     star.setAttribute("aria-pressed",String(isFollowing));
-    star.title=selected?"Armed game automatically follows rear LED and screen alerts":
+    star.title=selected?"Armed games automatically follow local LEDs and screen alerts":
       "Follow this game for screen celebrations and rear RGB LED";
     star.disabled=selected;
     star.onclick=()=>perform(async()=>{
@@ -2136,7 +2168,7 @@ function renderRearFollowed(){
     checkbox.type="checkbox";
     checkbox.style.width="22px";checkbox.style.minHeight="22px";
     checkbox.style.accentColor="#31837a";
-    const isArmed=currentStatus&&currentStatus.selectedId===game.id;
+    const isArmed=!!game.armed;
     checkbox.checked=!!game.followed||!!isArmed;
     checkbox.disabled=!!isArmed;
     checkbox.setAttribute("aria-label","Follow "+game.away+" at "+game.home);
@@ -2155,7 +2187,7 @@ function renderRearFollowed(){
     row.append(label,checkbox);
     if(isArmed){
       const note=document.createElement("span");
-      note.className="badge";note.textContent="Armed";row.append(note);
+      note.className="badge";note.textContent="Armed #"+game.armedPriority;row.append(note);
     }
     list.append(row);
   });
