@@ -127,6 +127,11 @@ jobs:
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_phase7a2_horn.cpp -o /tmp/glowdeck-s3-7a2-horn
           /tmp/glowdeck-s3-7a2-horn
           python tests/test_s3_phase7a2_contract.py
+      - name: Test S3 Phase 7B WAV parsing, streaming, uploads and library isolation
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_phase7b_wav.cpp -o /tmp/glowdeck-s3-7b-wav
+          /tmp/glowdeck-s3-7b-wav
+          python tests/test_s3_phase7b_contract.py
       - name: Test S3 Phase 5 framebuffer and dirty-region geometry
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_raster_geometry.cpp -o /tmp/glowdeck-s3-raster-test
