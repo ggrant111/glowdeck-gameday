@@ -490,6 +490,35 @@ bool isScheduledGame(uint32_t id) {
     if (games[i].id==id) return true;
   return false;
 }
+// Arm/disarm and priority rank are independent of whether the user is
+// viewing that game. Persist only these five IDs, preserving legacy "game".
+void scheduleWledRestoreAll();
+void persistArmedGames(){
+  selectedGameId=armedGames.primary();
+  prefs.putUInt("game",selectedGameId);
+  for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i)
+    prefs.putUInt(("armed"+String(i)).c_str(),armedGames.ids[i]);
+  needsDraw=true;
+}
+bool editArmedGame(uint32_t id,bool enable){
+  if(!id||!isScheduledGame(id))return false;
+  if(enable){
+    if(!armedGames.add(id))return false;
+  }else if(armedGames.remove(id)){
+    wledPriorityQueue.removeGame(id);
+    if(wledActiveGameId==id){
+      scheduleWledRestoreAll();
+      wledPriorityQueue.removeGame(id);
+    }
+  }
+  persistArmedGames();
+  return true;
+}
+bool moveArmedGame(uint32_t id,int direction){
+  if(!armedGames.move(id,direction))return false;
+  persistArmedGames();
+  return true;
+}
 // One follow policy serves CYD game carousel, detail view, game list and web.
 // All 20 daily games may be followed; only the armed game controls WLED.
 using FollowResult = GameFollowPolicy::Result;
@@ -5063,16 +5092,17 @@ void draw() {
 }
 
 void selectGame(uint32_t id) {
-  // A deliberate game selection switches to that game, not the old pinned one.
+  // Legacy select promotes to rank 1; other armed games stay armed.
+  if(!isScheduledGame(id) || !armedGames.promote(id))return;
   carouselHold.reset();
   swallowLiveGesture = true;
-  // A new game should not inherit an in-progress goal/PP effect.
-  scheduleWledRestoreAll();
-  selectedGameId = id;
-  armedPpLogSeq = 0;
-  lastArmedGameState = "";
-  haveBaseline = false;
-  prefs.putUInt("game", id);
+  const bool primaryChanged=selectedGameId!=id;
+  persistArmedGames();
+  if(primaryChanged){
+    armedPpLogSeq=0;
+    lastArmedGameState="";
+    haveBaseline=false; // Never infer a historical goal from promotion.
+  }
   screen = Screen::LIVE;
   for (uint8_t i = 0; i < gameCount; ++i)
     if (games[i].id == id) { featuredIndex = i; break; }
@@ -5799,6 +5829,30 @@ void registerRoutes() {
     ok["queued"] = true;
     sendJson(ok);
   });
+  server.on("/api/arm",HTTP_POST,[](){
+    if(!authorized())return;
+    StaticJsonDocument<192> request;
+    if(deserializeJson(request,server.arg("plain")) ||
+       !request["id"].is<uint32_t>())
+      return errorResponse("Specify an NHL game id",400);
+    const uint32_t id=request["id"].as<uint32_t>();
+    if(!isScheduledGame(id))
+      return errorResponse("Game not on today's schedule",404);
+    const String action=request["action"]|String("");
+    bool success=false;
+    if(action=="up"||action=="down"){
+      success=moveArmedGame(id,action=="up"?-1:1);
+      if(!success)return errorResponse("Game already at end of priority list",409);
+    }else if(request["armed"].is<bool>()){
+      success=editArmedGame(id,request["armed"].as<bool>());
+      if(!success)return errorResponse("Only five games may be armed",409);
+    }else return errorResponse("Provide armed=true/false or action=up/down",400);
+    StaticJsonDocument<256> reply;
+    reply["ok"]=true;reply["id"]=id;
+    reply["armed"]=isArmedGame(id);reply["priority"]=armPriority(id);
+    reply["count"]=armedGames.count();reply["max"]=MultiGameArming::kMaxArmed;
+    sendJson(reply);
+  });
   server.on("/api/select", HTTP_POST, []() {
     if (!authorized()) return;
     StaticJsonDocument<128> doc;
@@ -5806,6 +5860,8 @@ void registerRoutes() {
     uint32_t id = doc["id"] | 0U;
     for (uint8_t i = 0; i < gameCount; ++i) {
       if (games[i].id == id) {
+        if(!isArmedGame(id) && armedGames.count()>=MultiGameArming::kMaxArmed)
+          return errorResponse("Five games already armed; disarm one first",409);
         selectGame(id);
         StaticJsonDocument<64> ok; ok["ok"] = true; sendJson(ok); return;
       }
