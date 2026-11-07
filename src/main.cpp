@@ -2068,12 +2068,15 @@ void tickRestores() {
     // event manager ends it (not a timestamp to compare using subtraction).
     if (!restoring[i] || restoreAt[i] == UINT32_MAX ||
         int32_t(now - restoreAt[i]) < 0) continue;
-    const String body = wledRestoreMapped[i]
-        ? wledMappedRestoreBody(savedState[i],wledTouchedSegments[i])
-        : wledRestoreBody(savedState[i]);
-    const bool restored = !body.isEmpty() &&
-                          postWled(savedWledIp[i].length() ? savedWledIp[i] :
-                                   cfg.wled[i], body);
+    const bool alreadyRestored=wledRestoreMapped[i] &&
+                             wledTouchedSegments[i]==0;
+    const String body=alreadyRestored?String(""):
+        wledRestoreMapped[i]
+          ? wledMappedRestoreBody(savedState[i],wledTouchedSegments[i])
+          : wledRestoreBody(savedState[i]);
+    const bool restored=alreadyRestored || (!body.isEmpty() &&
+        postWled(savedWledIp[i].length() ? savedWledIp[i] :
+                 cfg.wled[i],body));
     if (restored) {
       wledDeviceResult[i] = "Restored";
       markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORED);
@@ -2083,6 +2086,7 @@ void tickRestores() {
       savedWledIp[i] = "";
       restoreRetries[i] = 0;
       wledTouchedSegments[i]=0;wledRestoreMapped[i]=false;
+      wledCurrentSceneSegments[i]=0;wledRestoredSceneSegments[i]=0;
     } else if (++restoreRetries[i] >= 3) {
       wledDeviceResult[i] = "Restore failed";
       markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORE_FAILED);
@@ -2092,6 +2096,7 @@ void tickRestores() {
       savedState[i] = "";
       savedWledIp[i] = "";
       wledTouchedSegments[i]=0;wledRestoreMapped[i]=false;
+      wledCurrentSceneSegments[i]=0;wledRestoredSceneSegments[i]=0;
     } else {
       restoreAt[i] = millis() + 1500UL;
       wledDeviceResult[i] = "Retrying restore";
