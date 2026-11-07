@@ -37,7 +37,10 @@ inline bool target(bool mappingEnabled,uint32_t packed,uint8_t id,
 inline uint32_t zoneColor(Role zone,uint8_t eventType,
                           uint32_t triggeringColor,uint32_t homeRgb,
                           uint32_t awayRgb){
-  if(zone==NEUTRAL)return eventType==2?0xAABBC8UL:0xFFFFFFUL;
+  // A Neutral zone participates for either team. By default it must use
+  // the triggering team's NHL color, not a forced white/gray accent.
+  // WledScenePolicy::kWhite remains an explicit per-scene override.
+  if(zone==NEUTRAL)return triggeringColor;
   if(eventType>=3 && eventType<=5){
     if(zone==HOME)return homeRgb;
     if(zone==AWAY)return awayRgb;
