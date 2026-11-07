@@ -205,6 +205,7 @@ uint32_t selectedGameId = 0;
 MultiGameArming::Armed armedGames;
 MultiGameArming::Queue wledPriorityQueue;
 uint32_t wledActiveGameId=0;
+uint32_t wledDispatchGameId=0; // Event-specific WLED home/away colors.
 uint32_t wledDeviceGameOwner[MAX_WLED]={};
 uint32_t wledPpStoppedIds[MultiGameArming::kMaxArmed]={};
 uint32_t wledQueuedDrops=0;
@@ -835,10 +836,13 @@ void markPpRearEvent(uint32_t id, const String &team) {
   }
 }
 void celebrate(uint32_t color,uint32_t eventSequence=0,
-               uint8_t scorerSide=WledZonePolicy::kUnknownSide);
+               uint8_t scorerSide=WledZonePolicy::kUnknownSide,uint32_t gameId=0);
 bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
                     uint32_t eventSequence=0,
-                    uint8_t scorerSide=WledZonePolicy::kUnknownSide);
+                    uint8_t scorerSide=WledZonePolicy::kUnknownSide,
+                    uint32_t gameId=0);
+bool queueArmedWledEvent(CelebrationEngine::Event event,uint32_t color,
+                    uint32_t seq,uint8_t side,uint32_t gameId);
 
 // Display event overlays share the NHL observation that produced the
 // WLED/rear RGB celebration. They never create a second score trigger.
@@ -931,11 +935,12 @@ void detectRearGoalChanges() {
         else if (!cfg.rearLedEnabled || !cfg.rearGoal)
           entry.rear = GameEventLog::Rear::NOT_ENABLED;
         // WLED is driven only by the armed game and only by allowed teams.
-        const bool armedForGoal = g.id == selectedGameId && haveBaseline &&
+        const bool armedForGoal = isArmedGame(g.id) &&
             (side == 0 ? (cfg.mode == 1 || cfg.mode == 3)
                        : (cfg.mode == 2 || cfg.mode == 3));
         if (armedForGoal) celebrate(teamRgb(scorer),entry.sequence,
-                  side==0?WledZonePolicy::kHomeSide:WledZonePolicy::kAwaySide);
+                  side==0?WledZonePolicy::kHomeSide:WledZonePolicy::kAwaySide,
+                  g.id);
         else entry.audio=GameEventLog::Audio::NOT_ARMED;
         // Start the internal LED flash AFTER all WLED network requests so
         // multi-device snapshots don't consume its 2–12s animation window.
@@ -1000,12 +1005,8 @@ void observePowerPlayEvents() {
       const uint32_t seq = addGameEvent(
           g, GameEventLog::Type::POWER_PLAY_END, team, 0).sequence;
       queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_END, team, seq, true);
-      if(g.id==selectedGameId){
-        armedPpLogSeq=0;
-        // Previously only the overlay/event log knew the PP had ended.
-        if(wledActiveEvent==CelebrationEngine::Event::POWER_PLAY)
-          scheduleWledRestoreAll();
-      }
+      if(g.id==selectedGameId)armedPpLogSeq=0;
+      // Scheduler hands off to another armed PP without stopping its lights.
     }
     if (change.started) {
       const String &team = change.started == 1 ? g.home : g.away;
@@ -1022,11 +1023,13 @@ void observePowerPlayEvents() {
   }
 }
 
-Game *selectedGame() {
-  for (uint8_t i = 0; i < gameCount; ++i)
-    if (games[i].id == selectedGameId) return &games[i];
+Game *gameById(uint32_t id){
+  if(!id)return nullptr;
+  for(uint8_t i=0;i<gameCount;++i)if(games[i].id==id)return &games[i];
   return nullptr;
 }
+Game *selectedGame(){return gameById(selectedGameId);}
+Game *wledSceneGame(){return gameById(wledDispatchGameId);}
 // Same fallback for the preview API and web UI; never default both sides to UTA.
 Game *testMatchup() {
   Game *g = selectedGame();
@@ -2173,7 +2176,7 @@ bool prepareWledDdp(uint8_t slot,CelebrationEngine::Event event,
   }
   // DDP can only restore a whole controller. Different zone durations
   // need native JSON's individually targeted restoration instead.
-  const Game *game=selectedGame();
+  const Game *game=wledSceneGame();
   const uint32_t home=game?teamRgb(game->home):color;
   const uint32_t away=game?teamRgb(game->away):color;
   uint32_t total=0;
@@ -2327,7 +2330,7 @@ String wledEffectBody(const String &snapshot,
   JsonArray segments=command.createNestedArray("seg");
   JsonArray current=state["seg"].as<JsonArray>();
   uint8_t emitted=0;
-  const Game *game=selectedGame();
+  const Game *game=wledSceneGame();
   const uint32_t homeRgb=game?teamRgb(game->home):color;
   const uint32_t awayRgb=game?teamRgb(game->away):color;
   for(uint8_t j=0;j<current.size() &&
@@ -2430,6 +2433,7 @@ void scheduleWledRestoreAll() {
     }
   }
   wledActiveEvent = CelebrationEngine::Event::NONE;
+  wledActiveGameId=0;
   wledEventDuration = 0;
   wledPpTestUntil = 0;
   queuedWledEvent = CelebrationEngine::Event::NONE;
@@ -2457,6 +2461,7 @@ void tickRestores() {
       wledDeviceResult[i] = "Restored";
       markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORED);
       wledEventOwner[i] = 0;
+      wledDeviceGameOwner[i]=0;
       restoring[i] = false;
       savedState[i] = "";
       savedWledIp[i] = "";
@@ -2471,6 +2476,7 @@ void tickRestores() {
       }
       markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORE_FAILED);
       wledEventOwner[i] = 0;
+      wledDeviceGameOwner[i]=0;
       Serial.printf("[WLED] controller %u restore failed after 3 tries\n", i + 1);
       restoring[i] = false;
       savedState[i] = "";
@@ -2486,7 +2492,9 @@ void tickRestores() {
 }
 
 bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
-                    uint32_t eventSequence,uint8_t scorerSide) {
+                    uint32_t eventSequence,uint8_t scorerSide,uint32_t gameId) {
+  if(gameId&&!isArmedGame(gameId))return false;
+  wledDispatchGameId=gameId?gameId:selectedGameId;
   if (event == CelebrationEngine::Event::NONE) {
     scheduleWledRestoreAll();
     return false;
@@ -2578,6 +2586,7 @@ bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
           if(candidate.durationMs>longestSceneMs)
             longestSceneMs=candidate.durationMs;
           wledDeviceResult[i]="DDP streaming";
+          wledDeviceGameOwner[i]=gameId;
           markWledEvent(eventSequence,i,GameEventLog::Wled::ACCEPTED,true);
           ++successful;
           continue;
@@ -2610,6 +2619,7 @@ bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
       // All devices share a single clock; PP has no duration until it ends.
       restoreAt[i] = UINT32_MAX;
       wledDeviceResult[i] = "Playing";
+      wledDeviceGameOwner[i]=gameId;
       markWledEvent(eventSequence, i, GameEventLog::Wled::ACCEPTED, true);
       ++successful;
     } else {
@@ -2624,10 +2634,12 @@ bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
   }
   if (!successful) {
     wledActiveEvent = CelebrationEngine::Event::NONE;
+    wledActiveGameId=0;
     wledEventDuration = 0;
     return false;
   }
   wledActiveEvent = event;
+  wledActiveGameId=gameId;
   wledEventColor = color;
   wledEventSide=scorerSide;
   wledEventStart = commonStart;
