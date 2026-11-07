@@ -206,6 +206,11 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 .arena-team-label strong{display:block;font-size:21px;font-weight:900;letter-spacing:.02em;color:#fff}
 .arena-score{font-size:clamp(31px,5vw,50px);font-weight:950;letter-spacing:-.09em;text-align:center;white-space:nowrap;font-variant-numeric:tabular-nums;color:#f3fafc;text-shadow:0 0 20px #9edfe62d}
 .tab.has-dirty:after{content:"";width:7px;height:7px;background:#fbd18b;border-radius:50%;margin-left:4px}
+.arena-workflow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:14px}
+.arena-workflow>div{padding:9px 10px;background:#071925bb;border:1px solid #345367;border-radius:8px;display:flex;flex-direction:column;gap:2px}
+.arena-workflow b{font-size:11px;letter-spacing:.06em;color:#83dddf}
+.arena-workflow span{font-size:11px;color:#b2cad3}
+@media(max-width:650px){.arena-workflow{grid-template-columns:1fr}.arena-workflow>div{flex-direction:row;gap:12px}}
 @media(max-width:650px){
  .arena-teams{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:5px;padding:17px 10px}
  .arena-team{flex-direction:column;gap:5px;text-align:center}
@@ -238,7 +243,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <div class="rail-note rail-footer"><span class="kicker">LOCAL DEVICE</span><p class="small">Changes stay on this GameDay controller. No cloud account required.</p></div>
 </nav>
 <section id="dashboard" class="panel active">
-<div class="section-intro"><div class="eyebrow">LIVE CONTROL CENTER</div><h2>Your game day at a glance</h2><p>Scores, favorites and celebrations—without changing what your lights are following.</p></div>
+<div class="section-intro"><div class="eyebrow">THE ARENA AT A GLANCE</div><h2>Your game day, under control</h2><p>See what’s happening, choose the game driving your lights and launch straight into configuration or testing.</p></div>
 <div class="card hero"><div class="kicker">NHL BROADCAST CENTER</div>
 <h2>Today's arena</h2>
 <div class="arena-scoreboard" aria-label="Featured NHL game">
@@ -261,6 +266,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <div class="actions"><button class="primary" data-tab="games">Browse games</button>
 <button data-tab="customize" data-anchor="zone-favorites">Customize</button>
 <button data-tab="lab" data-anchor="lab-full">Run a test</button></div>
+<div class="arena-workflow"><div><b>01 · FOLLOW</b><span>Star any NHL game to track it</span></div><div><b>02 · ARM</b><span>One game controls WLED scoring</span></div><div><b>03 · TEST</b><span>Preview safely in Test Lab</span></div></div>
 </div>
 <div class="card"><h2>Device &amp; network health</h2>
 <div class="stats">
@@ -630,7 +636,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <section id="customize" class="panel" aria-labelledby="customizeTitle">
 <div class="section-intro"><div class="eyebrow">MAKE GAMEDAY YOURS</div>
 <h2 id="customizeTitle">Customize the experience</h2>
-<p>Set what appears on screen, which games matter, and how your connected lights and speaker celebrate. Nothing on this page starts a test.</p></div>
+<p>Change one subsystem at a time: favorites, screen, WLED, sound or local LEDs. Live diagnostics and celebration rehearsals are in Test Lab; custom sound auditioning stays beside the WAV library.</p></div>
 <div class="subnav" aria-label="Customize sections">
 <button type="button" data-jump="zone-favorites">Favorites</button>
 <button type="button" data-jump="zone-screen">Screen</button>
@@ -736,6 +742,7 @@ function mountPortalModules(){
   moveCard("bin","mount-maintenance");
   moveCard("reboot","mount-maintenance");
   moveCard("apName","mount-connection");
+  moveCard("deviceIp","mount-connection"); // detailed runtime health belongs in Device
 
   // The former "Celebration preferences" card mixed WLED gain, horn enable,
   // screen inversion and the admin password. Split it into purposeful cards.
