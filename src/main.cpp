@@ -2280,9 +2280,10 @@ void tickRestores() {
         wledRestoreMapped[i]
           ? wledMappedRestoreBody(savedState[i],wledTouchedSegments[i])
           : wledRestoreBody(savedState[i]);
-    const bool restored=alreadyRestored || (!body.isEmpty() &&
+    const bool ddpReleased=releaseWledDdp(i);
+    const bool restored=ddpReleased && (alreadyRestored || (!body.isEmpty() &&
         postWled(savedWledIp[i].length() ? savedWledIp[i] :
-                 cfg.wled[i],body));
+                 cfg.wled[i],body)));
     if (restored) {
       wledDeviceResult[i] = "Restored";
       markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORED);
@@ -2295,6 +2296,10 @@ void tickRestores() {
       wledCurrentSceneSegments[i]=0;wledRestoredSceneSegments[i]=0;
     } else if (++restoreRetries[i] >= 3) {
       wledDeviceResult[i] = "Restore failed";
+      if(wledDdp[i].active){
+        wledDdp[i].active=false; // stop sending; WLED realtime eventually times out
+        wledDdp[i].status="DDP release/restore failed; check WLED";
+      }
       markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::RESTORE_FAILED);
       wledEventOwner[i] = 0;
       Serial.printf("[WLED] controller %u restore failed after 3 tries\n", i + 1);
@@ -2372,8 +2377,48 @@ bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
     if (wledEventOwner[i] && wledEventOwner[i] != eventSequence)
       markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::SUPERSEDED);
     wledEventOwner[i] = eventSequence;
+    // DDP realtime must relinquish ownership before a queued NHL event
+    // attempts native JSON or a new stream on this same controller.
+    if(wledDdp[i].active && !releaseWledDdp(i)){
+      restoreAt[i]=millis();
+      wledDeviceResult[i]="DDP release pending; effect skipped";
+      markWledEvent(eventSequence,i,GameEventLog::Wled::COMMAND_FAILED);
+      continue;
+    }
     wledCurrentSceneSegments[i]=0;
     wledRestoredSceneSegments[i]=0;
+    // Attempt DDP only for verified, fully dedicated controllers. Any
+    // range conflict, mixed Home/Away goal, invalid count, RGBW controller
+    // or concurrent-stream limit falls back to the original 8C JSON path.
+    if(cfg.wledDdpEnabled[i] && cfg.wledZoneEnabled[i]){
+      WledDdpSession candidate;
+      if(prepareWledDdp(i,event,color,scorerSide,savedState[i],candidate)){
+        wledDdp[i]=candidate;
+        wledDdp[i].active=true;
+        wledDdp[i].started=millis();
+        wledDdp[i].status="DDP streaming";
+        if(sendWledDdpFrame(i,millis())){
+          uint16_t mask=0;
+          for(uint8_t j=0;j<candidate.layout.count;++j)
+            mask|=uint16_t(1U)<<candidate.layout.ranges[j].id;
+          wledTouchedSegments[i]|=mask;
+          wledCurrentSceneSegments[i]=mask;
+          wledRestoreMapped[i]=true;
+          restoring[i]=true;restoreRetries[i]=0;
+          restoreAt[i]=UINT32_MAX;
+          if(candidate.durationMs>longestSceneMs)
+            longestSceneMs=candidate.durationMs;
+          wledDeviceResult[i]="DDP streaming";
+          markWledEvent(eventSequence,i,GameEventLog::Wled::ACCEPTED,true);
+          ++successful;
+          continue;
+        }
+        wledDdp[i].active=false;
+        wledDdp[i].status="DDP UDP unavailable; native JSON fallback";
+        // Best-effort release if an attempted UDP send reached WLED.
+        postWled(cfg.wled[i],"{\"live\":false,\"udpn\":{\"nn\":true}}");
+      }
+    }
     uint16_t changedMask=0;
     const String body=wledEffectBody(savedState[i],event,color,0,
                                      i,scorerSide,changedMask);
@@ -2442,7 +2487,7 @@ void tickWledSceneExpirations(uint32_t now,uint32_t elapsed){
   if(uint32_t(now-lastWledSceneExpiryCheck)<400UL)return;
   lastWledSceneExpiryCheck=now;
   for(uint8_t i=0;i<MAX_WLED;++i){
-    if(!restoring[i] || !wledRestoreMapped[i] ||
+    if(!restoring[i] || wledDdp[i].active || !wledRestoreMapped[i] ||
        !cfg.wledZoneEnabled[i] || !wledCurrentSceneSegments[i])continue;
     uint16_t expired=0;
     for(uint8_t id=0;id<WledZonePolicy::kMaxSegments;++id){
@@ -2494,7 +2539,8 @@ void tickWledCelebrations() {
       if (nextPhase != wledPhase) {
         wledPhase = nextPhase;
         for (uint8_t i = 0; i < MAX_WLED; ++i) {
-          if (!restoring[i] || !wledParticipates(i, wledActiveEvent))
+          if (!restoring[i] || wledDdp[i].active ||
+              !wledParticipates(i, wledActiveEvent))
             continue;
           uint16_t phaseTouched=0;
           const String body=wledEffectBody(savedState[i],wledActiveEvent,
@@ -7087,6 +7133,7 @@ void loop() {
   tickCaseLeds();
 #endif
   tickWledCelebrations();
+  tickWledDdpStreams(); // <=20 FPS/stream, no HTTP in frame path
   tickWledDiscovery();
 
   const uint32_t now = millis();
