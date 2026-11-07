@@ -7,7 +7,7 @@
 // Accepts uncompressed PCM 16-bit mono/stereo at 8–48 kHz and performs
 // bounded linear resampling to the existing 48kHz ES8311 I2S output.
 namespace S3WavPolicy {
-constexpr uint8_t kSlots=3;
+constexpr uint8_t kSlots=4;
 constexpr uint32_t kMaxBytes=768UL*1024UL;
 constexpr uint32_t kMaxDurationMs=10000UL;
 constexpr uint32_t kMaxHeaderScan=4096UL;
