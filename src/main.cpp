@@ -222,7 +222,7 @@ bool wledRestoreMapped[MAX_WLED] = {};
 struct WledDdpSession {
   bool active=false,manual=false;
   uint8_t sequence=0,fps=WledDdpPolicy::kDefaultFps;
-  uint32_t started=0,lastFrame=0,lastGoodFrame=0,frames=0,durationMs=0;
+  uint32_t started=0,lastFrame=0,lastGoodFrame=0,frames=0,packets=0,durationMs=0;
   CelebrationEngine::Event event=CelebrationEngine::Event::NONE;
   WledDdpPolicy::Layout layout;
   WledDdpPolicy::Style styles[WledDdpPolicy::kMaxRanges];
@@ -1967,7 +1967,7 @@ bool prepareWledDdp(uint8_t slot,CelebrationEngine::Event event,
     wledDdp[slot].status=info.live?
       "Native JSON (WLED already in realtime mode)":
       info.rgbw?"Native JSON (RGBW unsupported)":
-                 "Native JSON (over 300 LEDs)";
+                 "Native JSON (over "+String(WledDdpPolicy::kMaxPixels)+" LEDs)";
     return false;
   }
   DynamicJsonDocument filter(384);
@@ -2070,17 +2070,24 @@ bool sendWledDdpFrame(uint8_t slot,uint32_t now){
        elapsed>=session.durationMs/3UL)
       rendered[j].fx=28;
   }
-  size_t bytes=0;
-  if(!WledDdpPolicy::frame(session.layout,rendered,elapsed,
-              session.sequence++,wledDdpPacket,sizeof(wledDdpPacket),bytes))
-    return false;
   IPAddress target;
   if(!target.fromString(cfg.wled[slot]) || !validWledLocalIp(target))
     return false;
-  if(!wledDdpUdp.beginPacket(target,WledDdpPolicy::kPort))return false;
-  const bool written=wledDdpUdp.write(wledDdpPacket,bytes)==bytes;
-  const bool sent=wledDdpUdp.endPacket()==1;
-  if(!written||!sent)return false;
+  // One complete logical frame: up to 480 RGB pixels per UDP datagram.
+  // DDP byte offsets are per chunk; only the final packet sets PUSH.
+  // Keep memory bounded to a single 1450-byte packet buffer.
+  for(uint16_t first=0;first<session.layout.pixels;
+      first=uint16_t(first+WledDdpPolicy::kChunkPixels)){
+    size_t bytes=0;
+    if(!WledDdpPolicy::frameChunk(session.layout,rendered,elapsed,
+            session.sequence++,first,wledDdpPacket,sizeof(wledDdpPacket),
+            bytes))return false;
+    if(!wledDdpUdp.beginPacket(target,WledDdpPolicy::kPort))return false;
+    const bool written=wledDdpUdp.write(wledDdpPacket,bytes)==bytes;
+    const bool sent=wledDdpUdp.endPacket()==1;
+    if(!written||!sent)return false;
+    ++session.packets;
+  }
   session.lastFrame=now;session.lastGoodFrame=now;++session.frames;
   return true;
 }
@@ -6809,7 +6816,7 @@ void registerRoutes() {
     if(input.length()!=1 || input[0]<'0' || input[0]>'7')
       return errorResponse("Select a WLED slot 0–7",400);
     const uint8_t slot=uint8_t(input[0]-'0');
-    StaticJsonDocument<440> result;
+    StaticJsonDocument<512> result;
     result["slot"]=slot;
     result["configured"]=!cfg.wled[slot].isEmpty();
     result["enabled"]=cfg.wledDdpEnabled[slot];
@@ -6817,7 +6824,10 @@ void registerRoutes() {
     result["running"]=wledDdp[slot].active;
     result["manual"]=wledDdp[slot].manual;
     result["frames"]=wledDdp[slot].frames;
+    result["packets"]=wledDdp[slot].packets;
     result["pixels"]=wledDdp[slot].layout.pixels;
+    result["chunksPerFrame"]=WledDdpPolicy::packetCount(wledDdp[slot].layout.pixels);
+    result["pixelsPerChunk"]=WledDdpPolicy::kChunkPixels;
     result["mode"]=wledDdp[slot].status;
     result["fullControllerRequired"]=true;
     result["maxPixels"]=WledDdpPolicy::kMaxPixels;
