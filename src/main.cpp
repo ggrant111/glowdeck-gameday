@@ -2685,14 +2685,73 @@ bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
   return true;
 }
 
-uint8_t currentWledPowerPlay(uint32_t &color) {
-  if (!cfg.wledPP || !selectedGameId) return 0;
-  Game *g = selectedGame();
-  if (!g || !(g->state == "LIVE" || g->state == "CRIT") ||
-      g->intermission || !g->ppDataKnown || !g->ppSide ||
-      uint32_t(millis() - g->ppUpdatedAt) >= 80000UL) return 0;
-  color = teamRgb(g->ppSide == 1 ? g->home : g->away);
-  return g->ppSide;
+// PP ownership is game-ID based. The highest user-ranked eligible game
+// controls shared WLED outputs; stopping one PP never ends another's pulse.
+bool wledPpSuppressed(uint32_t gameId){
+  for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i){
+    if(wledPpStoppedIds[i]!=gameId)continue;
+    PowerPlayLogPolicy::Watch *watch=getPowerPlayLogWatch(gameId);
+    const Game *g=gameById(gameId);
+    if(!isArmedGame(gameId)||!g ||
+       !CelebrationEngine::isLive(g->state.c_str()) ||
+       (watch&&watch->initialized&&watch->side==0)){
+      wledPpStoppedIds[i]=0;return false;
+    }
+    return true;
+  }
+  return false;
+}
+void suppressArmedPowerPlays(){
+  for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i){
+    const uint32_t id=armedGames.ids[i];
+    const Game *g=gameById(id);
+    if(id && ((g && CelebrationEngine::isLive(g->state.c_str()) &&
+         g->ppDataKnown && g->ppSide) || id==wledActiveGameId &&
+         wledActiveEvent==CelebrationEngine::Event::POWER_PLAY))
+      wledPpStoppedIds[i]=id;
+  }
+}
+uint8_t currentWledPowerPlay(uint32_t &color,uint32_t &gameId,
+                             uint32_t &sequence) {
+  gameId=0;sequence=0;
+  if(!cfg.wledPP)return 0;
+  for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i){
+    const Game *g=gameById(armedGames.ids[i]);
+    if(!g || !CelebrationEngine::isLive(g->state.c_str()) ||
+       g->intermission || !g->ppDataKnown || !g->ppSide ||
+       uint32_t(millis()-g->ppUpdatedAt)>=80000UL ||
+       wledPpSuppressed(g->id))continue;
+    color=teamRgb(g->ppSide==1?g->home:g->away);
+    gameId=g->id;
+    sequence=(g->id==selectedGameId)?armedPpLogSeq:0;
+    return g->ppSide;
+  }
+  return 0;
+}
+
+// The shared physical WLED channel has one owner at a time. Requests are
+// bounded, ordered GOAL > FINAL > GAME_START > PP, then game rank (1..5).
+// The second simultaneous goal queues rather than destroying the first.
+bool queueArmedWledEvent(CelebrationEngine::Event event,uint32_t color,
+                         uint32_t sequence,uint8_t side,uint32_t gameId){
+  if(!gameId || !isArmedGame(gameId) || !wledEligibleCount(event))
+    return false;
+  MultiGameArming::Request item;
+  item.event=event;item.gameId=gameId;item.color=color;
+  item.sequence=sequence;item.side=side;
+  const bool higher=MultiGameArming::priority(event)>
+      MultiGameArming::priority(wledActiveEvent);
+  if(wledActiveEvent==CelebrationEngine::Event::NONE || higher ||
+     wledActiveEvent==CelebrationEngine::Event::POWER_PLAY) {
+    if(startWledEvent(event,color,sequence,side,gameId))return true;
+  }
+  if(!wledPriorityQueue.add(item,armedGames)){
+    ++wledQueuedDrops;return false;
+  }
+  for(uint8_t i=0;i<MAX_WLED;++i)
+    if(wledParticipates(i,event))
+      markWledEvent(sequence,i,GameEventLog::Wled::PENDING);
+  return true;
 }
 
 // Expire individual customized scene zones early without restoring or
