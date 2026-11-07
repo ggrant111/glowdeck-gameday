@@ -90,6 +90,11 @@ jobs:
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_live_carousel.cpp -o /tmp/glowdeck-live-carousel-test
           /tmp/glowdeck-live-carousel-test
+      - name: Test five-game arming, event priority and per-controller WLED ownership
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_multi_game_arming.cpp -o /tmp/gameday-multi-arm
+          /tmp/gameday-multi-arm
+          python tests/test_multi_game_integration_contract.py
       - name: Test pause/resume carousel identity across NHL reordering
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_carousel_hold.cpp -o /tmp/glowdeck-carousel-hold
