@@ -54,8 +54,9 @@ assert "xTaskCreatePinnedToCore" in audio
 assert "ulTaskNotifyTake(pdTRUE,portMAX_DELAY)" in audio
 assert "vTaskDelay(pdMS_TO_TICKS(35))" in audio
 assert "i2s_zero_dma_buffer(I2S_NUM_0)" in audio
-assert "kVolumePercent=50" in policy
-assert "{0x32,0x7F}" in audio
+assert "kVolumePercent=70" in policy
+assert "kMaxVolumePercent=80" in policy
+assert "{0x32,S3HornPolicy::codecVolumeRegister(S3HornPolicy::kVolumePercent)}" in audio
 assert "S3HornPolicy::canPlay(" in audio
 assert "bool streamError_" not in audio
 assert "ES8311" in audio
