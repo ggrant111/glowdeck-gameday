@@ -653,7 +653,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <form id="s3SoundUploadForm">
 <label for="s3SoundUploadSlot">Upload into library slot</label>
 <select id="s3SoundUploadSlot" required>
-<option value="1">Slot 1</option><option value="2">Slot 2</option><option value="3">Slot 3</option>
+<option value="1">Slot 1</option><option value="2">Slot 2</option><option value="3">Slot 3</option><option value="4">Slot 4</option>
 </select>
 <label for="s3SoundUploadFile">Custom WAV file (max 768 KB)</label>
 <input id="s3SoundUploadFile" type="file" name="sound" accept=".wav,audio/wav,audio/x-wav" required>
