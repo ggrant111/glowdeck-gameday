@@ -2159,12 +2159,15 @@ bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
 
   const uint32_t commonStart = millis();
   uint8_t successful = 0;
+  uint32_t longestSceneMs=0;
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     if (!prepared[i]) continue;
     // The prior event might have been preempted before its own restore.
     if (wledEventOwner[i] && wledEventOwner[i] != eventSequence)
       markWledEvent(wledEventOwner[i], i, GameEventLog::Wled::SUPERSEDED);
     wledEventOwner[i] = eventSequence;
+    wledCurrentSceneSegments[i]=0;
+    wledRestoredSceneSegments[i]=0;
     uint16_t changedMask=0;
     const String body=wledEffectBody(savedState[i],event,color,0,
                                      i,scorerSide,changedMask);
@@ -2179,6 +2182,9 @@ bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
     }
     wledTouchedSegments[i]|=changedMask;
     if (!body.isEmpty() && postWled(cfg.wled[i], body)) {
+      wledCurrentSceneSegments[i]=changedMask;
+      const uint32_t duration=wledSceneMaxDuration(i,event,changedMask);
+      if(duration>longestSceneMs)longestSceneMs=duration;
       restoring[i] = true;
       restoreRetries[i] = 0;
       // All devices share a single clock; PP has no duration until it ends.
@@ -2205,7 +2211,7 @@ bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
   wledEventColor = color;
   wledEventSide=scorerSide;
   wledEventStart = commonStart;
-  wledEventDuration = CelebrationEngine::duration(event, cfg.seconds);
+  wledEventDuration = longestSceneMs; // longest participating scene sets shared WLED end
   wledPhase = 0;
   Serial.printf("[WLED] %s on %u/%u selected controllers, heap=%u\n",
                 CelebrationEngine::label(event), successful,
@@ -2221,6 +2227,41 @@ uint8_t currentWledPowerPlay(uint32_t &color) {
       uint32_t(millis() - g->ppUpdatedAt) >= 80000UL) return 0;
   color = teamRgb(g->ppSide == 1 ? g->home : g->away);
   return g->ppSide;
+}
+
+// Expire individual customized scene zones early without restoring or
+// changing unrelated segments. A failed targeted restore is retried at the
+// next bounded tick; the normal end-of-event restore remains a fallback.
+void tickWledSceneExpirations(uint32_t now,uint32_t elapsed){
+  if(uint32_t(now-lastWledSceneExpiryCheck)<400UL)return;
+  lastWledSceneExpiryCheck=now;
+  for(uint8_t i=0;i<MAX_WLED;++i){
+    if(!restoring[i] || !wledRestoreMapped[i] ||
+       !cfg.wledZoneEnabled[i] || !wledCurrentSceneSegments[i])continue;
+    uint16_t expired=0;
+    for(uint8_t id=0;id<WledZonePolicy::kMaxSegments;++id){
+      const uint16_t bit=uint16_t(1U)<<id;
+      if(!(wledCurrentSceneSegments[i]&bit) ||
+         (wledRestoredSceneSegments[i]&bit))continue;
+      const WledZonePolicy::Role zone=
+          WledZonePolicy::role(cfg.wledZoneMap[i],id);
+      const uint32_t duration=wledSceneDuration(i,wledActiveEvent,zone);
+      if(duration>0 && elapsed>=duration)
+        expired|=bit;
+    }
+    if(!expired)continue;
+    const String body=wledMappedRestoreBody(savedState[i],expired);
+    if(!body.isEmpty() && postWled(cfg.wled[i],body)){
+      wledRestoredSceneSegments[i]|=expired;
+      wledCurrentSceneSegments[i]&=~expired;
+      wledTouchedSegments[i]&=~expired;
+      wledDeviceResult[i]="Scene zone finished";
+    }else{
+      wledDeviceResult[i]="Scene zone restore retrying";
+      Serial.printf("[WLED Scene] slot %u early restore retry mask=%04X\n",
+                    unsigned(i),unsigned(expired));
+    }
+  }
 }
 
 void tickWledCelebrations() {
@@ -2241,6 +2282,7 @@ void tickWledCelebrations() {
       CelebrationEngine::temporary(wledActiveEvent)) {
     const uint32_t elapsed = uint32_t(now - wledEventStart);
     if (elapsed < wledEventDuration) {
+      tickWledSceneExpirations(now,elapsed);
       const uint8_t nextPhase = CelebrationEngine::phase(
           wledActiveEvent, elapsed, wledEventDuration, cfg.wledGoalStyle);
       if (nextPhase != wledPhase) {
@@ -2250,8 +2292,10 @@ void tickWledCelebrations() {
             continue;
           uint16_t phaseTouched=0;
           const String body=wledEffectBody(savedState[i],wledActiveEvent,
-                 wledEventColor,wledPhase,i,wledEventSide,phaseTouched);
+                 wledEventColor,wledPhase,i,wledEventSide,phaseTouched,
+                 wledRestoredSceneSegments[i]);
           wledTouchedSegments[i]|=phaseTouched;
+          wledCurrentSceneSegments[i]|=phaseTouched;
           if (!body.isEmpty() && postWled(cfg.wled[i], body))
             wledDeviceResult[i] = "Playing";
           else {
