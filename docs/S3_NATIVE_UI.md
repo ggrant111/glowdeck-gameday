@@ -109,7 +109,7 @@ checking the screen on the physical Waveshare panel.
    show through any part of the Stats page, including rounded corners.
 2. Repeat from a live score slide, a four-game summary and a GOAL overlay.
    Navigate back and forth multiple times and leave stats loading/updating.
-3. Ensure the official 80px logos, text, star fills and rounded button cards
+3. Ensure the official 96px Arena Live logos, text, star fills and rounded button cards
    remain visible and use the correct team colors.
 4. Watch a live game clock/score update and confirm only the readout changes,
    while logos and navigation stay stable without flickering.
@@ -131,9 +131,7 @@ The **logo URLs are sourced from the NHL scoreboard JSON** during the build,
 preferring `darkLogo` and falling back to the official
 `assets.nhle.com/logos/nhl/svg/{TEAM}_dark.svg` endpoint. CairoSVG converts
 SVG once at build time; the image generator packs all 32 clubs into flash.
-The new S3 build uses **80×80 source assets** and sizes them appropriately
-(80px scoreboard, 60px details, 30px game lists, 17px standings, 72px
-celebration card, 56px GIF side rail). The CYD retains its original 56px
+The S3 build uses **96×96 source assets**, drawn natively at 96px on the Arena Live scoreboard, and downscaled appropriately for the Phase 5 layouts (80px fallback scoreboard, 60px details, 30px game lists, 17px standings, 72px celebration card, 56px GIF side rail). The CYD retains its original 56px
 assets and unchanged direct-panel renderer.
 
 No extra network requests, SVG rendering libraries, Wi-Fi dependency, user
