@@ -24,8 +24,19 @@ int main() {
   hold.toggle(0); // No game cannot be pinned.
   assert(!hold.paused);
   hold.toggle(100);
-  assert(hold.index(newOrder, 0) == 255); // Missing game resets in caller.
-  hold.reset(); // New local day clears any stale lock.
+  assert(hold.index(newOrder, 0) == 255); // Game temporarily absent.
+  hold.onFeedRefresh(true);
+  assert(hold.paused && hold.gameId==100); // No implicit carousel resume.
+  hold.pin(100); // Goal/PP overlay returns to the ORIGINAL paused game.
+  assert(hold.index(newOrder, 3)==1 && hold.paused);
+  hold.onFeedRefresh(false); // Confirmed new scoreboard date.
+  assert(!hold.paused && hold.gameId==0);
+  hold.pin(200); // Several queued alerts do not change which game is pinned.
+  hold.pin(200);
+  assert(hold.paused && hold.gameId==200);
+  hold.toggle(200); // User explicitly presses Play after event.
+  assert(!hold.paused);
+  hold.reset();
   assert(!hold.paused);
   puts("PASS display-only hold: toggle, navigation, reordering, reset");
 }
