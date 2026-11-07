@@ -90,6 +90,11 @@ jobs:
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_live_carousel.cpp -o /tmp/glowdeck-live-carousel-test
           /tmp/glowdeck-live-carousel-test
+      - name: Test pause/resume carousel identity across NHL reordering
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_carousel_hold.cpp -o /tmp/glowdeck-carousel-hold
+          /tmp/glowdeck-carousel-hold
+          python tests/test_pause_and_pp_restore_contract.py
       - name: Test native S3 480x320 touch geometry and carousel controls
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_native_layout.cpp -o /tmp/glowdeck-s3-native-test
