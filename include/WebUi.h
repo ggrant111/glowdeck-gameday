@@ -291,8 +291,8 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <section id="events" class="panel">
 <div class="section-intro"><div class="eyebrow">ACTIVITY LOG</div><h2>What happened, and what fired</h2><p>League observations and the exact commands sent to your physical lights.</p></div>
 <div class="card"><h2>Game events & light activity</h2>
-<p>See NHL goals, power plays, puck drop and finals, plus whether the <b>CYD's built-in LED</b> and each selected <b>WLED LED strip/controller</b> received a celebration command.</p>
-<p class="small muted">WLED “Command accepted” means the controller acknowledged the HTTP request. It does not independently confirm visible light output. The latest 64 events are retained in memory <b>until the device reboots</b>. No historical events are backfilled.</p>
+<p>Review NHL goals, power plays, puck drops and finals. Check the on-device LED (where supported) and each opted-in WLED controller. This is an event audit, not a Test Lab.</p>
+<p class="small muted">WLED “Command accepted” means the controller acknowledged the HTTP request. It does not independently confirm visible light output. The latest 64 events remain in memory <b>until the device reboots</b>. No historical events are backfilled.</p>
 <div class="row">
 <div><label for="eventCategory">Filter by event</label><select id="eventCategory">
 <option value="all">All events</option><option value="goals">Goals</option>
@@ -334,7 +334,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <p class="small muted" id="favoriteTeamCount">No favorite teams selected.</p>
 <div class="actions"><button class="primary" id="saveFavorites">Save favorite teams</button></div></div>
 <div class="card"><h2>Today's game carousel</h2>
-<p>During live NHL games, the CYD automatically focuses on full-screen live scoreboards and groups other upcoming or finished matches into readable four-game summary slides. When no games are live, it returns to the complete game-and-standings carousel. Swipe to browse or tap a summary row for its matchup details.</p>
+<p>During live NHL games, the GameDay display automatically focuses on full-screen live scoreboards and groups other upcoming or finished matches into readable four-game summary slides. When no games are live, it returns to the complete game-and-standings carousel. Swipe to browse or tap a summary row for its matchup details.</p>
 <div class="stats">
 <div class="stat"><span>Current screen</span><b id="displayGame">—</b></div>
 <div class="stat"><span>Carousel slide</span><b id="displaySlide">—</b></div>
@@ -357,7 +357,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 </select>
 </div><div class="card">
 <h2>On-screen NHL event notifications</h2>
-<p>Choose how widely the CYD reports live action. The screen can show events for every game while the rear LED and WLED continue following their independently selected matchups.</p>
+<p>Choose how widely the GameDay screen reports live action. The screen can show events for every game while the rear LED and WLED continue following their independently selected matchups.</p>
 <label for="displayAllLiveEvents">Show screen alerts for</label>
 <select id="displayAllLiveEvents">
 <option value="true">All live NHL games · recommended</option>
@@ -397,7 +397,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <button id="overlayTestWin">Preview final win</button>
 <button id="overlayTestLoss">Preview final loss</button>
 <button id="overlayStop">Dismiss overlay</button></div>
-<p class="small muted">These previews affect the CYD screen only. Test them with your WLED devices disconnected if desired.</p>
+<p class="small muted">Screen previews run locally and do not trigger WLED or the speaker.</p>
 <div class="actions"><button id="saveDisplay" class="primary">Save carousel &amp; alert settings</button></div>
 </div>
 <div class="hint">Carousel browsing does not arm WLED. Use the stars to follow rear RGB alerts, or Arm in Live games for WLED triggers.</div>
@@ -466,7 +466,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <div class="hint">The armed game is automatically followed. You can also star every other game on today's NHL schedule (up to 20 total games). Follow settings reset when the NHL date changes. Starring does not arm WLED.</div>
 </div>
 <div class="card"><h2>Follow today's NHL games</h2>
-<p>Tap ★ on the CYD scoreboard, game details, or the device's game list—or select games below. Followed matchups trigger their rear RGB and priority screen celebrations independently of WLED.</p>
+<p>Tap ★ on the GameDay scoreboard, game details, or the device's game list—or select games below. Following enables eligible on-device LED and priority screen celebrations independently of the armed WLED game.</p>
 <div id="rearFollowedList"></div>
 </div>
 <div class="card"><h2>Verify matchup colors</h2>
@@ -513,7 +513,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <section id="settings" class="panel">
 <div class="section-intro"><div class="eyebrow">DEVICE SETTINGS</div><h2>Network &amp; preferences</h2><p>Connectivity, local device options, horn sounds and security settings.</p></div>
 <div class="twocol">
-<div class="card"><h2>Wi-Fi</h2><p>Connect the CYD to the network used by your WLED controllers.</p>
+<div class="card"><h2>Wi-Fi</h2><p>Connect this GameDay device to the Wi-Fi network used by your WLED controllers.</p>
 <label for="ssid">Network name (SSID)</label><input id="ssid" autocomplete="off" maxlength="32" placeholder="Home Wi-Fi">
 <div class="actions"><button id="scanWifi">Find nearby networks</button></div>
 <select id="networks" aria-label="Found Wi-Fi networks"><option value="">Select a scanned network</option></select>
@@ -619,11 +619,11 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <section id="firmware" class="panel">
 <div class="section-intro"><div class="eyebrow">FIRMWARE</div><h2>Keep GameDay current</h2><p>Install a verified firmware.bin without losing saved Wi-Fi, favorites or event settings.</p></div>
 <div class="card"><h2>Firmware update</h2>
-<p>Upload a compiled PlatformIO <code>firmware.bin</code> from this project. Keep the CYD powered until it reboots.</p>
+<p>Upload a compiled PlatformIO <code>firmware.bin</code> from this project. Keep the controller powered until it finishes and reboots.</p>
 <form id="uploadForm"><label for="bin">Compiled firmware (.bin)</label><input id="bin" name="firmware" type="file" accept=".bin" required>
 <div class="actions"><button class="primary" type="submit">Upload and reboot</button></div></form>
 <p class="small muted">Initial installation still requires USB. This update control works only when you use the project's OTA-capable partition layout.</p></div>
-<div class="card"><h2>Troubleshooting</h2><p>For boot loops, first flash the basic diagnostic firmware in the documentation. Touch calibration can be started from the CYD's SETUP screen. Watch serial output at 115200 baud.</p>
+<div class="card"><h2>Troubleshooting</h2><p>For boot loops, first flash the basic diagnostic firmware in the documentation. Use the device's setup diagnostics if touch stops responding. Watch serial output at 115200 baud.</p>
 <div class="actions"><button id="reboot">Restart device</button></div></div>
 </section>
 <section id="customize" class="panel" aria-labelledby="customizeTitle">
@@ -934,7 +934,8 @@ function createEventElement(row){
   score.style.margin="8px 0";
   card.append(score);
   const builtIn=document.createElement("div");builtIn.className="small";
-  builtIn.textContent="CYD internal LED: "+(row.rear||"Not applicable");
+  builtIn.textContent=(currentStatus?.audioSupported?"On-device LED":"CYD rear LED")+
+    ": "+(row.rear||"Not applicable");
   card.append(builtIn);
   const devices=document.createElement("div");devices.className="small muted";
   devices.style.marginTop="5px";
@@ -1865,14 +1866,14 @@ $("goalGifRemove").onclick=()=>perform(async()=>{
 });
 $("uploadForm").onsubmit=e=>{e.preventDefault();perform(async()=>{
   const file=$("bin").files[0];if(!file)return;
-  if(!confirm("Flash "+file.name+" and restart the CYD?"))return;
+  if(!confirm("Flash "+file.name+" and restart GameDay?"))return;
   const data=new FormData();data.append("firmware",file);
   const res=await fetch("/api/update",{method:"POST",body:data});
   const text=await res.text();if(!res.ok)throw new Error(text);
   message(text);
 })};
 $("reboot").onclick=()=>perform(async()=>{
-  if(!confirm("Restart the CYD now?"))return;
+  if(!confirm("Restart this GameDay device now?"))return;
   await api("/api/reboot",{method:"POST"});message("Restart requested");
 });
 (async()=>{
