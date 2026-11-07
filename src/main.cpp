@@ -243,7 +243,7 @@ struct WledScanEntry {
   String ip,name,version;
   uint16_t ledCount=0;
   uint8_t maxSegments=0;
-  bool online=false;
+  bool online=false,live=false,rgbw=false;
 };
 WledScanEntry wledScan[WledDiscoveryPolicy::kMaxCandidates];
 String wledScanCandidates[WledDiscoveryPolicy::kMaxCandidates];
@@ -1776,6 +1776,8 @@ bool probeWledInfo(const String &ip,WledScanEntry &out,
   if(out.name.isEmpty())out.name="WLED";
   if(out.name.length()>32)out.name=out.name.substring(0,32);
   out.ledCount=uint16_t(leds);
+  out.live=parsedJson["live"]|false;
+  out.rgbw=parsedJson["leds"]["rgbw"]|false;
   out.maxSegments=uint8_t(constrain((int)(parsedJson["leds"]["maxseg"]|1),1,32));
   return true;
 }
