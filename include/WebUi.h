@@ -1060,6 +1060,17 @@ function createEventElement(row){
   builtIn.textContent=(currentStatus?.audioSupported?"On-device LED":"CYD rear LED")+
     ": "+(row.rear||"Not applicable");
   card.append(builtIn);
+  if(row.type==="Goal" || row.type==="Goal preview"){
+    const sound=document.createElement("div");
+    sound.className="small";
+    sound.style.marginTop="5px";
+    const source=row.audioSource>0?"Custom WAV slot "+row.audioSource:
+      (currentStatus?.audioSupported?"Built-in S3 horn":"CYD tone");
+    sound.textContent="Goal horn: "+(row.audio||"Not recorded on this firmware")+
+      (row.audio&&row.audio!=="Not applicable"?" · "+source:"")+
+      (row.audioFallback?" · selected WAV unavailable, built-in fallback":"");
+    card.append(sound);
+  }
   const devices=document.createElement("div");devices.className="small muted";
   devices.style.marginTop="5px";
   const configured=currentConfig?.wled||[];
@@ -1211,12 +1222,17 @@ function renderStatus(){
   if(s.audioSupported){
     $("hornLabel").textContent="Enable onboard S3 goal horn (ES8311)";
     const gain=Number(s.audioVolume??70);
-    $("hornHelp").textContent="Actual followed/armed goals use the saved S3 speaker volume; preview works even when the horn setting is off.";
+    $("hornHelp").textContent="Live NHL goal horn: "+(s.hornEnabled?"ENABLED":"DISABLED")+
+      " · Active sound: "+(Number(s.audioSelectedSource)>0?
+        "custom WAV slot "+s.audioSelectedSource:"built-in horn")+
+      ". Preview works independently of this checkbox. Save changes before live games.";
     $("s3AudioStatus").textContent=s.audioReady?
       (s.audioPlaying?(s.audioLastClip||"Audio")+" playing · "+gain+"%":
        (s.audioHasPlayed?(s.audioLastStreamOk?"I2S stream finished":"Audio stream incomplete"):"Codec initialized · speaker not yet tested")+
        " · "+gain+"% volume"):
       "Speaker unavailable: "+(s.audioError||"Codec not initialized");
+    if(s.hornEnabled && !s.audioReady)
+      $("s3AudioStatus").textContent+=" · Live goal audio cannot start";
     $("s3AudioPreview").disabled=!s.audioReady||!!s.audioPlaying;
     $("s3AudioTone").disabled=!s.audioReady||!!s.audioPlaying;
     $("s3AudioVolumeApply").disabled=!s.audioReady||!!s.audioPlaying;
