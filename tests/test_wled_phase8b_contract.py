@@ -28,7 +28,7 @@ for key in (
   'if(mapped && !(state["on"]|false))return "";',
   'if(mapped)out["bri"]=cfg.brightness',
   "wledEventSide=scorerSide;",
-  "powerPlaySide=currentWledPowerPlay(powerPlayColor);",
+  "ppSide=currentWledPowerPlay(ppColor,ppGameId,ppSeq);",
   "side==0?WledZonePolicy::kHomeSide:WledZonePolicy::kAwaySide",
   "if(ESP.getFreeHeap()<45000UL)",
 ):
