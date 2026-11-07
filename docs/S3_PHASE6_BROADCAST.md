@@ -113,6 +113,24 @@ applies the user's saved screen-inversion preference. Passing these tests
 does **not** replace inspection of the physical ST7796 panel.
 
 
+## Larger official NHL logos — Arena Live
+
+The Phase 6B.2A hardware review also called for bigger, sharper team marks.
+The logo generator now builds a separate **96×96 transparent NHL SVG raster**
+for S3 (previously 80×80), while the original CYD uses its unchanged 56px
+image size. On Arena Live the away and home logo rectangles are (38,96,96,96)
+and (346,96,96,96). Each centers on its existing diffuse plinth without
+moving the scoreboard, abbreviations or navigation hit zones. Team-primary
+bars are drawn afterward at y=189 so they stay visible. This is a
+**native raster increase**, not a runtime upscale.
+
+The generator still pulls logos from official NHL JSON/CDN at build time, not
+over the network during games. Existing 80/60/30/17px logo locations on
+other S3 pages use the same new 96px asset scaled down, with no change to
+their layout. Regenerate the ignored `include/TeamLogos.h` for a local build
+using `python scripts/generate_logos.py` (requires Pillow and CairoSVG), or
+use the prebuilt CI firmware to avoid local graphics dependencies.
+
 ## Footer alignment fix — armed game slides (November 2026)
 
 A physical Waveshare S3 test showed that page 2/3 shifted its bottom
