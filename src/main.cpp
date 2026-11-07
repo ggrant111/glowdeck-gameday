@@ -209,6 +209,20 @@ CelebrationEngine::Event wledActiveEvent = CelebrationEngine::Event::NONE;
 uint32_t wledEventStart = 0, wledEventColor = 0, wledEventDuration = 0;
 uint8_t wledPhase = 0;
 String wledDeviceResult[MAX_WLED];
+// On-demand WLED discovery. Cached probes are deliberately bounded; no
+// automatic background network sweep or controller activation.
+struct WledScanEntry {
+  String ip,name,version;
+  uint16_t ledCount=0;
+  uint8_t maxSegments=0;
+  bool online=false;
+};
+WledScanEntry wledScan[WledDiscoveryPolicy::kMaxCandidates];
+String wledScanCandidates[WledDiscoveryPolicy::kMaxCandidates];
+uint8_t wledScanTotal=0,wledScanNext=0,wledScanFound=0;
+bool wledScanning=false,wledScanPendingMdns=false,wledScanFinished=false;
+uint32_t wledScanStarted=0,wledLastScanStarted=0;
+String wledScanError;
 String lastArmedGameState;
 uint32_t wledPpTestUntil = 0, wledSuppressPpUntil = 0;
 CelebrationEngine::Event queuedWledEvent = CelebrationEngine::Event::NONE;
@@ -1672,6 +1686,93 @@ String getWledState(const String &ip) {
   // Avoid holding a giant or malformed snapshot in scarce ESP32 RAM.
   if (result.length() < 2 || result.length() > 14000 || result[0] != '{') return "";
   return result;
+}
+
+bool validWledLocalIp(const IPAddress &ip){
+  const IPAddress here=WiFi.localIP(),mask=WiFi.subnetMask();
+  return WiFi.status()==WL_CONNECTED &&
+    WledDiscoveryPolicy::sameSubnet(uint32_t(ip),uint32_t(here),
+                                    uint32_t(mask)) &&
+    ip[0]!=0 && ip[0]!=127 && ip[0]!=224 && ip[0]!=255;
+}
+bool probeWledInfo(const String &ip,WledScanEntry &out,
+                   uint16_t timeoutMs=WledDiscoveryPolicy::kManualProbeTimeoutMs){
+  IPAddress parsed;
+  if(!parsed.fromString(ip) || !validWledLocalIp(parsed))return false;
+  WiFiClient client;
+  HTTPClient http;
+  if(!http.begin(client,"http://"+ip+"/json/info"))return false;
+  http.setConnectTimeout(timeoutMs);
+  http.setTimeout(timeoutMs);
+  const int code=http.GET();
+  if(code!=HTTP_CODE_OK || http.getSize()>4000){
+    http.end();return false;
+  }
+  const String body=http.getString();
+  http.end();
+  if(body.isEmpty()||body.length()>4000)return false;
+  DynamicJsonDocument parsedJson(3072);
+  if(deserializeJson(parsedJson,body))return false;
+  const String brand=parsedJson["brand"]|String("");
+  const String version=parsedJson["ver"]|String("");
+  const uint32_t leds=parsedJson["leds"]["count"]|0UL;
+  if(!WledDiscoveryPolicy::validInfo(brand.c_str(),version.c_str(),leds))
+    return false;
+  out.ip=ip;
+  out.online=true;
+  out.version=version.substring(0,24);
+  out.name=String(parsedJson["name"]|String("WLED"));
+  out.name.trim();
+  if(out.name.isEmpty())out.name="WLED";
+  if(out.name.length()>32)out.name=out.name.substring(0,32);
+  out.ledCount=uint16_t(leds);
+  out.maxSegments=uint8_t(constrain((int)(parsedJson["leds"]["maxseg"]|1),1,32));
+  return true;
+}
+void addWledScanCandidate(const String &ip){
+  if(wledScanTotal>=WledDiscoveryPolicy::kMaxCandidates)return;
+  IPAddress addr;
+  if(!addr.fromString(ip)||!validWledLocalIp(addr))return;
+  for(uint8_t i=0;i<wledScanTotal;++i)
+    if(wledScanCandidates[i]==ip)return;
+  wledScanCandidates[wledScanTotal++]=ip;
+}
+void tickWledDiscovery(){
+  if(!wledScanning || WiFi.status()!=WL_CONNECTED)return;
+  // Avoid colliding with live WLED effects, restoration or an NHL poll.
+  if(wledActiveEvent!=CelebrationEngine::Event::NONE)return;
+  for(uint8_t i=0;i<MAX_WLED;++i)
+    if(restoring[i])return;
+  if(wledScanPendingMdns){
+    wledScanPendingMdns=false;
+    // Existing controller IPs remain visible even when mDNS is unavailable.
+    for(uint8_t i=0;i<MAX_WLED;++i)
+      if(!cfg.wled[i].isEmpty())addWledScanCandidate(cfg.wled[i]);
+    if(mdnsStarted){
+      // WLED advertises _wled._tcp. ESPmDNS queryService performs one
+      // bounded on-demand DNS-SD round; never do this on the main ticker.
+      const int found=MDNS.queryService("wled","tcp");
+      for(int i=0;i<found &&
+          wledScanTotal<WledDiscoveryPolicy::kMaxCandidates;++i)
+        addWledScanCandidate(MDNS.address(i).toString());
+    }else wledScanError="mDNS not connected; checking configured IPs";
+  }
+  if(wledScanNext<wledScanTotal){
+    const uint8_t n=wledScanNext++;
+    WledScanEntry info;
+    info.ip=wledScanCandidates[n];
+    if(!probeWledInfo(info.ip,info,WledDiscoveryPolicy::kScanProbeTimeoutMs)){
+      info.name="Offline or not WLED";
+      info.online=false;
+    }else ++wledScanFound;
+    wledScan[n]=info;
+  }
+  if(wledScanNext>=wledScanTotal){
+    wledScanning=false;
+    wledScanFinished=true;
+    Serial.printf("[WLED] discovery complete: %u verified / %u candidates\n",
+                  unsigned(wledScanFound),unsigned(wledScanTotal));
+  }
 }
 
 void startHorn() {
@@ -5811,6 +5912,69 @@ void registerRoutes() {
     response["hex"] = rgbHex(color);
     sendJson(response);
   });
+  server.on("/api/wled/discovery", HTTP_GET, []() {
+    if(!authorized())return;
+    DynamicJsonDocument doc(2900);
+    doc["scanning"]=wledScanning;
+    doc["complete"]=wledScanFinished;
+    doc["candidateCount"]=wledScanTotal;
+    doc["checked"]=wledScanNext;
+    doc["found"]=wledScanFound;
+    doc["maxSaved"]=MAX_WLED;
+    doc["error"]=wledScanError;
+    JsonArray arr=doc.createNestedArray("devices");
+    for(uint8_t i=0;i<wledScanNext &&
+        i<WledDiscoveryPolicy::kMaxCandidates;++i){
+      const WledScanEntry &p=wledScan[i];
+      JsonObject x=arr.createNestedObject();
+      x["ip"]=p.ip;x["name"]=p.name;x["version"]=p.version;
+      x["online"]=p.online;x["leds"]=p.ledCount;
+      x["maxSegments"]=p.maxSegments;
+      x["savedSlot"]=-1;
+      for(uint8_t j=0;j<MAX_WLED;++j)
+        if(cfg.wled[j]==p.ip){x["savedSlot"]=j;break;}
+    }
+    if(doc.overflowed())return errorResponse("Discovery list too large",503);
+    sendJson(doc);
+  });
+  server.on("/api/wled/discover", HTTP_POST, []() {
+    if(!authorized())return;
+    if(WiFi.status()!=WL_CONNECTED)
+      return errorResponse("Connect GameDay to Wi-Fi before discovering WLED",503);
+    if(wledScanning)return errorResponse("Discovery already running",409);
+    if(wledScanFinished &&
+       uint32_t(millis()-wledLastScanStarted)<WledDiscoveryPolicy::kScanCooldownMs)
+      return errorResponse("Wait 15 seconds before scanning again",429);
+    wledScanTotal=wledScanNext=wledScanFound=0;
+    wledScanError="";
+    wledScanStarted=wledLastScanStarted=millis();
+    wledScanFinished=false;
+    wledScanPendingMdns=true;
+    wledScanning=true;
+    StaticJsonDocument<96> response;
+    response["ok"]=true;response["started"]=true;
+    sendJson(response);
+  });
+  server.on("/api/wled/probe", HTTP_POST, []() {
+    if(!authorized())return;
+    if(wledScanning)return errorResponse("Finish device discovery first",409);
+    StaticJsonDocument<160> request;
+    if(deserializeJson(request,server.arg("plain")))
+      return errorResponse("Invalid WLED probe JSON",400);
+    const String ip=request["ip"]|String("");
+    IPAddress addr;
+    if(!addr.fromString(ip)||!validWledLocalIp(addr))
+      return errorResponse("Use a WLED IPv4 on the GameDay Wi-Fi subnet",400);
+    WledScanEntry info;
+    if(!probeWledInfo(ip,info))
+      return errorResponse("No compatible WLED JSON response at that IP",404);
+    StaticJsonDocument<300> response;
+    response["ok"]=true;
+    response["ip"]=info.ip;response["name"]=info.name;
+    response["version"]=info.version;response["leds"]=info.ledCount;
+    response["maxSegments"]=info.maxSegments;
+    sendJson(response);
+  });
   server.on("/api/wled/preview", HTTP_POST, []() {
     if (!authorized()) return;
     StaticJsonDocument<256> request;
@@ -6152,6 +6316,7 @@ void loop() {
   tickCaseLeds();
 #endif
   tickWledCelebrations();
+  tickWledDiscovery();
 
   const uint32_t now = millis();
   const bool connected = WiFi.status() == WL_CONNECTED;
@@ -6181,6 +6346,7 @@ void loop() {
       mdnsAttempted = true;
       mdnsStarted = MDNS.begin(mdnsName.c_str());
       if (mdnsStarted) MDNS.addService("http", "tcp", 80);
+      // WLED 8A discovery uses this existing responder; no new server.
       needsDraw = true;
       Serial.printf("STA: http://%s/\n", WiFi.localIP().toString().c_str());
     }
