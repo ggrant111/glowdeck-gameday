@@ -6202,7 +6202,8 @@ void registerRoutes() {
     JsonObject segment=command["seg"][0].to<JsonObject>();
     segment["id"]=id;segment["on"]=true;segment["bri"]=110;
     segment["fx"]=0;segment["pal"]=0;
-    JsonArray primary=segment["col"][0].to<JsonArray>();
+    JsonArray cols=segment.createNestedArray("col");
+    JsonArray primary=cols.createNestedArray();
     primary.add(255);primary.add(255);primary.add(255);
     String body;serializeJson(command,body);
     savedState[slot]=original;
