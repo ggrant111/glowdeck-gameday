@@ -7,7 +7,7 @@ log=Path("include/GameEventLog.h").read_text(encoding="utf-8")
 audio=Path("include/S3GoalAudio.h").read_text(encoding="utf-8")
 detect=s.split("void detectRearGoalChanges() {",1)[1].split(
   "// Track PP changes",1)[0]
-assert 'const bool armedForGoal = g.id == selectedGameId' in detect
+assert 'const bool armedForGoal = isArmedGame(g.id)' in detect
 assert 'if (armedForGoal) celebrate(teamRgb(scorer),entry.sequence,' in detect
 assert 'else entry.audio=GameEventLog::Audio::NOT_ARMED;' in detect
 assert 'if (followed || cfg.displayAllLiveEvents)' in detect
