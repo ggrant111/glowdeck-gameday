@@ -3199,7 +3199,9 @@ void drawS3ArenaReadout(const Game &g) {
   }
 
   tft.setTextDatum(MC_DATUM);
-  const uint8_t headlineFont=headline.length()>17?2:4;
+  // Pick the font by rendered pixel width; long period/status strings are
+  // never silently clipped on the physical 480x320 broadcast panel.
+  const uint8_t headlineFont=tft.textWidth(headline,4)>170?2:4;
   drawS3ArenaFitted(headline,240,68,170,headlineFont,WHITE);
   if(view.phase==S3Broadcast::Phase::LIVE)
     tft.fillCircle(171,92,3,0xF124);
