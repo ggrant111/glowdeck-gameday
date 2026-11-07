@@ -632,6 +632,43 @@ void tickRearLed() {
   writeRearLed(0, 0);
 }
 
+#ifdef GLOWDECK_WAVESHARE_S3
+void tickCaseLeds() {
+  // Hardware stays electrically idle until the user enables external
+  // strips after wiring. The original CYD rear LED is separate.
+  if(!cfg.caseLedsEnabled) {
+    if(caseLedDriver.enabled())caseLedDriver.enable(false);
+    caseLedFx.stop();
+    return;
+  }
+  if(!caseLedDriver.enabled())caseLedDriver.enable(true);
+  const uint32_t now=millis();
+  // The case identifies HOME (left) and AWAY (right). A single PP
+  // from an armed or followed live game is eligible; league-wide
+  // display-only events are NEVER physical celebrations.
+  const Game *candidate=nullptr;
+  for(uint8_t i=0;i<gameCount;++i){
+    const Game &g=games[i];
+    if((g.id!=selectedGameId && !rearFollows(g.id)) ||
+       (g.state!="LIVE" && g.state!="CRIT"))continue;
+    if(g.id==selectedGameId){candidate=&g;break;}
+    if(!candidate)candidate=&g;
+  }
+  uint8_t pp=0;
+  if(cfg.casePp && candidate && !candidate->intermission &&
+     candidate->ppDataKnown &&
+     uint32_t(now-candidate->ppUpdatedAt)<=80000UL)
+    pp=candidate->ppSide;
+  caseLedFx.setPowerPlay(S3CaseLedPolicy::Side::HOME,pp==1,
+                         candidate?teamRgb(candidate->home):0);
+  caseLedFx.setPowerPlay(S3CaseLedPolicy::Side::AWAY,pp==2,
+                         candidate?teamRgb(candidate->away):0);
+  // The two channels are streamed at <=20Hz. Last goal wins on its
+  // own side only; any opposite-side goal or live PP remains intact.
+  caseLedDriver.tick(now,caseLedFx,cfg.casePixels,cfg.caseBrightness);
+}
+#endif
+
 // Every game gets an independent baseline, preventing false flashes on reboot,
 // date rollover, first fetch, or when following a game already in progress.
 // Only record what this firmware OBSERVED from the NHL API. The endpoint
