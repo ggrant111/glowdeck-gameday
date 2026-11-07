@@ -9,7 +9,7 @@ static const char WEB_UI[] PROGMEM = R"GLOWDECK(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0a141c">
-<title>GlowDeck GameDay | CYD</title>
+<title>GlowDeck GameDay | Command Center</title>
 <style>
 :root{color-scheme:dark;--bg:#071117;--panel:#11232b;--panel2:#172e36;--edge:#2a4751;--primary:#31837a;--active:#66d6c0;--text:#f2f7f8;--muted:#aec2c8;--amber:#ffcc72;--danger:#f39c91;--shadow:0 15px 45px #0003}
 *{box-sizing:border-box}
@@ -102,37 +102,171 @@ header{padding:19px 17px}
 .row{grid-template-columns:1fr}
 }
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}button{transition:none}}
+/* Phase 7D – arena-inspired desktop/mobile command center.
+   Shared team palette accent, broadcast scoreboard, clear setup/test separation. */
+:root{--bg:#070e18;--panel:#101d2a;--panel2:#172b3b;--edge:#2b4052;--primary:#287a79;--active:#70d9e8;--text:#edf7fd;--muted:#a4b9c7;--amber:#f4c979;--shadow:0 12px 38px #020a14aa;--hud:#79d6eb}
+body{background:radial-gradient(ellipse 840px 370px at 70% -100px,#173c4b 0%,transparent 73%),linear-gradient(180deg,#081420 0%,#070e18 50%,#091521 100%);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+header{padding:24px clamp(17px,4vw,48px);background:linear-gradient(103deg,#0b2633,#101825 65%,#0b2331);border-bottom:1px solid #365068;position:relative}
+header:after{content:"";position:absolute;bottom:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--active),transparent 55%,#f2b86d)}
+.brandlock,.header-controls{display:flex;align-items:center;gap:15px}
+.brandmark{width:54px;height:54px;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:.95;transform:skew(-8deg);border:2px solid #76d5e2;background:linear-gradient(145deg,#204357,#0b2331);border-radius:12px;box-shadow:0 0 22px #4db6bf22}
+.brandmark span{font-size:19px;font-weight:950;letter-spacing:-.08em}
+.brandmark span:last-child{color:#7bdbdf}
+.brand-dot{font-size:9px;color:var(--amber);vertical-align:middle}
+.header-copy{margin:1px 0;font-size:12px;color:#acc7d1}
+.platform-tag{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:850;letter-spacing:.07em;border:1px solid #3a6572;background:#1b3946;padding:7px 11px;border-radius:99px;color:#beeef2;white-space:nowrap}
+main{max-width:1360px;grid-template-columns:225px minmax(0,1fr)}
+.tabs{background:linear-gradient(180deg,#10202d,#0b1b27);border:1px solid #314c5a;border-radius:16px}
+.tab{font-weight:680;min-height:53px;gap:10px}
+.tab.selected{background:linear-gradient(90deg,#234f61,#1c454e);border-color:#508b9a;box-shadow:inset 3px 0 #88e3ed}
+.nav-glyph{font-size:19px;line-height:1;width:23px;color:#82bfc9;text-align:center;flex:none}
+.tab.selected .nav-glyph{color:#fff}
+.nav-hint{margin-left:auto;font-size:9px;font-weight:800;letter-spacing:.08em;opacity:.65}
+.rail-footer{border-top:1px solid var(--edge);margin-top:7px;padding-top:15px}
+.card{background:linear-gradient(156deg,#142a3a,#0d1d2b 75%);border-color:#2c4657;border-radius:15px;box-shadow:0 7px 24px #0004}
+.card.hero{background:linear-gradient(117deg,#153449,#102836 53%,#0d1c29);border-color:#46768a;position:relative;overflow:hidden}
+.card.hero:after{content:"";position:absolute;pointer-events:none;inset:0;background:repeating-linear-gradient(0deg,transparent 0px,transparent 31px,#83c9de09 32px),linear-gradient(135deg,#78d4e40c,transparent 55%);opacity:.9}
+.card.hero>*{position:relative;z-index:1}
+.card.hero .kicker{color:#8ad8ed}
+.card h2{color:#f5faff}
+.stat{background:#0b1c2c;border-color:#274353}
+.stat b{color:#f2f9ff;font-variant-numeric:tabular-nums}
+.stat span{color:#9bb5c3}
+button{border-radius:9px;background:#1d3545;border-color:#416172}
+button:hover{background:#28485d;border-color:#74cede}
+button.primary,button.selected{background:linear-gradient(145deg,#246f75,#1c5a69);border-color:#64b5c1}
+input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
+:focus-visible{outline:3px solid #8ce9ef;outline-offset:3px}
+.section-intro{padding-top:8px}
+.section-intro h2{font-weight:850;letter-spacing:-.035em}
+.section-intro p{max-width:810px}
+.subnav{display:flex;flex-wrap:wrap;gap:8px;padding:11px;background:#0b1a28;border:1px solid var(--edge);border-radius:12px;margin:0 0 22px}
+.subnav button{min-height:38px;padding:7px 12px;background:transparent;border:1px solid transparent;font-size:12px;color:#b8d5dd}
+.subnav button:hover,.subnav button.active{background:#224151;border-color:#426778;color:#f1fdff}
+.portal-zone{display:none;scroll-margin-top:20px;margin:27px 0 32px}
+.portal-zone.active-zone{display:block}
+.zone-heading{display:flex;align-items:center;gap:14px;padding:0 0 13px;border-bottom:1px solid #34566a;margin:0 0 16px}
+.zone-heading h3{margin:0 0 2px;font-size:19px;letter-spacing:-.02em}
+.zone-heading p{margin:0;font-size:13px}
+.zone-number{flex:none;display:grid;place-items:center;width:39px;height:39px;border:1px solid #467d8b;background:#193649;color:#86dce7;border-radius:10px;font-weight:900;font-size:15px}
+.zone-heading .compact-link{margin-left:auto;min-height:36px;font-size:12px;white-space:nowrap}
+.lab-notice{display:flex;align-items:flex-start;gap:13px;padding:17px 20px;margin:0 0 19px;background:#122b3b;border:1px solid #437083;border-radius:13px}
+.lab-notice p{margin:5px 0 0;font-size:13px}
+.lab-status-dot{flex:none;width:12px;height:12px;background:#f5c56a;border:3px solid #624d2d;border-radius:50%;margin-top:6px}
+.lab-card{min-height:88px}
+.save-dock{position:sticky;bottom:12px;z-index:4;display:flex;align-items:center;justify-content:space-between;gap:15px;background:#142b3aed;backdrop-filter:blur(16px);border:1px solid #46788b;padding:12px 17px;border-radius:13px;box-shadow:0 12px 38px #0009}
+.save-indicator{color:#bdd3df;font-size:12px}
+.save-indicator.is-dirty{color:#fbd18b;font-weight:800}
+.legacy-save{display:none!important}
+.lab-card .actions{margin:7px 0}
+.lab-card button{min-height:40px}
+#audioLabProbe{white-space:pre-wrap}
+#lab-hardware .portal-zone{margin:0}
+#lab-hardware .card{margin-bottom:12px}
+.portal-zone [data-platform="s3"][hidden]{display:none!important}
+#customize .hint,#device .hint{border-left-color:#5c9caa}
+@media(max-width:850px){
+ .tabs{background:#091a27fa}
+ .tab{min-height:46px}
+ .tab .nav-hint{display:none}
+ .nav-glyph{font-size:16px;width:18px}
+ .portal-zone{scroll-margin-top:88px}
+ .save-dock{bottom:9px}
+}
+@media(max-width:650px){
+ header{padding:16px}
+ .top{align-items:flex-start;gap:10px}
+ .brandmark{width:39px;height:43px;min-width:39px}
+ .brandmark span{font-size:15px}
+ .brandlock{gap:9px}
+ .header-copy{display:none}
+ .header-controls{flex-direction:column;align-items:flex-end;gap:4px}
+ .platform-tag{font-size:9px;padding:4px 7px}
+ .status{font-size:10px;padding:5px 9px}
+ .zone-heading{flex-wrap:wrap;gap:9px}
+ .zone-heading .compact-link{margin-left:48px}
+ .subnav{overflow-x:auto;flex-wrap:nowrap;scrollbar-width:thin}
+ .subnav button{white-space:nowrap}
+ .save-dock{padding:10px 12px}
+ .save-dock button{white-space:nowrap}
+}
+
+/* Broadcast-scoreboard language: home/away hierarchy and live chips
+   echo the 480x320 native S3 arena UI without loading remote images. */
+.arena-scoreboard{margin:16px 0 18px;border:1px solid #45657a;border-radius:14px;background:radial-gradient(ellipse at 50% 45%,#204157 0%,#102334 62%,#0a1b2b);overflow:hidden}
+.arena-topline,.arena-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 15px;background:#0c1a2a9c;color:#9ebdcc;font-size:10px;font-weight:800;letter-spacing:.12em}
+.arena-topline{border-bottom:1px solid #304d62}.arena-footer{border-top:1px solid #304d62}
+.arena-state{padding:4px 9px;border:1px solid #477488;border-radius:5px;color:#d6ebf1}
+.arena-state.is-live{color:#ffd5b6;background:#5b332555;border-color:#9a533d}
+.arena-teams{display:grid;grid-template-columns:minmax(0,1fr) minmax(100px,auto) minmax(0,1fr);align-items:center;gap:12px;padding:19px 20px 23px}
+.arena-team{display:flex;align-items:center;gap:12px;min-width:0}
+.arena-team.home{flex-direction:row-reverse;text-align:right}
+.arena-mark{--team-accent:#78cbd9;width:62px;height:62px;flex:none;display:grid;place-items:center;border-radius:11px;border:1px solid var(--team-accent);font-size:17px;font-weight:950;letter-spacing:-.035em;color:#fff;background:linear-gradient(145deg,var(--team-accent),#15293a 91%);box-shadow:0 0 18px #0004}
+.arena-team-label{font-size:10px;font-weight:850;letter-spacing:.13em;color:#a2c0d0}
+.arena-team-label strong{display:block;font-size:21px;font-weight:900;letter-spacing:.02em;color:#fff}
+.arena-score{font-size:clamp(31px,5vw,50px);font-weight:950;letter-spacing:-.09em;text-align:center;white-space:nowrap;font-variant-numeric:tabular-nums;color:#f3fafc;text-shadow:0 0 20px #9edfe62d}
+.tab.has-dirty:after{content:"";width:7px;height:7px;background:#fbd18b;border-radius:50%;margin-left:4px}
+.arena-workflow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:14px}
+.arena-workflow>div{padding:9px 10px;background:#071925bb;border:1px solid #345367;border-radius:8px;display:flex;flex-direction:column;gap:2px}
+.arena-workflow b{font-size:11px;letter-spacing:.06em;color:#83dddf}
+.arena-workflow span{font-size:11px;color:#b2cad3}
+@media(max-width:650px){.arena-workflow{grid-template-columns:1fr}.arena-workflow>div{flex-direction:row;gap:12px}}
+@media(max-width:650px){
+ .arena-teams{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:5px;padding:17px 10px}
+ .arena-team{flex-direction:column;gap:5px;text-align:center}
+ .arena-team.home{flex-direction:column;text-align:center}
+ .arena-mark{width:43px;height:43px;font-size:12px}
+ .arena-team-label strong{font-size:17px}
+ .arena-score{font-size:29px;letter-spacing:-.09em}
+ .arena-topline,.arena-footer{font-size:9px;padding:8px 10px}
+}
 </style>
 </head>
 <body>
 <header>
 <div class="top">
-<div><div class="eyebrow">GLOWDECK · GAME CENTER</div><h1>GameDay</h1><p>Every game. Your favorite moments. Your lights.</p></div>
-<div id="connection" class="status">Connecting</div>
+<div class="brandlock"><div class="brandmark" aria-hidden="true"><span>G</span><span>D</span></div>
+<div><div class="eyebrow">GLOWDECK <span class="brand-dot">◆</span> GAMEDAY</div>
+<h1>Command Center</h1><p class="header-copy">Broadcast control for every puck drop, goal and celebration.</p></div></div>
+<div class="header-controls"><span class="platform-tag" id="platformTag">DETECTING DEVICE</span><div id="connection" class="status">Connecting</div></div>
 </div>
 </header>
 <main>
 <nav class="tabs" aria-label="GameDay navigation">
-<div class="rail-note"><span class="kicker">CONTROL CENTER</span><p class="small">This device · your local network</p></div>
-<button class="tab selected" data-tab="dashboard" aria-current="page">Overview</button>
-<button class="tab" data-tab="games">Live games</button>
-<button class="tab" data-tab="display">Favorites &amp; alerts</button>
-<button class="tab" data-tab="devices">WLED celebrations</button>
-<button class="tab" data-tab="rear">Rear RGB LED</button>
-<button class="tab" data-tab="events">Activity</button>
-<button class="tab" data-tab="settings">Device settings</button>
-<button class="tab" data-tab="firmware">Firmware update</button>
+<div class="rail-note"><span class="kicker">GAME DAY CONTROL</span><p class="small">Your local command station</p></div>
+<button class="tab selected" data-tab="dashboard" aria-current="page"><span class="nav-glyph" aria-hidden="true">▦</span><span>Overview</span></button>
+<button class="tab" data-tab="games"><span class="nav-glyph" aria-hidden="true">◉</span><span>Live games</span></button>
+<button class="tab" data-tab="customize"><span class="nav-glyph" aria-hidden="true">◈</span><span>Customize</span><span class="nav-hint">SETUP</span></button>
+<button class="tab" data-tab="lab"><span class="nav-glyph" aria-hidden="true">⚡</span><span>Test Lab</span><span class="nav-hint">PREVIEW</span></button>
+<button class="tab" data-tab="device"><span class="nav-glyph" aria-hidden="true">⚙</span><span>Device</span></button>
+<button class="tab" data-tab="events"><span class="nav-glyph" aria-hidden="true">≡</span><span>Activity</span></button>
+<div class="rail-note rail-footer"><span class="kicker">LOCAL DEVICE</span><p class="small">Changes stay on this GameDay controller. No cloud account required.</p></div>
 </nav>
 <section id="dashboard" class="panel active">
-<div class="section-intro"><div class="eyebrow">LIVE CONTROL CENTER</div><h2>Your game day at a glance</h2><p>Scores, favorites and celebrations—without changing what your lights are following.</p></div>
-<div class="card hero"><div class="kicker">Today's NHL</div><h2>You're connected to the action</h2>
+<div class="section-intro"><div class="eyebrow">THE ARENA AT A GLANCE</div><h2>Your game day, under control</h2><p>See what’s happening, choose the game driving your lights and launch straight into configuration or testing.</p></div>
+<div class="card hero"><div class="kicker">NHL BROADCAST CENTER</div>
+<h2>Today's arena</h2>
+<div class="arena-scoreboard" aria-label="Featured NHL game">
+<div class="arena-topline"><span id="heroLiveTag" class="arena-state">LOADING</span><span id="heroGameMode">GLOWDECK · GAME CENTER</span></div>
+<div class="arena-teams">
+<div class="arena-team"><div class="arena-mark" id="heroAwayMark">AWY</div>
+<div class="arena-team-label">AWAY <strong id="heroAway">—</strong></div></div>
+<div class="arena-score" id="heroScore" aria-live="polite">— : —</div>
+<div class="arena-team home"><div class="arena-mark" id="heroHomeMark">HME</div>
+<div class="arena-team-label">HOME <strong id="heroHome">—</strong></div></div>
+</div>
+<div class="arena-footer"><span id="heroStatus">Connecting to the NHL feed…</span><span id="heroArmStatus">NO GAME ARMED</span></div>
+</div>
 <div class="stats">
 <div class="stat"><span>Games live</span><b id="dashLiveCount">—</b></div>
 <div class="stat"><span>Favorite teams</span><b id="dashFavoriteCount">—</b></div>
 <div class="stat"><span>Games followed</span><b id="dashFollowCount">—</b></div>
 <div class="stat"><span>On-screen alerts</span><b id="dashDisplayMode">—</b></div>
 </div>
-<div class="actions"><button class="primary" data-tab="games">Browse games</button><button data-tab="display">Manage favorite teams</button><button data-tab="devices">Control WLED</button></div>
+<div class="actions"><button class="primary" data-tab="games">Browse games</button>
+<button data-tab="customize" data-anchor="zone-favorites">Customize</button>
+<button data-tab="lab" data-anchor="lab-full">Run a test</button></div>
+<div class="arena-workflow"><div><b>01 · FOLLOW</b><span>Star any NHL game to track it</span></div><div><b>02 · ARM</b><span>One game controls WLED scoring</span></div><div><b>03 · TEST</b><span>Preview safely in Test Lab</span></div></div>
 </div>
 <div class="card"><h2>Device &amp; network health</h2>
 <div class="stats">
@@ -154,7 +288,7 @@ header{padding:19px 17px}
 <div id="recentGameEvents"><p class="muted">No events recorded yet.</p></div>
 <button data-tab="events">View complete event log</button></div>
 <div class="card"><h2>Armed game · WLED goal triggers</h2>
-<p>Choose which side of the <strong>armed matchup</strong> triggers WLED. Starring a different live game follows it for rear RGB alerts and screen celebrations, without re-arming WLED.</p>
+<p>The armed matchup controls WLED. Following (★) another game adds its screen and eligible on-device LED alerts without changing the WLED target.</p>
 <div class="actions" id="modeButtons">
 <button data-mode="0">Off</button><button data-mode="1">Home</button><button data-mode="2">Away</button><button data-mode="3">Both</button>
 </div>
@@ -164,8 +298,8 @@ header{padding:19px 17px}
 <section id="events" class="panel">
 <div class="section-intro"><div class="eyebrow">ACTIVITY LOG</div><h2>What happened, and what fired</h2><p>League observations and the exact commands sent to your physical lights.</p></div>
 <div class="card"><h2>Game events & light activity</h2>
-<p>See NHL goals, power plays, puck drop and finals, plus whether the <b>CYD's built-in LED</b> and each selected <b>WLED LED strip/controller</b> received a celebration command.</p>
-<p class="small muted">WLED “Command accepted” means the controller acknowledged the HTTP request. It does not independently confirm visible light output. The latest 64 events are retained in memory <b>until the device reboots</b>. No historical events are backfilled.</p>
+<p>Review NHL goals, power plays, puck drops and finals. Check the on-device LED (where supported) and each opted-in WLED controller. This is an event audit, not a Test Lab.</p>
+<p class="small muted">WLED “Command accepted” means the controller acknowledged the HTTP request. It does not independently confirm visible light output. The latest 64 events remain in memory <b>until the device reboots</b>. No historical events are backfilled.</p>
 <div class="row">
 <div><label for="eventCategory">Filter by event</label><select id="eventCategory">
 <option value="all">All events</option><option value="goals">Goals</option>
@@ -207,7 +341,7 @@ header{padding:19px 17px}
 <p class="small muted" id="favoriteTeamCount">No favorite teams selected.</p>
 <div class="actions"><button class="primary" id="saveFavorites">Save favorite teams</button></div></div>
 <div class="card"><h2>Today's game carousel</h2>
-<p>During live NHL games, the CYD automatically focuses on full-screen live scoreboards and groups other upcoming or finished matches into readable four-game summary slides. When no games are live, it returns to the complete game-and-standings carousel. Swipe to browse or tap a summary row for its matchup details.</p>
+<p>During live NHL games, the GameDay display automatically focuses on full-screen live scoreboards and groups other upcoming or finished matches into readable four-game summary slides. When no games are live, it returns to the complete game-and-standings carousel. Swipe to browse or tap a summary row for its matchup details.</p>
 <div class="stats">
 <div class="stat"><span>Current screen</span><b id="displayGame">—</b></div>
 <div class="stat"><span>Carousel slide</span><b id="displaySlide">—</b></div>
@@ -230,7 +364,7 @@ header{padding:19px 17px}
 </select>
 </div><div class="card">
 <h2>On-screen NHL event notifications</h2>
-<p>Choose how widely the CYD reports live action. The screen can show events for every game while the rear LED and WLED continue following their independently selected matchups.</p>
+<p>Choose how widely the GameDay screen reports live action. The screen can show events for every game while the rear LED and WLED continue following their independently selected matchups.</p>
 <label for="displayAllLiveEvents">Show screen alerts for</label>
 <select id="displayAllLiveEvents">
 <option value="true">All live NHL games · recommended</option>
@@ -270,7 +404,7 @@ header{padding:19px 17px}
 <button id="overlayTestWin">Preview final win</button>
 <button id="overlayTestLoss">Preview final loss</button>
 <button id="overlayStop">Dismiss overlay</button></div>
-<p class="small muted">These previews affect the CYD screen only. Test them with your WLED devices disconnected if desired.</p>
+<p class="small muted">Screen previews run locally and do not trigger WLED or the speaker.</p>
 <div class="actions"><button id="saveDisplay" class="primary">Save carousel &amp; alert settings</button></div>
 </div>
 <div class="hint">Carousel browsing does not arm WLED. Use the stars to follow rear RGB alerts, or Arm in Live games for WLED triggers.</div>
@@ -339,7 +473,7 @@ header{padding:19px 17px}
 <div class="hint">The armed game is automatically followed. You can also star every other game on today's NHL schedule (up to 20 total games). Follow settings reset when the NHL date changes. Starring does not arm WLED.</div>
 </div>
 <div class="card"><h2>Follow today's NHL games</h2>
-<p>Tap ★ on the CYD scoreboard, game details, or the device's game list—or select games below. Followed matchups trigger their rear RGB and priority screen celebrations independently of WLED.</p>
+<p>Tap ★ on the GameDay scoreboard, game details, or the device's game list—or select games below. Following enables eligible on-device LED and priority screen celebrations independently of the armed WLED game.</p>
 <div id="rearFollowedList"></div>
 </div>
 <div class="card"><h2>Verify matchup colors</h2>
@@ -374,7 +508,7 @@ header{padding:19px 17px}
 </div>
 </div>
 <div class="card"><h2>Full celebration preview</h2>
-<p class="small muted">Run the rear CYD RGB LED, opted-in WLED devices and the animated 320×240 overlay using the same NHL team color. Each enabled output runs independently.</p>
+<p class="small muted">Run the selected WLED controllers and screen overlay together. The CYD rear RGB participates when enabled; Waveshare S3 case LEDs use their separate hardware test. No manual preview creates a genuine NHL goal.</p>
 <div class="actions">
 <button id="rearFullHome">Celebrate home goal</button>
 <button id="rearFullAway">Celebrate away goal</button>
@@ -386,7 +520,7 @@ header{padding:19px 17px}
 <section id="settings" class="panel">
 <div class="section-intro"><div class="eyebrow">DEVICE SETTINGS</div><h2>Network &amp; preferences</h2><p>Connectivity, local device options, horn sounds and security settings.</p></div>
 <div class="twocol">
-<div class="card"><h2>Wi-Fi</h2><p>Connect the CYD to the network used by your WLED controllers.</p>
+<div class="card"><h2>Wi-Fi</h2><p>Connect this GameDay device to the Wi-Fi network used by your WLED controllers.</p>
 <label for="ssid">Network name (SSID)</label><input id="ssid" autocomplete="off" maxlength="32" placeholder="Home Wi-Fi">
 <div class="actions"><button id="scanWifi">Find nearby networks</button></div>
 <select id="networks" aria-label="Found Wi-Fi networks"><option value="">Select a scanned network</option></select>
@@ -492,18 +626,247 @@ header{padding:19px 17px}
 <section id="firmware" class="panel">
 <div class="section-intro"><div class="eyebrow">FIRMWARE</div><h2>Keep GameDay current</h2><p>Install a verified firmware.bin without losing saved Wi-Fi, favorites or event settings.</p></div>
 <div class="card"><h2>Firmware update</h2>
-<p>Upload a compiled PlatformIO <code>firmware.bin</code> from this project. Keep the CYD powered until it reboots.</p>
+<p>Upload a compiled PlatformIO <code>firmware.bin</code> from this project. Keep the controller powered until it finishes and reboots.</p>
 <form id="uploadForm"><label for="bin">Compiled firmware (.bin)</label><input id="bin" name="firmware" type="file" accept=".bin" required>
 <div class="actions"><button class="primary" type="submit">Upload and reboot</button></div></form>
 <p class="small muted">Initial installation still requires USB. This update control works only when you use the project's OTA-capable partition layout.</p></div>
-<div class="card"><h2>Troubleshooting</h2><p>For boot loops, first flash the basic diagnostic firmware in the documentation. Touch calibration can be started from the CYD's SETUP screen. Watch serial output at 115200 baud.</p>
+<div class="card"><h2>Troubleshooting</h2><p>For boot loops, first flash the basic diagnostic firmware in the documentation. Use the device's setup diagnostics if touch stops responding. Watch serial output at 115200 baud.</p>
 <div class="actions"><button id="reboot">Restart device</button></div></div>
+</section>
+<section id="customize" class="panel" aria-labelledby="customizeTitle">
+<div class="section-intro"><div class="eyebrow">MAKE GAMEDAY YOURS</div>
+<h2 id="customizeTitle">Customize the experience</h2>
+<p>Change one subsystem at a time: favorites, screen, WLED, sound or local LEDs. Live diagnostics and celebration rehearsals are in Test Lab; custom sound auditioning stays beside the WAV library.</p></div>
+<div class="subnav" aria-label="Customize sections">
+<button type="button" data-jump="zone-favorites">Favorites</button>
+<button type="button" data-jump="zone-screen">Screen</button>
+<button type="button" data-jump="zone-wled">WLED</button>
+<button type="button" data-jump="zone-audio">Sound</button>
+<button type="button" data-jump="zone-hardware">On-device LEDs</button>
+</div>
+<div id="zone-favorites" class="portal-zone"><div class="zone-heading"><span class="zone-number">01</span><div><h3>Favorites &amp; following</h3><p>Choose priority teams and games without changing the armed WLED matchup.</p></div></div><div id="mount-favorites"></div></div>
+<div id="zone-screen" class="portal-zone"><div class="zone-heading"><span class="zone-number">02</span><div><h3>Scoreboard &amp; alerts</h3><p>Rotation, team logos, goal screen and game-day display preferences.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-screen">Screen tests</button></div><div id="mount-screen"></div></div>
+<div id="zone-wled" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>WLED celebrations</h3><p>Configure controllers, effects and event permissions.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-wled">Test WLED</button></div><div id="mount-wled"></div></div>
+<div id="zone-audio" class="portal-zone"><div class="zone-heading"><span class="zone-number">04</span><div><h3>Sound &amp; horns</h3><p>Enable the onboard horn, manage custom WAV sounds and adjust output level.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-audio">Audio tests</button></div><div id="mount-audio"></div></div>
+<div id="zone-hardware" class="portal-zone"><div class="zone-heading"><span class="zone-number">05</span><div><h3>On-device LED hardware</h3><p>CYD rear RGB or Waveshare S3 left/home and right/away case lighting.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-hardware">LED tests</button></div><div id="mount-hardware"></div></div>
+<div class="save-dock" role="region" aria-label="Save shared settings"><span class="save-indicator" id="customizeSaveState">Display, WLED, horn and CYD options save together. Volume, WAV library, favorites and case LEDs have their own Apply controls.</span><button type="button" class="primary" id="portalSave">Save settings</button></div>
+</section>
+<section id="lab" class="panel" aria-labelledby="labTitle">
+<div class="section-intro"><div class="eyebrow">SAFE PREVIEW &amp; DIAGNOSTICS</div>
+<h2 id="labTitle">Test Lab</h2>
+<p>One place to verify colors, sounds, screen events and connected lights. These are manual tests; they do not create an actual NHL score.</p></div>
+<div class="lab-notice"><span class="lab-status-dot" aria-hidden="true"></span><div><strong>Know what you're testing</strong><p>Screen and speaker previews are local. WLED previews send real commands to selected devices and restore previous states when supported. External case lights only respond after you enable their wiring.</p></div></div>
+<div class="subnav" aria-label="Test Lab sections">
+<button type="button" data-jump="lab-screen">Screen</button>
+<button type="button" data-jump="lab-audio">Audio</button>
+<button type="button" data-jump="lab-wled">WLED</button>
+<button type="button" data-jump="lab-hardware">LED hardware</button>
+<button type="button" data-jump="lab-full">Full celebration</button>
+</div>
+<div id="lab-screen" class="portal-zone"><div class="zone-heading"><span class="zone-number">01</span><div><h3>Screen &amp; scoreboard</h3><p>Preview NHL goal, power-play and final overlays without switching games.</p></div></div><div class="card lab-card" id="mount-lab-screen"></div></div>
+<div id="lab-audio" class="portal-zone" data-platform="s3"><div class="zone-heading"><span class="zone-number">02</span><div><h3>Speaker &amp; sound</h3><p>Hear the selected horn, verify the test tone, inspect ES8311 diagnostics.</p></div></div><div class="card lab-card" id="mount-lab-audio"></div></div>
+<div id="lab-wled" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>WLED controller tests</h3><p>Real color/effect commands are sent to opted-in controllers on your local network.</p></div></div><div id="mount-lab-wled"></div></div>
+<div id="lab-hardware" class="portal-zone"><div class="zone-heading"><span class="zone-number">04</span><div><h3>LED hardware channels</h3><p>Confirm individual outputs and team colors before live events.</p></div></div><div id="mount-lab-hardware"></div><div id="mount-lab-case" data-platform="s3"></div></div>
+<div id="lab-full" class="portal-zone"><div class="zone-heading"><span class="zone-number">05</span><div><h3>Full celebration rehearsal</h3><p>Check the combined celebration, then restore devices to their prior state.</p></div></div><div id="mount-lab-full"></div></div>
+</section>
+<section id="device" class="panel" aria-labelledby="deviceTitle">
+<div class="section-intro"><div class="eyebrow">SYSTEM &amp; MAINTENANCE</div>
+<h2 id="deviceTitle">Device settings</h2>
+<p>Wi-Fi, dashboard access, firmware, connection information and diagnostics. Your game-day effects live under Customize.</p></div>
+<div class="subnav" aria-label="Device sections"><button type="button" data-jump="zone-network">Network &amp; access</button><button type="button" data-jump="zone-maintenance">Firmware &amp; maintenance</button><button type="button" data-jump="zone-connection">Device information</button></div>
+<div id="zone-network" class="portal-zone"><div class="zone-heading"><span class="zone-number">01</span><div><h3>Network &amp; access</h3><p>Connect the device to your Wi-Fi and manage the local dashboard login.</p></div></div><div id="mount-network"></div></div>
+<div id="zone-maintenance" class="portal-zone"><div class="zone-heading"><span class="zone-number">02</span><div><h3>Firmware &amp; maintenance</h3><p>Install verified S3 or CYD firmware for your specific board and restart safely.</p></div></div><div id="mount-maintenance"></div></div>
+<div id="zone-connection" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>Connection information</h3><p>Useful identifiers and local network diagnostics.</p></div></div><div id="mount-connection"></div></div>
+<div class="save-dock" role="region" aria-label="Save device settings"><span class="save-indicator" id="deviceSaveState">Network and access changes need to be saved</span><button type="button" class="primary" id="deviceSave">Save device settings</button></div>
 </section>
 </main>
 <div id="notice" role="status" aria-live="polite"></div>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
+
+// Declarative portal layout. Reuse the original control nodes (and their IDs)
+// instead of cloning buttons or duplicating API handlers. Future modules only
+// need one mapping here and a destination in the accessible page shell.
+function mountPortalModules(){
+  const place=(id,destination)=>{
+    const node=$(id), slot=$(destination);
+    if(!node||!slot)throw new Error("Portal module missing: "+id+" → "+destination);
+    slot.appendChild(node);
+    return node;
+  };
+  const moveCard=(controlId,destination)=>{
+    const source=$(controlId);
+    if(!source)throw new Error("Missing existing control: "+controlId);
+    const card=source.closest(".card");
+    if(!card)throw new Error("Missing card for: "+controlId);
+    return place(card.id || (card.id="portal-card-"+controlId),destination);
+  };
+  const newCard=(heading,lead,destination)=>{
+    const card=document.createElement("div");
+    card.className="card";
+    const title=document.createElement("h2");title.textContent=heading;
+    const intro=document.createElement("p");intro.textContent=lead;
+    card.append(title,intro);
+    $(destination).append(card);
+    return card;
+  };
+  const transferRange=(first,last,dest)=>{
+    let n=first;
+    if(!n||!last)throw new Error("Portal setting group missing");
+    while(n){
+      const next=n.nextElementSibling;
+      dest.appendChild(n);
+      if(n===last)return;
+      n=next;
+    }
+    throw new Error("Portal setting group boundary not found");
+  };
+
+  // GAME PLAN / VISUALS: move originals, keeping every API binding intact.
+  moveCard("favoriteTeamGrid","mount-favorites");
+  moveCard("rearFollowedList","mount-favorites");
+  moveCard("cycleGames","mount-screen");
+  moveCard("overlayEnabled","mount-screen");
+  place("s3GoalGifCard","mount-screen");
+
+  // CELEBRATIONS: preferences are not simulations.
+  moveCard("wledGoalStyle","mount-wled");
+  moveCard("deviceList","mount-wled");
+  place("s3AudioCard","mount-audio");
+  moveCard("rearEnabled","mount-hardware");
+  place("s3CaseLedCard","mount-hardware");
+
+  // SYSTEM: network, maintenance and connection details, nothing celebratory.
+  moveCard("ssid","mount-network");
+  moveCard("bin","mount-maintenance");
+  moveCard("reboot","mount-maintenance");
+  moveCard("apName","mount-connection");
+  moveCard("deviceIp","mount-connection"); // detailed runtime health belongs in Device
+
+  // The former "Celebration preferences" card mixed WLED gain, horn enable,
+  // screen inversion and the admin password. Split it into purposeful cards.
+  const original=$("brightness").closest(".card");
+  const gainCard=newCard("Celebration timing & intensity",
+    "Shared brightness and event duration for WLED celebrations.","mount-wled");
+  transferRange(document.querySelector('label[for="brightness"]'),
+                $("seconds"),gainCard);
+  const hornCard=newCard("Enable goal audio",
+    "Allow the onboard speaker to play the selected horn for eligible NHL goals.",
+    "mount-audio");
+  transferRange($("horn").closest(".toggle"),$("hornHelp"),hornCard);
+  const displayCard=newCard("Display color correction",
+    "Correct the panel's color inversion only if its colors are visibly wrong.",
+    "mount-screen");
+  const invert=$("screenInverted").closest(".toggle");
+  transferRange(invert,invert.nextElementSibling,displayCard);
+  const accessCard=newCard("Dashboard security",
+    "Set a new local dashboard password without exposing Wi-Fi credentials.",
+    "mount-network");
+  const passwordLabel=document.querySelector('label[for="adminPassword"]');
+  const finalHint=$("adminPassword").nextElementSibling;
+  transferRange(passwordLabel,finalHint,accessCard);
+  original.remove();
+
+  // TEST LAB: move the *actual* controls, not a second set of lookalikes.
+  // Screen tests are never mixed with live overlay configuration.
+  const screenLab=$("mount-lab-screen");
+  const screenActions=$("overlayTestGoal").closest(".actions");
+  const visualNote=screenActions.nextElementSibling;
+  screenLab.appendChild(screenActions);
+  if(visualNote&&visualNote.matches("p"))screenLab.appendChild(visualNote);
+  const gifPreview=$("goalGifPreview");
+  const gifRow=document.createElement("div");gifRow.className="actions";
+  const gifTitle=document.createElement("p");
+  gifTitle.className="small muted";
+  gifTitle.textContent="S3 goal GIF: preview the installed animation on the device.";
+  gifRow.appendChild(gifPreview);
+  screenLab.append(gifTitle,gifRow);
+
+  // WLED tests are physical outputs; keep stop/restore beside the action.
+  moveCard("wledTestGoalHome","mount-lab-wled");
+  const quick=newCard("Quick home / away color",
+    "Run a basic color test for the armed game without changing game selection.",
+    "mount-lab-wled");
+  const quickButtons=$("testHome").closest(".actions");
+  const quickNote=quickButtons.nextElementSibling;
+  quick.appendChild(quickButtons);
+  if(quickNote&&quickNote.matches("p"))quick.appendChild(quickNote);
+
+  // The CYD rear-RGB test set has three distinct old cards, now one area.
+  moveCard("rearTestHome","mount-lab-hardware");
+  moveCard("rearTeam","mount-lab-hardware");
+  moveCard("rearDiagRed","mount-lab-hardware");
+  moveCard("rearFullHome","mount-lab-full");
+  // The S3 speaker library stays in Customize for contextual audition.
+  // Dedicated sound tests and codec diagnostics belong here.
+  const audioLab=$("mount-lab-audio");
+  audioLab.appendChild($("s3AudioPreview").closest(".actions"));
+  audioLab.appendChild($("s3AudioDiagnostics"));
+
+  // S3 external case LEDs have their own, independent wiring diagnostics.
+  const caseLab=newCard("Waveshare case output tests",
+    "LEFT = HOME, RIGHT = AWAY. Only available after confirming LED wiring.",
+    "mount-lab-case");
+  const caseActions=document.querySelector(".s3-case-test").closest(".actions");
+  caseLab.appendChild(caseActions);
+
+  // Remove old duplicate Save buttons (retain IDs and JS handlers for
+  // existing regression tests); the new shell offers one consistent save.
+  ["saveDisplay","saveDevices","saveRear"].forEach(id=>{
+    $(id).closest(".actions").classList.add("legacy-save");
+  });
+  $("saveSettings").closest(".card").classList.add("legacy-save");
+}
+
+const PORTAL_ROUTES={
+  dashboard:{page:"dashboard"},games:{page:"games"},
+  customize:{page:"customize"},lab:{page:"lab"},device:{page:"device"},
+  events:{page:"events"},
+  display:{page:"customize",anchor:"zone-screen"},
+  devices:{page:"customize",anchor:"zone-wled"},
+  rear:{page:"customize",anchor:"zone-hardware"},
+  settings:{page:"device",anchor:"zone-network"},
+  firmware:{page:"device",anchor:"zone-maintenance"}
+};
+let portalDirty=false;
+function setPortalDirty(isDirty){
+  portalDirty=!!isDirty;
+  ["customizeSaveState","deviceSaveState"].forEach(id=>{
+    const node=$(id);
+    node.classList.toggle("is-dirty",portalDirty);
+    node.textContent=portalDirty?"Unsaved changes · select Save settings":
+      id==="customizeSaveState"?
+        "Shared settings saved · audio volume, favorite teams, WAV and case LEDs have their own Apply buttons":
+        "Network and dashboard settings saved on this device";
+  });
+  document.querySelector('[data-tab="customize"].tab')
+    .classList.toggle("has-dirty",portalDirty);
+}
+function trackPortalChanges(){
+  const stored=new Set([
+    "ssid","wifiPassword","adminPassword","brightness","seconds","horn",
+    "wledPP","wledGameStart","wledFinal","wledGoalStyle","favoriteSide",
+    "rearEnabled","rearGoal","rearPowerPlay","rearBrightness",
+    "rearGoalSeconds","screenInverted","overlayEnabled","overlayGoals",
+    "overlayPowerPlays","overlayStart","overlayFinal","overlayFlash",
+    "overlayLogos","displayAllLiveEvents","overlayGoalSeconds",
+    "overlayFinalSeconds","cycleGames","showStandings","cycleSeconds",
+    "displayTimezone"
+  ]);
+  ["customize","device"].forEach(panelId=>{
+    $(panelId).addEventListener("change",event=>{
+      const id=event.target.id||"";
+      if(stored.has(id)||/^(ip[0-3]|enabled[0-3]|event[0-3]_(goal|pp|start|final))$/.test(id))
+        setPortalDirty(true);
+    });
+    $(panelId).addEventListener("input",event=>{
+      const id=event.target.id||"";
+      if(stored.has(id)||/^ip[0-3]$/.test(id))setPortalDirty(true);
+    });
+  });
+}
+
 let currentConfig = null, currentStatus = null, currentGames = [], noticeTimeout;
 let rearPalette = [];
 let gameFilter="all", favoriteTeamDraftMask=0;
@@ -522,17 +885,56 @@ async function api(url, options={}){
 }
 const post = (url,body) => api(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
 async function perform(fn){try{await fn()}catch(err){message("Error: "+err.message)}}
-function tab(id){
-  document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===id));
+const PORTAL_DEFAULT_ZONES={
+  customize:"zone-favorites",lab:"lab-screen",device:"zone-network"
+};
+const portalLastZone={};
+function jumpToZone(anchor){
+  const section=$(anchor);
+  if(!section)return;
+  const panel=section.closest(".panel");
+  if(!panel)return;
+  // Progressive disclosure. Hidden sections retain their original controls,
+  // so a global save always includes all loaded game-day settings.
+  Array.from(panel.children).forEach(node=>{
+    if(node.classList.contains("portal-zone"))
+      node.classList.toggle("active-zone",node===section);
+  });
+  panel.querySelectorAll(".subnav button").forEach(button=>{
+    const selected=button.dataset.jump===anchor;
+    button.classList.toggle("active",selected);
+    button.setAttribute("aria-pressed",String(selected));
+  });
+  portalLastZone[panel.id]=anchor;
+  const reduced=matchMedia("(prefers-reduced-motion:reduce)").matches;
+  panel.scrollIntoView({block:"start",behavior:reduced?"auto":"smooth"});
+}
+function tab(id,anchor){
+  const route=PORTAL_ROUTES[id]||PORTAL_ROUTES.dashboard;
+  const page=route.page;
+  document.querySelectorAll(".panel").forEach(x=>
+    x.classList.toggle("active",x.id===page));
   document.querySelectorAll(".tab").forEach(x=>{
-    const selected=x.dataset.tab===id;
+    const selected=x.dataset.tab===page;
     x.classList.toggle("selected",selected);
     if(selected)x.setAttribute("aria-current","page");
     else x.removeAttribute("aria-current");
   });
-  scrollTo({top:0,behavior:"smooth"});
+  const chosenZone=anchor||route.anchor||portalLastZone[page]||
+                   PORTAL_DEFAULT_ZONES[page];
+  if(chosenZone){
+    requestAnimationFrame(()=>jumpToZone(chosenZone));
+  }else{
+    const reduced=matchMedia("(prefers-reduced-motion:reduce)").matches;
+    scrollTo({top:0,behavior:reduced?"auto":"smooth"});
+  }
+  // Bookmark navigational state without requesting extra firmware routes.
+  history.replaceState(null,"","#"+page);
 }
-document.querySelectorAll("[data-tab]").forEach(x=>x.addEventListener("click",()=>tab(x.dataset.tab)));
+document.querySelectorAll("[data-tab]").forEach(x=>x.addEventListener("click",
+  ()=>tab(x.dataset.tab,x.dataset.anchor)));
+document.querySelectorAll("[data-jump]").forEach(x=>x.addEventListener("click",
+  ()=>jumpToZone(x.dataset.jump)));
 let eventOffset=0, eventPageTotal=0;
 function eventTimestamp(row){
   if(row.timestamp)
@@ -559,7 +961,8 @@ function createEventElement(row){
   score.style.margin="8px 0";
   card.append(score);
   const builtIn=document.createElement("div");builtIn.className="small";
-  builtIn.textContent="CYD internal LED: "+(row.rear||"Not applicable");
+  builtIn.textContent=(currentStatus?.audioSupported?"On-device LED":"CYD rear LED")+
+    ": "+(row.rear||"Not applicable");
   card.append(builtIn);
   const devices=document.createElement("div");devices.className="small muted";
   devices.style.marginTop="5px";
@@ -603,6 +1006,37 @@ async function loadEventLog(){
     "last "+data.capacity+" retained maximum";
   $("eventNewer").disabled=eventOffset===0;
   $("eventOlder").disabled=eventOffset+12>=eventPageTotal;
+}
+function renderBroadcastHero(){
+  const s=currentStatus;
+  if(!s)return;
+  const armed=currentGames.find(g=>g.id===s.selectedId);
+  const shown=armed||
+    currentGames.find(g=>g.state==="LIVE"||g.state==="CRIT")||
+    currentGames[0];
+  const isLive=shown&&(shown.state==="LIVE"||shown.state==="CRIT");
+  const status=shown?(shown.status||shown.state||"NHL"):
+    s.scoreboardLoaded?"NO GAMES TODAY":"CONNECTING";
+  $("heroLiveTag").textContent=isLive?"● LIVE":status;
+  $("heroLiveTag").classList.toggle("is-live",!!isLive);
+  $("heroGameMode").textContent=armed?"ARMED MATCHUP":
+    shown?"FEATURED MATCHUP":"NHL SCOREBOARD";
+  $("heroAway").textContent=shown?shown.away:"—";
+  $("heroHome").textContent=shown?shown.home:"—";
+  $("heroAwayMark").textContent=shown?shown.away:"NHL";
+  $("heroHomeMark").textContent=shown?shown.home:"NHL";
+  const teamColor=team=>{
+    const entry=rearPalette.find(t=>t.abbr===team);
+    return /^#[0-9a-fA-F]{6}$/.test(entry?.hex||"")?entry.hex:"#77cbd9";
+  };
+  $("heroAwayMark").style.setProperty("--team-accent",teamColor(shown?.away));
+  $("heroHomeMark").style.setProperty("--team-accent",teamColor(shown?.home));
+  const upcoming=shown&&(shown.state==="FUT"||shown.state==="PRE");
+  $("heroScore").textContent=shown&&!upcoming?
+    shown.awayScore+" : "+shown.homeScore:"— : —";
+  $("heroStatus").textContent=shown?status:
+    "The scoreboard will appear when NHL games are available";
+  $("heroArmStatus").textContent=armed?"ARMED FOR WLED":"DISPLAY ONLY";
 }
 function renderStatus(){
   if(!currentStatus)return;
@@ -664,6 +1098,17 @@ function renderStatus(){
       b.disabled=!s.caseLedEnabled);
     $("s3CaseOff").disabled=!s.caseLedEnabled;
   }
+  const s3=!!s.audioSupported;
+  $("platformTag").textContent=s3?"WAVESHARE S3 · 3.5″":"ESP32 CYD · 2.8″";
+  $("rearEnabled").closest(".card").hidden=s3;
+  $("lab-audio").hidden=!s3;
+  const audioTab=document.querySelector('[data-jump="lab-audio"]');
+  if(audioTab)audioTab.hidden=!s3;
+  if(!s3 && portalLastZone.lab==="lab-audio")jumpToZone("lab-screen");
+  $("mount-lab-hardware").hidden=s3;
+  $("mount-lab-case").hidden=!s3;
+  $("goalGifPreview").hidden=!s3;
+  renderBroadcastHero();
   const audioCard=$("s3AudioCard");
   audioCard.hidden=!s.audioSupported;
   audioCard.style.display=s.audioSupported?"":"none";
@@ -1063,7 +1508,8 @@ async function saveConfig(){
   $("wifiPassword").value="";$("adminPassword").value="";
   currentConfig=await api("/api/config");
   await refresh();
-  message("Settings saved on the CYD");
+  setPortalDirty(false);
+  message("GameDay settings saved");
 }
 async function loadConfig(){
   currentConfig=await api("/api/config");
@@ -1111,6 +1557,8 @@ document.querySelectorAll("[data-mode]").forEach(b=>b.addEventListener("click",(
   await post("/api/config",{mode});
   await refresh();message("Celebrations: "+modes[mode]);
 })));
+$("portalSave").onclick=()=>perform(saveConfig);
+$("deviceSave").onclick=()=>perform(saveConfig);
 $("saveSettings").onclick=()=>perform(saveConfig);
 $("saveDisplay").onclick=()=>perform(saveConfig);
 function previewOverlay(kind,side="home"){
@@ -1448,19 +1896,31 @@ $("goalGifRemove").onclick=()=>perform(async()=>{
 });
 $("uploadForm").onsubmit=e=>{e.preventDefault();perform(async()=>{
   const file=$("bin").files[0];if(!file)return;
-  if(!confirm("Flash "+file.name+" and restart the CYD?"))return;
+  if(!confirm("Flash "+file.name+" and restart GameDay?"))return;
   const data=new FormData();data.append("firmware",file);
   const res=await fetch("/api/update",{method:"POST",body:data});
   const text=await res.text();if(!res.ok)throw new Error(text);
   message(text);
 })};
 $("reboot").onclick=()=>perform(async()=>{
-  if(!confirm("Restart the CYD now?"))return;
+  if(!confirm("Restart this GameDay device now?"))return;
   await api("/api/reboot",{method:"POST"});message("Restart requested");
 });
 (async()=>{
-  try{await loadConfig();await refresh();await loadGoalGif();await loadSoundLibrary();await loadS3CaseLeds()}
-  catch(err){message("Cannot load device: "+err.message)}
+  try{
+    mountPortalModules();
+    trackPortalChanges();
+    ["zone-favorites","lab-screen","zone-network"].forEach(jumpToZone);
+    await loadConfig();
+    await refresh();
+    await loadGoalGif();
+    await loadSoundLibrary();
+    await loadS3CaseLeds();
+    setPortalDirty(false);
+    const initial=location.hash.slice(1);
+    if(initial && PORTAL_ROUTES[initial] && initial!=="dashboard")
+      tab(initial);
+  }catch(err){message("Cannot load device: "+err.message)}
   setInterval(()=>refresh().catch(()=>{}),15000);
 })();
 </script>
