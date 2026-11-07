@@ -6949,13 +6949,13 @@ void registerRoutes() {
     String reason;
     if(!readWledDdpLayout(snapshot,info.ledCount,cfg.wledZoneMap[slot],
                           uint8_t(mode),layout,reason))
-      return errorResponse(reason,400);
+      return errorResponse(reason.c_str(),400);
     const WledDdpPolicy::Fail geometry=WledDdpPolicy::validate(
       layout,uint8_t(CelebrationEngine::Event::GAME_START),
       WledZonePolicy::kUnknownSide);
     if(geometry!=WledDdpPolicy::OK)
-      return errorResponse(String(WledDdpPolicy::reason(geometry))+
-         ". Check LED coverage and zone assignments",400);
+      return errorResponse((String(WledDdpPolicy::reason(geometry))+
+         ". Check LED coverage and zone assignments").c_str(),400);
     uint32_t newMap=cfg.wledZoneMap[slot];
     if(mode!=0){
       newMap=0;
@@ -6984,7 +6984,7 @@ void registerRoutes() {
       cfg.wledDdpEnabled[slot]=oldDdp;
       cfg.wledEnabled[slot]=oldEnabled;
       cfg.wledDdpFps[slot]=oldFps;
-      return errorResponse("DDP check: "+failure,400);
+      return errorResponse((String("DDP check: ")+failure).c_str(),400);
     }
     // Preferences writes are checked; best-effort rollback if flash fails.
     const String suffix=String(slot);
