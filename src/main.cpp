@@ -115,6 +115,7 @@ struct Settings {
   uint8_t s3Sound = 0; // 0 = built-in, 1..3 = persistent WAV slots
   uint8_t s3PpSound = 0; // 0 = no PP audio, 1..3 = independent WAV slot
   uint8_t s3StartSound = 3; // Default game-start WAV slot; 0 disables
+  uint8_t s3FinishSound = 4; // Default game-finish WAV slot; 0 disables
   bool caseLedsEnabled = false; // Explicit opt-in AFTER physical wiring
   bool caseGoal=true,casePp=true,caseStart=true,caseFinal=true;
   uint8_t casePixels=S3CaseLedPolicy::kDefaultPixels;
@@ -1692,6 +1693,8 @@ void loadSettings() {
                           0,(int)S3WavPolicy::kSlots);
   cfg.s3StartSound=constrain((int)prefs.getUChar("s3StartSound",3),
                              0,(int)S3WavPolicy::kSlots);
+  cfg.s3FinishSound=constrain((int)prefs.getUChar("s3FinishSound",4),
+                              0,(int)S3WavPolicy::kSlots);
   cfg.caseLedsEnabled=prefs.getBool("caseOn",false);
   cfg.caseGoal=prefs.getBool("caseGoal",true);
   cfg.casePp=prefs.getBool("casePP",true);
@@ -2042,6 +2045,33 @@ void startGameStartSound(uint32_t eventSequence) {
   if(entry){entry->audio=GameEventLog::Audio::STARTED;
             hornLogSequence=eventSequence;}
   Serial.printf("[Game Start Audio] slot %u started event=%lu\n",
+                unsigned(source),(unsigned long)eventSequence);
+#else
+  (void)eventSequence;
+#endif
+}
+void startGameFinishSound(uint32_t eventSequence) {
+  GameEventLog::Entry *entry=gameEventHistory.find(eventSequence);
+  if(entry){entry->audio=GameEventLog::Audio::HORN_DISABLED;
+            entry->audioFallback=false;entry->audioSource=0;}
+#ifdef GLOWDECK_WAVESHARE_S3
+  const uint8_t source=cfg.s3FinishSound;
+  if(entry)entry->audioSource=source;
+  if(!source)return;
+  if(!s3Audio.ready() || !soundStorage.available(source)){
+    if(entry)entry->audio=GameEventLog::Audio::UNAVAILABLE;
+    Serial.printf("[Game Finish Audio] slot %u unavailable\n",unsigned(source));
+    return;
+  }
+  if(!s3Audio.playSource(source)){
+    if(entry)entry->audio=s3Audio.busyOrCoolingDown()?
+      GameEventLog::Audio::BUSY:GameEventLog::Audio::UNAVAILABLE;
+    Serial.printf("[Game Finish Audio] slot %u playback refused\n",unsigned(source));
+    return;
+  }
+  if(entry){entry->audio=GameEventLog::Audio::STARTED;
+            hornLogSequence=eventSequence;}
+  Serial.printf("[Game Finish Audio] slot %u started event=%lu\n",
                 unsigned(source),(unsigned long)eventSequence);
 #else
   (void)eventSequence;
@@ -3482,7 +3512,10 @@ void pollNhl() {
               : EventOverlay::Kind::FINAL_WIN;
         GameEventLog::Entry &log=addGameEvent(observed,logType,representative,0);
         log.rear=GameEventLog::Rear::NOT_SELECTED;
-        if(started && secondaryArmed)startGameStartSound(log.sequence);
+        if(secondaryArmed){
+          if(started)startGameStartSound(log.sequence);
+          else if(ended)startGameFinishSound(log.sequence);
+        }
         queueGameOverlay(&observed,kind,representative,log.sequence,true);
         if(secondaryArmed){
 #ifdef GLOWDECK_WAVESHARE_S3
@@ -3528,8 +3561,13 @@ void pollNhl() {
               ? GameEventLog::Type::FINAL_WIN
               : GameEventLog::Type::FINAL_LOSS;
       GameEventLog::Entry &logged = addGameEvent(*g, eventType, fav);
-      if(transition==CelebrationEngine::Event::GAME_START && isArmedGame(g->id))
-        startGameStartSound(logged.sequence);
+      if(isArmedGame(g->id)){
+        if(transition==CelebrationEngine::Event::GAME_START)
+          startGameStartSound(logged.sequence);
+        else if(transition==CelebrationEngine::Event::FINAL_WIN ||
+                transition==CelebrationEngine::Event::FINAL_LOSS)
+          startGameFinishSound(logged.sequence);
+      }
       const EventOverlay::Kind kind =
         transition == CelebrationEngine::Event::GAME_START
           ? EventOverlay::Kind::GAME_START
@@ -5935,6 +5973,7 @@ void registerRoutes() {
     doc["audioSelectedSource"] = s3Audio.selectedSource();
     doc["audioPowerPlaySource"] = cfg.s3PpSound;
     doc["audioGameStartSource"] = cfg.s3StartSound;
+    doc["audioGameFinishSource"] = cfg.s3FinishSound;
     doc["audioStorageReady"] = soundStorage.mounted();
     doc["caseLedEnabled"]=cfg.caseLedsEnabled;
     doc["caseLedActive"]=caseLedDriver.enabled();
@@ -6164,6 +6203,7 @@ void registerRoutes() {
     doc["s3Sound"] = s3Audio.selectedSource();
     doc["s3PpSound"] = cfg.s3PpSound;
     doc["s3StartSound"] = cfg.s3StartSound;
+    doc["s3FinishSound"] = cfg.s3FinishSound;
     doc["caseLedsEnabled"]=cfg.caseLedsEnabled;
     doc["casePixels"]=cfg.casePixels;
     doc["caseBrightness"]=cfg.caseBrightness;
@@ -6522,6 +6562,7 @@ void registerRoutes() {
     doc["selected"]=s3Audio.selectedSource();
     doc["powerPlaySelected"]=cfg.s3PpSound;
     doc["gameStartSelected"]=cfg.s3StartSound;
+    doc["gameFinishSelected"]=cfg.s3FinishSound;
     doc["slots"]=S3WavPolicy::kSlots;
     doc["maxFileBytes"]=S3WavPolicy::kMaxBytes;
     doc["totalBytes"]=soundStorage.totalBytes();
@@ -6571,6 +6612,27 @@ void registerRoutes() {
   });
   // Distinct PP audio assignment. Source 0 disables; it never changes the
   // working goal horn selection or cfg.horn. No NHL eligibility changes.
+  server.on("/api/audio/gamefinish-select", HTTP_POST, []() {
+    if(!authorized())return;
+    if(s3Audio.playing() || s3Audio.storageBusy())
+      return errorResponse("Audio busy; retry after playback",409);
+    StaticJsonDocument<96> request;
+    if(deserializeJson(request,server.arg("plain")))
+      return errorResponse("Invalid game-finish sound JSON");
+    if(!request.containsKey("source") || !request["source"].is<int>())
+      return errorResponse("Source must be an integer 0 through 4");
+    const int source=request["source"].as<int>();
+    if(source<0 || source>S3WavPolicy::kSlots)
+      return errorResponse("Game-finish slot out of range");
+    S3WavPolicy::Info meta;
+    if(source && !soundStorage.inspect(uint8_t(source),meta))
+      return errorResponse("Game-finish WAV missing or invalid",400);
+    cfg.s3FinishSound=uint8_t(source);
+    prefs.putUChar("s3FinishSound",cfg.s3FinishSound);
+    StaticJsonDocument<96> response;
+    response["ok"]=true;response["gameFinishSelected"]=cfg.s3FinishSound;
+    sendJson(response);
+  });
   server.on("/api/audio/gamestart-select", HTTP_POST, []() {
     if(!authorized())return;
     if(s3Audio.playing() || s3Audio.storageBusy())
@@ -6634,6 +6696,10 @@ void registerRoutes() {
       cfg.s3Sound=0; // built-in safety fallback
       s3Audio.setSelectedSource(0);
       prefs.putUChar("s3Sound",0);
+    }
+    if(cfg.s3FinishSound==slot){
+      cfg.s3FinishSound=0;
+      prefs.putUChar("s3FinishSound",0);
     }
     if(cfg.s3StartSound==slot){
       cfg.s3StartSound=0;
@@ -7820,6 +7886,9 @@ void registerRoutes() {
       startPowerPlaySound(previewRow.sequence);
     } else if (combined && event == CelebrationEngine::Event::GAME_START) {
       startGameStartSound(previewRow.sequence);
+    } else if (combined && (event == CelebrationEngine::Event::FINAL_WIN ||
+                            event == CelebrationEngine::Event::FINAL_LOSS)) {
+      startGameFinishSound(previewRow.sequence);
     }
     audioStarted = previewRow.audio == GameEventLog::Audio::STARTED;
     StaticJsonDocument<512> response;
