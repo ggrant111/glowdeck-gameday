@@ -2646,7 +2646,13 @@ void tickWledCelebrations() {
   // Manual stop applies to the current armed PP until its end. A different
   // game or a confirmed non-PP sample releases the stop latch automatically.
   if(wledPpManuallyStoppedGameId){
-    if(wledPpManuallyStoppedGameId!=selectedGameId || !hasPP)
+    const PowerPlayLogPolicy::Watch *watch=
+        getPowerPlayLogWatch(wledPpManuallyStoppedGameId);
+    // An absent NHL situation sample is NOT proof that the PP ended.
+    // Only a debounced PP end or switching armed games releases the latch.
+    const bool confirmedEnd=watch && watch->initialized &&
+                             watch->side==0 && !hasPP;
+    if(wledPpManuallyStoppedGameId!=selectedGameId || confirmedEnd)
       wledPpManuallyStoppedGameId=0;
     else hasPP=false;
   }
