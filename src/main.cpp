@@ -34,6 +34,7 @@
 #include "NhlFetchPolicy.h"
 #include "CelebrationEngine.h"
 #include "WledDiscoveryPolicy.h"
+#include "WledZonePolicy.h"
 #include "TeamGradient.h"
 #include "GameEventLog.h"
 #include "PowerPlayLogPolicy.h"
@@ -91,6 +92,8 @@ struct Settings {
   // Masked opt-in for every connected controller: goal / PP / start / final.
   uint8_t wledEvents[MAX_WLED] = {15,15,15,15,15,15,15,15};
   String wledName[MAX_WLED];
+  bool wledZoneEnabled[MAX_WLED] = {}; // OFF for migrated 8A/legacy slots
+  uint32_t wledZoneMap[MAX_WLED] = {}; // 2-bit per existing WLED segment ID
   bool wledPP = true, wledGameStart = true, wledFinal = true;
   uint8_t wledGoalStyle = 0; // 0 strobe+chase, 1 strobe, 2 chase, 3 solid
   uint8_t favoriteSide = 0; // home 0 / away 1; for start and final outcomes
@@ -205,6 +208,10 @@ uint32_t nhlLastSuccessAt = 0;
 uint32_t lastTouch = 0;
 String savedState[MAX_WLED];
 String savedWledIp[MAX_WLED];
+uint16_t wledTouchedSegments[MAX_WLED] = {};
+bool wledRestoreMapped[MAX_WLED] = {};
+uint8_t wledEventSide=WledZonePolicy::kUnknownSide;
+uint8_t queuedWledSide=WledZonePolicy::kUnknownSide;
 CelebrationEngine::Event wledActiveEvent = CelebrationEngine::Event::NONE;
 uint32_t wledEventStart = 0, wledEventColor = 0, wledEventDuration = 0;
 uint8_t wledPhase = 0;
@@ -1495,6 +1502,8 @@ void loadSettings() {
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     cfg.wled[i] = prefs.getString(("ip" + String(i)).c_str(), "");
     cfg.wledName[i] = prefs.getString(("wname" + String(i)).c_str(), "");
+    cfg.wledZoneEnabled[i] = prefs.getBool(("zoneOn"+String(i)).c_str(),false);
+    cfg.wledZoneMap[i] = prefs.getUInt(("zoneMap"+String(i)).c_str(),0);
     cfg.wledEnabled[i] = prefs.getBool(("enable" + String(i)).c_str(), false);
     cfg.wledEvents[i] = prefs.getUChar(("event" + String(i)).c_str(),
                                          CelebrationEngine::ALL_EVENTS) &
@@ -1576,6 +1585,8 @@ void saveSettings() {
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     prefs.putString(("ip" + String(i)).c_str(), cfg.wled[i]);
     prefs.putString(("wname" + String(i)).c_str(), cfg.wledName[i]);
+    // Mapping keys are written separately by the 8B segment editor.
+    // The original Save settings must never replace those assignments.
     prefs.putBool(("enable" + String(i)).c_str(), cfg.wledEnabled[i]);
     prefs.putUChar(("event" + String(i)).c_str(), cfg.wledEvents[i]);
   }
@@ -5180,6 +5191,7 @@ void registerRoutes() {
       JsonObject d = wled.createNestedObject();
       d["ip"] = cfg.wled[i];
       d["name"] = cfg.wledName[i];
+      d["zoneEnabled"] = cfg.wledZoneEnabled[i];
       d["enabled"] = cfg.wledEnabled[i];
       d["events"] = cfg.wledEvents[i];
     }
