@@ -192,6 +192,7 @@ uint32_t rearDiagnosticUntil = 0, rearDiagnosticColor = 0;
 uint8_t gameCount = 0, gamePage = 0, featuredIndex = 0;
 uint8_t carouselSlide = 0; // Independent of armed game and detail index.
 CarouselHoldPolicy::State carouselHold; // Only rotation stops, never live polling.
+uint32_t overlayReturnHeldGameId=0; // Remember the displayed game across overlays.
 LiveCarousel::Plan carouselPlan; // 28 fixed entries, no heap or sprite buffer.
 uint32_t lastCarouselAdvance = 0;
 uint32_t lastBackgroundOverlayAt = 0;
@@ -390,6 +391,7 @@ void toggleCarouselHold(){
   const uint32_t id=games[page.index].id;
   carouselHold.toggle(id);
   if(!carouselHold.paused){
+    overlayReturnHeldGameId=0; // User deliberately resumed rotation.
     const uint8_t found=LiveCarousel::locateGame(carouselPlan,games,id);
     if(found!=255)carouselSlide=found;
   }
@@ -916,6 +918,10 @@ bool queueGameOverlay(const Game *g, EventOverlay::Kind kind,
   }
   const bool admitted = overlayController.push(item, now);
   if (admitted) {
+    // An event overlay temporarily owns the display, not its carousel lock.
+    // Keep the original NHL game ID even through multiple queued events.
+    if(carouselHold.paused && !overlayReturnHeldGameId)
+      overlayReturnHeldGameId=carouselHold.gameId;
     if (observed && tier == 0 && kind != EventOverlay::Kind::GOAL) {
       lastBackgroundOverlayAt = now;
       hasBackgroundOverlay = true;
@@ -1102,6 +1108,7 @@ void prepareNewScoreboardDate(const String &today) {
     featuredIndex = 0;
     carouselSlide = 0;
     carouselHold.reset();
+    overlayReturnHeldGameId=0;
     rebuildCarouselPlan();
     lastCarouselAdvance = millis();
     needDetailLoad = false;
@@ -3263,6 +3270,7 @@ void pollNhl() {
     featuredIndex = 0;
     carouselSlide = 0;
     carouselHold.reset();
+    overlayReturnHeldGameId=0;
     lastCarouselAdvance = millis();
     needDetailLoad = false;
     detail.loaded = false;
@@ -3294,8 +3302,8 @@ void pollNhl() {
   // the armed game. A live slate intentionally hides standings slides.
   carouselPlan = LiveCarousel::build(games, gameCount, cfg.showStandings,
                                      cfg.favoriteTeams);
-  if(carouselHold.paused && carouselHold.index(games,gameCount)==255)
-    carouselHold.reset();
+  // A brief missing game in the NHL feed must not implicitly resume cycling.
+  carouselHold.onFeedRefresh(!newDay);
   carouselSlide = newDay ? 0 : LiveCarousel::restore(
       carouselPlan, games, oldSlideKind, previouslyShownGameId,
       previousStandingsIndex, featuredIndex);
@@ -5273,6 +5281,7 @@ void selectGame(uint32_t id) {
   // Legacy select promotes to rank 1; other armed games stay armed.
   if(!isScheduledGame(id) || !armedGames.promote(id))return;
   carouselHold.reset();
+  overlayReturnHeldGameId=0; // Explicit game selection replaces any old hold.
   swallowLiveGesture = true;
   const bool primaryChanged=selectedGameId!=id;
   persistArmedGames();
@@ -5594,6 +5603,8 @@ void handleTouch() {
 #endif
       if (dismiss) {
         overlayController.dismiss(millis());
+        // Do not reuse this press/release on the underlying carousel.
+        swallowLiveGesture=true;
         overlayLastFrame = 0;
         lastCarouselAdvance = millis();
         needsDraw = true;
@@ -5893,6 +5904,7 @@ void registerRoutes() {
     doc["carouselTotal"] = carouselPageCount();
     doc["carouselPaused"] = carouselHold.paused;
     doc["carouselHeldGameId"] = carouselHold.gameId;
+    doc["overlayReturnHeldGameId"] = overlayReturnHeldGameId;
     doc["slideStandings"] = showingStandingsPage();
     doc["slideSummary"] = showingSummaryPage();
     doc["liveMode"] = carouselPlan.liveMode;
@@ -7981,12 +7993,24 @@ void loop() {
     }
   }
   if (overlayController.tick(millis())) {
-    // An overlay ended or a queued higher-priority event took over.
-    // Redraw the exact underlying page without advancing the carousel.
+    // A queued alert may take over; after the final event, re-pin the
+    // user's selected NHL game rather than advancing to another slide.
+    if(!overlayController.active() && overlayReturnHeldGameId){
+      carouselHold.pin(overlayReturnHeldGameId);
+      overlayReturnHeldGameId=0;
+    }
     lastCarouselAdvance = millis();
     overlayLastFrame = 0;
     partialLiveUpdate = false;
     needsDraw = true;
+  }
+  // Manual dismissal uses dismiss() instead of tick(). Restore either way.
+  if(!overlayController.active() && overlayReturnHeldGameId){
+    carouselHold.pin(overlayReturnHeldGameId);
+    overlayReturnHeldGameId=0;
+    lastCarouselAdvance=millis();
+    partialLiveUpdate=false;
+    needsDraw=true;
   }
   if (!overlayController.active() && screen == Screen::LIVE &&
       cfg.cycleGames && !carouselHold.paused && carouselPageCount() > 1 &&
