@@ -5,7 +5,7 @@ s=Path("src/main.cpp").read_text(encoding="utf-8")
 ui=Path("include/WebUi.h").read_text(encoding="utf-8")
 preview=s.split('server.on("/api/wled/preview", HTTP_POST, []() {',1)[1].split(
     'server.on("/api/test", HTTP_POST, []() {',1)[0]
-assert 'if (combined && event == CelebrationEngine::Event::GOAL)' in preview
+assert 'if(combined && event == CelebrationEngine::Event::GOAL)' in preview
 assert 'startHorn(previewRow.sequence);' in preview
 assert 'previewRow.audio == GameEventLog::Audio::STARTED' in preview
 assert preview.count('startHorn(')==1
