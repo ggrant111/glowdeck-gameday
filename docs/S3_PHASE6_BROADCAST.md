@@ -131,6 +131,59 @@ their layout. Regenerate the ignored `include/TeamLogos.h` for a local build
 using `python scripts/generate_logos.py` (requires Pillow and CairoSVG), or
 use the prebuilt CI firmware to avoid local graphics dependencies.
 
+## Phase 6B.2B — dynamic Upcoming / Live / Intermission / Final
+
+All four NHL game phases now have a dedicated readout hierarchy on the
+native Waveshare ESP32-S3 arena Live Game page. The large 96px official
+team logos, borderless background, team-primary accents, follow star,
+fixed footer controls, and all current hit targets are unchanged.
+
+| NHL API state | Header | Center stage | Unified lower strip |
+|---|---|---|---|
+| `FUT` / `PRE` | Local start time + UPCOMING | Large VS | Existing cached season W-L-OT records when available, otherwise RECORDS PENDING; **no SOG/PP placeholders** |
+| `LIVE` / `CRIT` | Live period/clock + LIVE indicator | Large current score | Actual SOG (or '--' only if NHL has not published it) and **validated** PP / pulled-goalie status |
+| `LIVE` / `CRIT` with `inIntermission=true` | END OF [period] + INTERMISSION | Current score | SOG, no stale PP/empty-net indicator |
+| `OFF` / `FINAL` / `OVER` | GAME COMPLETE + FINAL / OT / SO (or GAME OVER while awaiting final designation) | Final score, discreet winner-side accent when scores differ | SOG when available + winner abbreviation; no premature victory inferred from live score |
+
+Unrecognized game states use a neutral GAME STATUS view without invented
+scores or shots. Winning team is determined **only for completed games**,
+not from the current lead during LIVE or INTERMISSION. Overtime/shootout
+labels come from `periodDescriptor.periodType`, not from a score guess.
+
+**No new NHL fetches:** The Upcoming records come from the existing
+per-game `CarouselStats` cache, refreshed through the normal stats
+prefetch. Verified power plays and empty-net states retain the existing
+short freshness window and source validation. Cached data is matched
+to the current NHL game ID so an adjacent game's record cannot leak
+onto another matchup.
+
+**Redraw safety/performance:** The two established dirty rectangles
+(top x=144,y=43,w=192,h=160; bottom x=48,y=215,w=384,h=53)
+are restored directly from the full-resolution RGB565 PSRAM arena
+background before drawing current status, score, and statistics. This
+erases old UPCOMING/PP/SOG/FINAL badges when a game changes state.
+Only those rectangles are sent to the LCD for same-game updates;
+carousel changes, overlay interruptions, and page navigation still
+perform a full framebuffer redraw. Original CYD rendering, WLED
+trigger rules, Fire TV integration and event queue are unchanged.
+
+### On-device acceptance test
+
+1. **Upcoming:** verify the start time and VS; SOG/PP '--' placeholders
+   must be absent. Season records should show only when actually fetched.
+2. **Live:** verify score, period, clock and real SOG. With an authenticated
+   PP or pulled-goalie event, the indicator names the correct team.
+3. **Intermission:** retain score/SOG; switch header to INTERMISSION and
+   drop PP/EN badges. No visual leftovers from live clock.
+4. **Final:** regulation, OT and SO status labels; winner highlight is
+   only present when scores differ.
+5. Test a state transition without changing carousel page, followed by
+   swipe, tap-for-Stats, follow-star and a preview GOAL interrupt/restore.
+   All logo and footer positions should remain stable.
+6. Examine smoothness, memory and clarity on the **physical** 480x320
+   panel. Passing compilation does not prove the display has been
+   tested; retain `GLOWDECK_S3_PHASE6_LIVE=0` for rollback.
+
 ## Footer alignment fix — armed game slides (November 2026)
 
 A physical Waveshare S3 test showed that page 2/3 shifted its bottom
