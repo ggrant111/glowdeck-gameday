@@ -3976,6 +3976,9 @@ void drawS3Empty() {
   tft.setTextDatum(TL_DATUM);
   drawS3Nav("ALL GAMES");
 }
+#if defined(GLOWDECK_S3_PHASE6C_UI) && GLOWDECK_S3_PHASE6C_UI
+#include "S3BroadcastPages.h"
+#endif
 #endif
 
 void draw() {
@@ -3993,7 +3996,11 @@ void draw() {
       if(!goalGif.active() || gifOverlayStart!=overlayController.startedAt()) {
         goalGif.stop();
         gifOverlayStart=overlayController.startedAt();
+#if defined(GLOWDECK_S3_PHASE6C_UI) && GLOWDECK_S3_PHASE6C_UI
+        drawS3CGifBackdrop(e);
+#else
         drawS3GifBackdrop(e);
+#endif
         if(!goalGif.start(tft,S3NativeLayout::kGifViewport.x,
                          S3NativeLayout::kGifViewport.y))
           gifOverlayFailedStart=overlayController.startedAt();
@@ -4004,7 +4011,11 @@ void draw() {
       }
     }
     goalGif.stop();
+#if defined(GLOWDECK_S3_PHASE6C_UI) && GLOWDECK_S3_PHASE6C_UI
+    drawS3CEventStatic();
+#else
     drawS3EventStatic();
+#endif
     drawOverlayAnimation(millis());
     return;
 #else
@@ -4015,17 +4026,28 @@ void draw() {
   }
 #ifdef GLOWDECK_WAVESHARE_S3
   if(goalGif.active())goalGif.stop();
+#if defined(GLOWDECK_S3_PHASE6C_UI) && GLOWDECK_S3_PHASE6C_UI
+  if(screen==Screen::CALIBRATE) { drawS3CTouchCheck(); return; }
+  if(screen==Screen::SETUP) { drawS3CSetup(); return; }
+#else
   if(screen==Screen::CALIBRATE) { drawS3TouchCheck(); return; }
   if(screen==Screen::SETUP) { drawS3Setup(); return; }
+#endif
 #else
   if (screen == Screen::CALIBRATE) { drawCalibration(); return; }
 #endif
   if (screen == Screen::LIVE) {
 #ifdef GLOWDECK_WAVESHARE_S3
     if (tft.nativeLayout()) {
+#if defined(GLOWDECK_S3_PHASE6C_UI) && GLOWDECK_S3_PHASE6C_UI
+      if (showingStandingsPage()) drawS3CStandings();
+      else if (showingSummaryPage()) drawS3CGameList(false);
+      else if (!gameCount) drawS3CEmpty();
+#else
       if (showingStandingsPage()) drawS3Standings();
       else if (showingSummaryPage()) drawS3Summary();
       else if (!gameCount) drawS3Empty();
+#endif
       else {
         const LiveCarousel::Page page=currentCarouselPage();
         const Game &g=games[page.kind==LiveCarousel::Kind::GAME
@@ -4070,8 +4092,13 @@ void draw() {
 
 #ifdef GLOWDECK_WAVESHARE_S3
   if (tft.nativeLayout()) {
+#if defined(GLOWDECK_S3_PHASE6C_UI) && GLOWDECK_S3_PHASE6C_UI
+    if (screen == Screen::GAMES) drawS3CGameList(true);
+    else if (screen == Screen::STATS) drawS3CStats();
+#else
     if (screen == Screen::GAMES) drawS3GamePicker();
     else if (screen == Screen::STATS) drawS3Stats();
+#endif
     else return;
     return;
   }

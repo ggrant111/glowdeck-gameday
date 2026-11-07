@@ -102,6 +102,11 @@ jobs:
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_broadcast_frame.cpp -o /tmp/glowdeck-s3-6b4-frame-test
           /tmp/glowdeck-s3-6b4-frame-test
           python tests/test_s3_phase6b4_contract.py
+      - name: Test S3 Phase 6C broadcast pages, touch geometry and rollback
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_phase6c_pages.cpp -o /tmp/glowdeck-s3-6c-pages
+          /tmp/glowdeck-s3-6c-pages
+          python tests/test_s3_phase6c_contract.py
       - name: Test S3 Phase 5 framebuffer and dirty-region geometry
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_raster_geometry.cpp -o /tmp/glowdeck-s3-raster-test
