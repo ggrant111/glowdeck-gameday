@@ -376,6 +376,9 @@ void drawS3CGifBackdrop(const EventOverlay::Item &e){
       e.color?e.color:0x31837AUL);
   tft.fillRect(0,40,7,240,club);
   tft.fillRect(473,40,7,240,club);
+  // Keep the original optional team-logo rail alongside the 1:1 GIF.
+  if(cfg.overlayLogos && e.team[0])
+    drawTeamLogo(tft,String(e.team),12,129,56);
   tft.setTextDatum(ML_DATUM);
   drawS3CText(String(e.team)+"  GOAL!",16,21,360,4,WHITE);
   // Exact 320x240 viewport preserved, including the four corner controls.
