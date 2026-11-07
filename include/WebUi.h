@@ -1991,9 +1991,11 @@ async function openWledDdpSettings(slot,host){
     "I understand that its LEDs may temporarily replace other WLED effects.";
   confirmWrap.append(confirm,confirmLabel);box.append(confirmWrap);
   const actions=make("div","wled-quick-actions");
-  const test=make("button","primary","Enable & test for 3 seconds");
+  const test=make("button","primary",data.ddpEnabled?
+    "Save changes & test (3 seconds)":"Enable & test for 3 seconds");
   test.type="button";
-  const save=make("button","ghost","Enable without testing");
+  const save=make("button","ghost",data.ddpEnabled?
+    "Save changes":"Enable without testing");
   save.type="button";
   test.disabled=!data.ready;save.disabled=!data.ready;
   const feedback=make("p","small muted","");
@@ -2038,6 +2040,9 @@ async function openWledDdpSettings(slot,host){
         message("Light streaming enabled on controller "+(slot+1));
       }
       confirm.checked=false;
+    }catch(error){
+      feedback.textContent="Could not finish setup: "+error.message;
+      throw error;
     }finally{
       test.disabled=!data.ready;save.disabled=!data.ready;
     }
