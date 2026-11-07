@@ -25,13 +25,13 @@ enum class Wled : uint8_t {
 // A goal can have a successful WLED effect and no horn. Record the actual
 // software audio outcome, never claim the speaker was physically audible.
 enum class Audio : uint8_t {
-  NA = 0, NOT_ARMED, DISABLED, UNAVAILABLE, BUSY,
+  NA = 0, NOT_ARMED, HORN_DISABLED, UNAVAILABLE, BUSY,
   STARTED, COMPLETED, STREAM_FAILED
 };
 inline const char *audioLabel(Audio a){
   switch(a){
     case Audio::NOT_ARMED:return "Not armed for this game";
-    case Audio::DISABLED:return "Disabled in Sound settings";
+    case Audio::HORN_DISABLED:return "Disabled in Sound settings";
     case Audio::UNAVAILABLE:return "Audio device unavailable";
     case Audio::BUSY:return "Playback busy or in cooldown";
     case Audio::STARTED:return "Playback started";
