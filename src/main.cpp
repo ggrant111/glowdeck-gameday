@@ -7999,6 +7999,9 @@ void loop() {
       carouselHold.pin(overlayReturnHeldGameId);
       overlayReturnHeldGameId=0;
     }
+    // If a finger was already touching the overlay as it expired, consume
+    // that gesture until release instead of treating it as a carousel swipe.
+    if(!overlayController.active() && touchWasDown)swallowLiveGesture=true;
     lastCarouselAdvance = millis();
     overlayLastFrame = 0;
     partialLiveUpdate = false;
