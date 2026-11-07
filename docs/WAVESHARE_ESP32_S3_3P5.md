@@ -8,7 +8,7 @@ This is the **same `src/main.cpp` GameDay core** as the CYD: date-scoped NHL sco
 
 The initial S3 display driver provides a full-screen **landscape 480×320** picture by scaling the existing 320×240 UI in a 16-bit frame buffer. Capacitive touch is converted to the established virtual hit targets, preserving stars, menus and swipe gestures. The boot screen or touch may need orientation/color tuning after physical testing.
 
-**Hardware not yet enabled:** rear RGB LED GPIO and horn. The original CYD GPIO4/17/16 RGB pins and GPIO26 horn input are *not portable* to Waveshare. S3 has an ES8311 audio codec (requires an I2S codec driver) and no CYD-style rear LED. Software follow stars, NHL events and WLED celebrations still work. Do not wire lights to the CYD pin list! Rear LED is hard-disabled on the S3 port until a verified external LED expansion mapping exists; the horn is silent.
+**Phase 7A audio:** the Waveshare S3 ES8311 speaker codec now has its own 48 kHz I2S goal-horn driver with a web-dashboard preview at 50% volume and the separate TCA9554 P7 amplifier enable. The original CYD GPIO26 speaker and GPIO4/17/16 rear LED pins are **not portable**. External case LEDs remain disabled on S3 until Phase 7C pin mapping is verified. See [Phase 7A onboard audio](S3_PHASE7A_ONBOARD_AUDIO.md).
 
 ## Pin mapping, Waveshare ST7796 V1/V2
 

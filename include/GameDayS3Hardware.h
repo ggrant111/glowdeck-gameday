@@ -2,7 +2,7 @@
 // Waveshare ESP32-S3-Touch-LCD-3.5 (ST7796 SPI, FT6336 I2C).
 // Full native 480x320 landscape UI, with factory-mapped FT6336 touch.
 // Uploaded 320x240 GOAL GIFs are centered 1:1, not stretched.
-// No rear-RGB or speaker pins are claimed: Waveshare uses different hardware.
+// No CYD rear-RGB/speaker pins are claimed. S3GoalAudio independently manages\n// ES8311 I2S speaker and TCA9554 P7; CYD GPIO26 is never used here.
 #ifdef GLOWDECK_WAVESHARE_S3
 #include <Arduino.h>
 #include <Wire.h>

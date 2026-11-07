@@ -112,6 +112,11 @@ jobs:
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_phase6d_stability.cpp -o /tmp/glowdeck-s3-6d-stability
           /tmp/glowdeck-s3-6d-stability
           python tests/test_s3_phase6d_release.py
+      - name: Test S3 Phase 7A ES8311 speaker, 50-percent goal horn and isolated preview
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_phase7a_audio.cpp -o /tmp/glowdeck-s3-7a-audio
+          /tmp/glowdeck-s3-7a-audio
+          python tests/test_s3_phase7a_contract.py
       - name: Test S3 Phase 5 framebuffer and dirty-region geometry
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_raster_geometry.cpp -o /tmp/glowdeck-s3-raster-test

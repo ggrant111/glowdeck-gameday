@@ -11,6 +11,7 @@
 #include <WiFiClientSecure.h>
 #ifdef GLOWDECK_WAVESHARE_S3
 #include "GameDayS3Hardware.h"
+#include "S3GoalAudio.h"
 #include "GoalGifPlayer.h"
 #include "S3NativeLayout.h"
 #include "S3ArenaBackground.h"
@@ -117,6 +118,7 @@ Preferences prefs;
 #ifdef GLOWDECK_WAVESHARE_S3
 GameDayS3Display tft;
 GameDayS3Touch touch;
+S3GoalAudio s3Audio;
 #else
 TFT_eSPI tft;
 SPIClass touchSPI(VSPI);
@@ -1587,11 +1589,21 @@ String getWledState(const String &ip) {
 
 void startHorn() {
   if (!cfg.horn) return;
+#ifdef GLOWDECK_WAVESHARE_S3
+  // Phase 7A: the opt-in real-goal horn uses the same 50% ES8311 path
+  // as the isolated preview. Never replace WLED, overlays or Fire TV.
+  s3Audio.play();
+#else
   hornPlaying = true;
   hornStart = millis();
   hornFrequency = 0;
+#endif
 }
 void tickHorn() {
+#ifdef GLOWDECK_WAVESHARE_S3
+  s3Audio.tick();
+  return;
+#else
   if (!hornPlaying) return;
   const uint32_t elapsed = millis() - hornStart;
   const uint16_t nextFreq = elapsed < 170 ? 784 : elapsed < 260 ? 0 :
@@ -1604,6 +1616,7 @@ void tickHorn() {
     hornFrequency = nextFreq;
   }
   if (elapsed >= 900) hornPlaying = false;
+#endif
 }
 
 // WLED Celebration Engine v0.3.1
@@ -4732,6 +4745,15 @@ void registerRoutes() {
     DynamicJsonDocument doc(4096);
     if (doc.capacity() < 4096) return errorResponse("Status memory unavailable", 503);
     doc["version"] = "0.4.1";
+#ifdef GLOWDECK_WAVESHARE_S3
+    doc["audioSupported"] = true;
+    doc["audioReady"] = s3Audio.ready();
+    doc["audioPlaying"] = s3Audio.playing();
+    doc["audioVolume"] = s3Audio.volume();
+    doc["audioError"] = s3Audio.error();
+#else
+    doc["audioSupported"] = false;
+#endif
     doc["wifiConnected"] = WiFi.status() == WL_CONNECTED;
     doc["ip"] = localAddress();
     doc["apSsid"] = apSsid;
@@ -5160,6 +5182,23 @@ void registerRoutes() {
     response["pending"] = overlayController.pending();
     sendJson(response);
   });
+#ifdef GLOWDECK_WAVESHARE_S3
+  // S3-only Phase 7A: local horn test, no WLED, score change, animation,
+  // NHL event log or NVS writes. Preview works even if cfg.horn is off.
+  server.on("/api/audio/preview", HTTP_POST, []() {
+    if (!authorized()) return;
+    if (!s3Audio.ready())return errorResponse(s3Audio.error(),503);
+    if (!s3Audio.play())return errorResponse(
+        s3Audio.playing()?"Horn already playing / cooldown":
+                          "Horn unavailable or on cooldown",409);
+    StaticJsonDocument<128> doc;
+    doc["ok"]=true;
+    doc["volume"]=s3Audio.volume();
+    doc["durationMs"]=S3HornPolicy::kDurationMs;
+    doc["sound"]="onboard-goal-horn";
+    sendJson(doc);
+  });
+#endif
   // UI reads the same palette used for actual observed NHL goal colors.
   server.on("/api/rear/palette", HTTP_GET, []() {
     if (!authorized()) return;
@@ -5512,6 +5551,9 @@ void setup() {
 
 #ifdef GLOWDECK_WAVESHARE_S3
   touch.begin(); // FT6336 on shared I2C: GPIO8 SDA / GPIO7 SCL.
+  // Audio uses this same initialized Wire bus; P7 amp remains OFF at boot.
+  // A missing codec fails gracefully without preventing the scoreboard.
+  s3Audio.begin();
 #else
   touchSPI.begin(25, 39, 32, PIN_TOUCH_CS);
   touch.begin(touchSPI);
