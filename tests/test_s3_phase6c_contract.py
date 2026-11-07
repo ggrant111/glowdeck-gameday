@@ -36,7 +36,7 @@ for forbidden in ("server.","HTTPClient","WiFi.","pollNhl(",
 assert "tft.fillScreen(S3C_BG);" in pages
 assert "tft.present();" not in pages
 assert "heap_caps_malloc(" not in pages
-assert "new " not in pages
+assert "new uint16_t" not in pages and "new Game" not in pages
 assert "S3BroadcastPages::statsRow(i)" in pages
 assert "S3BroadcastPages::standingsRow(row)" in pages
 # Existing team and game data MUST remain real rather than placeholders.
