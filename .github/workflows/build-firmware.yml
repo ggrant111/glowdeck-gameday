@@ -97,6 +97,11 @@ jobs:
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_broadcast_data.cpp -o /tmp/glowdeck-s3-broadcast-data-test
           /tmp/glowdeck-s3-broadcast-data-test
           python tests/test_s3_broadcast_contract.py
+      - name: Test S3 Phase 6B.4 partial SPI refresh, PSRAM and event recovery
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_broadcast_frame.cpp -o /tmp/glowdeck-s3-6b4-frame-test
+          /tmp/glowdeck-s3-6b4-frame-test
+          python tests/test_s3_phase6b4_contract.py
       - name: Test S3 Phase 5 framebuffer and dirty-region geometry
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_s3_raster_geometry.cpp -o /tmp/glowdeck-s3-raster-test

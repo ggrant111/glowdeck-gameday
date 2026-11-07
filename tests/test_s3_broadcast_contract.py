@@ -12,7 +12,7 @@ main = (root / "src" / "main.cpp").read_text(encoding="utf-8")
 header = (root / "include" / "S3BroadcastGameState.h").read_text(encoding="utf-8")
 layout = (root / "include" / "S3NativeLayout.h").read_text(encoding="utf-8")
 
-start = main.index("void drawS3ArenaReadout(const Game &g) {")
+start = main.index("void drawS3ArenaReadout(const Game &g,")
 end = main.index("// A freestanding follow star", start)
 readout = main[start:end]
 assert main.index("#if defined(GLOWDECK_S3_PHASE6_LIVE)") < start
@@ -77,7 +77,7 @@ assert "tft.setTextDatum(TL_DATUM);" in readout
 assert "drawS3ArenaReadout(" in main
 assert "drawS3Readout(" in main
 assert "drawLiveReadout(" in main
-assert "s3ScoreOnlyFrame = true;" in main
+assert "s3ScoreOnlyFrame=true;" in main
 assert "tft.presentRegion(top.x,top.y,top.w,top.h);" in main
 assert "tft.presentRegion(bottom.x,bottom.y,bottom.w,bottom.h);" in main
 assert "overlayController.active()" in main
