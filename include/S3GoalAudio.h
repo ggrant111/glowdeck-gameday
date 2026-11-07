@@ -26,6 +26,19 @@
 class S3GoalAudio {
  public:
   enum class Clip:uint8_t { HORN=0, TEST_TONE=1, CUSTOM=2 };
+  enum class Failure:uint8_t {
+    NONE=0, WAV_OPEN, WAV_HEADER, WAV_READ, WAV_DECODE, I2S_WRITE
+  };
+  static const char *failureName(Failure failure){
+    switch(failure){
+      case Failure::WAV_OPEN:return "WAV file open failed";
+      case Failure::WAV_HEADER:return "WAV header invalid";
+      case Failure::WAV_READ:return "WAV flash read failed";
+      case Failure::WAV_DECODE:return "WAV decoder stopped";
+      case Failure::I2S_WRITE:return "I2S DMA write failed";
+      default:return "None";
+    }
+  }
   struct Probe {
     bool codecRead=false, expanderRead=false;
     uint8_t codecReset=0, codecMute=0, codecVolume=0;
@@ -57,7 +70,8 @@ class S3GoalAudio {
     config.channel_format=I2S_CHANNEL_FMT_RIGHT_LEFT;
     config.communication_format=I2S_COMM_FORMAT_STAND_I2S;
     config.intr_alloc_flags=0;
-    config.dma_buf_count=6;
+    // 12 x 256 frames = 64 ms of DMA elasticity during HTTPS/WLED work.
+    config.dma_buf_count=12;
     config.dma_buf_len=S3HornPolicy::kFrameChunk;
     config.use_apll=false;
     config.tx_desc_auto_clear=true;
@@ -109,7 +123,7 @@ class S3GoalAudio {
       S3WavPolicy::Info meta;
       const bool valid=file && S3WavPolicy::parse(file,meta);
       file.close();
-      if(valid)return playClip(Clip::CUSTOM,chosen);
+      if(valid)return playClip(Clip::CUSTOM,chosen,true);
       Serial.println("[S3 WAV] selected file missing/invalid; using built-in goal horn");
     }
     return playClip(Clip::HORN);
@@ -144,6 +158,14 @@ class S3GoalAudio {
   }
   uint32_t writtenFrames() const {return writtenFrames_.load();}
   uint32_t lastDurationMs() const {return lastDurationMs_.load();}
+  uint32_t expectedFrames()const{return expectedFrames_.load();}
+  uint32_t peakSample()const{return peakSample_.load();}
+  uint32_t writeRetries()const{return writeRetries_.load();}
+  uint32_t readFailureOffset()const{return readFailureOffset_.load();}
+  int32_t lastI2sCode()const{return lastI2sCode_.load();}
+  Failure lastFailure()const{return Failure(lastFailure_.load());}
+  bool usedFallback()const{return usedFallback_.load();}
+  bool ampVerifiedAtStart()const{return ampVerifiedAtStart_.load();}
   bool lastStreamOk()const{return lastStreamOk_.load();}
   bool hasPlayed()const{return everPlayed_;}
   bool ampEnabled()const{return ampOn_;}
@@ -202,7 +224,7 @@ class S3GoalAudio {
       case Error::CODEC_INIT:return "ES8311 register initialization failed";
       case Error::I2S:return "I2S clock/pins unavailable";
       case Error::TASK:return "Audio task allocation failed";
-      case Error::STREAM:return "I2S write timeout";
+      case Error::STREAM:return failureName(lastFailure());
       case Error::CODEC_VOLUME:return "ES8311 volume readback failed";
       default:return "";
     }
@@ -224,6 +246,15 @@ class S3GoalAudio {
   std::atomic<bool> lastStreamOk_{false};
   std::atomic<uint32_t> writtenFrames_{0};
   std::atomic<uint32_t> lastDurationMs_{0};
+  std::atomic<uint32_t> expectedFrames_{0};
+  std::atomic<uint32_t> peakSample_{0};
+  std::atomic<uint32_t> writeRetries_{0};
+  std::atomic<uint32_t> readFailureOffset_{0};
+  std::atomic<int32_t> lastI2sCode_{0};
+  std::atomic<uint8_t> lastFailure_{uint8_t(Failure::NONE)};
+  std::atomic<bool> usedFallback_{false};
+  std::atomic<bool> ampVerifiedAtStart_{false};
+  std::atomic<bool> allowFallback_{false};
   std::atomic<uint8_t> activeClip_{uint8_t(Clip::HORN)};
   std::atomic<uint8_t> activeSource_{0};
   Error error_=Error::NONE;
@@ -241,7 +272,7 @@ class S3GoalAudio {
     val=Wire.read();
     return true;
   }
-  bool playClip(Clip clip,uint8_t source=0) {
+  bool playClip(Clip clip,uint8_t source=0,bool allowFallback=false) {
     tick();
     const uint32_t now=millis();
     if(storageBusy_.load() ||
@@ -250,10 +281,20 @@ class S3GoalAudio {
     if(clip==Clip::CUSTOM &&
        (!storageMounted_ || !S3WavPolicy::validSlot(source)))return false;
     if(!setAmp(true)){
+      ampVerifiedAtStart_.store(false);
       error_=Error::EXPANDER;
       return logFailure();
     }
     error_=Error::NONE;
+    ampVerifiedAtStart_.store(true); // TCA9554 P7 latch readback verified.
+    allowFallback_.store(allowFallback);
+    lastFailure_.store(uint8_t(Failure::NONE));
+    usedFallback_.store(false);
+    expectedFrames_.store(0);
+    peakSample_.store(0);
+    writeRetries_.store(0);
+    readFailureOffset_.store(0);
+    lastI2sCode_.store(0);
     lastStart_=now;
     everPlayed_=true;
     streamError_.store(false);
@@ -322,71 +363,150 @@ class S3GoalAudio {
     }
     return true;
   }
+  // Writes can be partial under network/display load. Resume at the exact
+  // remaining sample without duplicating PCM; cap stalls to prevent deadlocks.
+  static bool writeAudioBlock(const int16_t *pcm,size_t total,
+                              uint32_t frame,uint32_t &retryCount,
+                              int32_t &i2sCode){
+    const uint8_t *data=reinterpret_cast<const uint8_t*>(pcm);
+    size_t offset=0;
+    uint8_t stalled=0;
+    while(offset<total){
+      size_t written=0;
+      const esp_err_t result=i2s_write(I2S_NUM_0,data+offset,
+                       total-offset,&written,pdMS_TO_TICKS(220));
+      if(written>total-offset || (written%4)!=0){
+        i2sCode=int32_t(result);
+        Serial.printf("[S3 Audio] I2S invalid byte count: %u/%u at frame=%lu\\n",
+                      unsigned(written),unsigned(total-offset),
+                      (unsigned long)frame);
+        return false;
+      }
+      offset+=written;
+      if(result==ESP_OK && written>0){
+        stalled=0;
+        continue;
+      }
+      ++retryCount;
+      i2sCode=int32_t(result);
+      if(written)stalled=0;
+      else if(++stalled>=3){
+        Serial.printf("[S3 Audio] I2S write failed: code=%ld bytes=%u/%u frame=%lu retries=%lu\\n",
+                      (long)i2sCode,unsigned(offset),unsigned(total),
+                      (unsigned long)frame,(unsigned long)retryCount);
+        return false;
+      }
+      vTaskDelay(pdMS_TO_TICKS(2));
+    }
+    return true;
+  }
   static void taskEntry(void *arg){
     auto *self=static_cast<S3GoalAudio*>(arg);
-    // This task runs at modest priority on core 1: NHL HTTPS, WebServer,
-    // TFT updates, and WLED state recovery remain in their existing loop.
     for(;;){
       ulTaskNotifyTake(pdTRUE,portMAX_DELAY);
-      uint32_t cursor=0;
-      bool ok=true;
       const uint32_t started=millis();
       const bool test=self->activeClip_.load()==uint8_t(Clip::TEST_TONE);
-      const bool custom=self->activeClip_.load()==uint8_t(Clip::CUSTOM);
-      File wav;
-      S3WavPolicy::Info meta;
-      S3WavPolicy::Stream<File> decoder;
-      uint32_t frames=test?S3HornPolicy::kTestFrames:S3HornPolicy::kFrames;
-      if(custom){
-        const uint8_t slot=self->activeSource_.load();
-        wav=LittleFS.open(S3SoundStorage::path(slot),"r");
-        if(!wav || !S3WavPolicy::parse(wav,meta) ||
-           !decoder.begin(wav,meta)){
-          ok=false;
-          Serial.printf("[S3 WAV] failed to stream WAV slot %u\n",
-                        unsigned(slot));
-        }else frames=meta.outputFrames;
-      }
-      int16_t stereo[S3HornPolicy::kFrameChunk*2];
-      while(ok && cursor<frames){
-        const uint32_t remaining=frames-cursor;
-        const uint16_t count=remaining<S3HornPolicy::kFrameChunk?
-                                uint16_t(remaining):S3HornPolicy::kFrameChunk;
-        for(uint16_t i=0;i<count;++i){
-          int16_t mono=0;
-          if(custom){
-            if(!decoder.next(mono)){ok=false;break;}
-          }else mono=test?S3HornPolicy::diagnosticSample(cursor+i):
-                           S3HornPolicy::sample(cursor+i);
-          stereo[2*i]=mono;
-          stereo[2*i+1]=mono;
+      const bool initiallyCustom=self->activeClip_.load()==uint8_t(Clip::CUSTOM);
+      const uint8_t slot=self->activeSource_.load();
+      bool fallback=false;
+      bool ok=false;
+      uint32_t cursor=0,frames=0,retries=0,peak=0,readOffset=0;
+      int32_t i2sCode=0;
+      Failure failure=Failure::NONE;
+      // Let the verified TCA9554 amplifier latch/analog path settle before
+      // the first samples. No Wire/I2C access from this task.
+      vTaskDelay(pdMS_TO_TICKS(15));
+      for(uint8_t pass=0;pass<2;++pass){
+        const bool custom=initiallyCustom && !fallback;
+        cursor=0;frames=test?S3HornPolicy::kTestFrames:S3HornPolicy::kFrames;
+        ok=true;
+        File wav;
+        S3WavPolicy::Info meta;
+        S3WavPolicy::Stream<File> decoder;
+        Failure passFailure=Failure::NONE;
+        if(custom){
+          wav=LittleFS.open(S3SoundStorage::path(slot),"r");
+          if(!wav)passFailure=Failure::WAV_OPEN;
+          else if(!S3WavPolicy::parse(wav,meta))passFailure=Failure::WAV_HEADER;
+          else if(!decoder.begin(wav,meta)){
+            passFailure=decoder.readFailed()?Failure::WAV_READ:Failure::WAV_DECODE;
+            readOffset=decoder.readFailureOffset();
+          }else frames=meta.outputFrames;
+          if(passFailure!=Failure::NONE)ok=false;
         }
-        if(!ok)break;
-        size_t written=0;
-        const esp_err_t result=i2s_write(I2S_NUM_0,stereo,
-                              size_t(count)*4,&written,pdMS_TO_TICKS(120));
-        if(result!=ESP_OK||written!=size_t(count)*4){
-          ok=false;
-          Serial.printf("[S3 Audio] I2S write failed: code=%d bytes=%u/%u frame=%lu\n",
-                        int(result),unsigned(written),unsigned(size_t(count)*4),
-                        (unsigned long)cursor);
-          break;
+        self->expectedFrames_.store(frames);
+        int16_t stereo[S3HornPolicy::kFrameChunk*2];
+        while(ok && cursor<frames){
+          const uint32_t remaining=frames-cursor;
+          const uint16_t count=remaining<S3HornPolicy::kFrameChunk?
+                                  uint16_t(remaining):S3HornPolicy::kFrameChunk;
+          for(uint16_t i=0;i<count;++i){
+            int16_t mono=0;
+            if(custom){
+              if(!decoder.next(mono)){
+                passFailure=decoder.readFailed()?Failure::WAV_READ:
+                                                  Failure::WAV_DECODE;
+                readOffset=decoder.readFailureOffset();
+                ok=false;break;
+              }
+            }else mono=test?S3HornPolicy::diagnosticSample(cursor+i):
+                             S3HornPolicy::sample(cursor+i);
+            const int32_t magnitude=mono<0?-int32_t(mono):int32_t(mono);
+            if(uint32_t(magnitude)>peak)peak=uint32_t(magnitude);
+            stereo[2*i]=mono;
+            stereo[2*i+1]=mono;
+          }
+          if(!ok)break;
+          if(!writeAudioBlock(stereo,size_t(count)*4,cursor,retries,i2sCode)){
+            passFailure=Failure::I2S_WRITE;
+            ok=false;break;
+          }
+          cursor+=count;
+          self->writtenFrames_.store(cursor);
         }
-        cursor+=count;
-        self->writtenFrames_.store(cursor);
+        wav.close();
+        if(ok && cursor==frames)break;
+        if(passFailure==Failure::NONE)passFailure=Failure::WAV_DECODE;
+        failure=passFailure;
+        if(custom && self->allowFallback_.load() &&
+           failure!=Failure::I2S_WRITE && pass==0){
+          // A live GOAL must still sound if LittleFS becomes temporarily
+          // unreadable. PP/start/final clips never impersonate a goal horn.
+          fallback=true;
+          self->usedFallback_.store(true);
+          Serial.printf("[S3 Audio] GOAL WAV slot %u failed: %s at offset=%lu; built-in fallback\\n",
+                        unsigned(slot),failureName(failure),
+                        (unsigned long)readOffset);
+          i2s_zero_dma_buffer(I2S_NUM_0);
+          continue;
+        }
+        break;
       }
-      wav.close();
-      // Allow the last DMA block to finish before disabling the PA.
-      vTaskDelay(pdMS_TO_TICKS(35));
+      // The DMA queue may contain the final 64 ms; don't shut the PA off
+      // before those samples leave the ES8311 output.
+      vTaskDelay(pdMS_TO_TICKS(85));
       i2s_zero_dma_buffer(I2S_NUM_0);
+      const bool complete=ok && cursor==frames;
+      self->writtenFrames_.store(cursor);
+      self->expectedFrames_.store(frames);
       self->lastDurationMs_.store(millis()-started);
-      self->lastStreamOk_.store(ok && cursor==frames);
-      if(!ok)self->streamError_.store(true);
-      Serial.printf("[S3 Audio] %s stream %s, frames=%lu/%lu, elapsed=%lums\n",
-                    custom?"custom-wav":test?"test-tone":"goal-horn",
-                    ok?"complete":"FAILED",
+      self->lastStreamOk_.store(complete);
+      self->lastFailure_.store(uint8_t(failure));
+      self->peakSample_.store(peak);
+      self->writeRetries_.store(retries);
+      self->lastI2sCode_.store(i2sCode);
+      self->readFailureOffset_.store(readOffset);
+      if(!complete)self->streamError_.store(true);
+      Serial.printf("[S3 Audio] %s stream %s source=%u frames=%lu/%lu elapsed=%lums"
+                    " peak=%lu retries=%lu i2s=%ld failure=%s readOffset=%lu fallback=%u PAstart=%u\\n",
+                    initiallyCustom?"custom-wav":test?"test-tone":"goal-horn",
+                    complete?"complete":"FAILED",unsigned(slot),
                     (unsigned long)cursor,(unsigned long)frames,
-                    (unsigned long)self->lastDurationMs_.load());
+                    (unsigned long)self->lastDurationMs_.load(),
+                    (unsigned long)peak,(unsigned long)retries,
+                    (long)i2sCode,failureName(failure),
+                    (unsigned long)readOffset,unsigned(fallback),
+                    unsigned(self->ampVerifiedAtStart_.load()));
       self->playing_.store(false);
     }
   }
