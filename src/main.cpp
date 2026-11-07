@@ -5025,6 +5025,8 @@ void draw() {
 }
 
 void selectGame(uint32_t id) {
+  // A deliberate game selection switches to that game, not the old pinned one.
+  carouselHold.reset();
   swallowLiveGesture = true;
   // A new game should not inherit an in-progress goal/PP effect.
   scheduleWledRestoreAll();
@@ -5629,6 +5631,8 @@ void registerRoutes() {
     doc["featuredIndex"] = featuredIndex;
     doc["carouselSlide"] = carouselSlide;
     doc["carouselTotal"] = carouselPageCount();
+    doc["carouselPaused"] = carouselHold.paused;
+    doc["carouselHeldGameId"] = carouselHold.gameId;
     doc["slideStandings"] = showingStandingsPage();
     doc["slideSummary"] = showingSummaryPage();
     doc["liveMode"] = carouselPlan.liveMode;
