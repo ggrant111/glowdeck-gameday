@@ -49,6 +49,7 @@
 #include "EventOverlay.h"
 #include "DisplayEventPolicy.h"
 #include "GameFollowPolicy.h"
+#include "MultiGameArming.h"
 #include "RearLedPattern.h"
 #include "TeamPalette.h"
 #include <time.h>
@@ -201,6 +202,12 @@ String targetScoreboardDate;
 bool scoreboardLoaded = false;
 uint32_t lastDateCheck = 0;
 uint32_t selectedGameId = 0;
+MultiGameArming::Armed armedGames;
+MultiGameArming::Queue wledPriorityQueue;
+uint32_t wledActiveGameId=0;
+uint32_t wledDeviceGameOwner[MAX_WLED]={};
+uint32_t wledPpStoppedIds[MultiGameArming::kMaxArmed]={};
+uint32_t wledQueuedDrops=0;
 int previousHome = 0, previousAway = 0;
 bool haveBaseline = false, mdnsStarted = false, mdnsAttempted = false, needsDraw = true;
 bool touchWasDown = false, wifiWasConnected = false, partialLiveUpdate = false;
@@ -465,9 +472,14 @@ String rgbHex(uint32_t color) {
 }
 
 void saveSettings(); // Star toggle persists game follows.
+bool isArmedGame(uint32_t gameId) { return armedGames.contains(gameId); }
+uint8_t armPriority(uint32_t gameId) {
+  const int8_t rank=armedGames.rank(gameId);
+  return rank<0?0:uint8_t(rank+1);
+}
 bool rearFollows(uint32_t gameId) {
   if (!gameId) return false;
-  if (gameId == selectedGameId) return true; // Armed WLED game also drives rear RGB.
+  if (isArmedGame(gameId)) return true;
   for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
     if (cfg.followIds[i] == gameId) return true;
   return false;
@@ -482,6 +494,7 @@ bool isScheduledGame(uint32_t id) {
 // All 20 daily games may be followed; only the armed game controls WLED.
 using FollowResult = GameFollowPolicy::Result;
 FollowResult setGameFollow(uint32_t id, bool follow) {
+  if(isArmedGame(id))return FollowResult::ARMED;
   uint8_t changedSlot = 255;
   const FollowResult result = GameFollowPolicy::change(
       cfg.followIds, MAX_FOLLOWED_GAMES, id, isScheduledGame(id),
@@ -516,7 +529,7 @@ uint32_t currentScoreboardPollIntervalMs() {
               cfg.favoriteTeams, g.away.c_str(), g.home.c_str()))
         priorityLive = true;
     }
-    if (g.id == selectedGameId &&
+    if (isArmedGame(g.id) &&
         (g.state == "FUT" || g.state == "PRE")) armedPregame = true;
   }
   return GameDayCadence::intervalMs(priorityLive, anyLive, armedPregame);
@@ -1065,6 +1078,9 @@ void prepareNewScoreboardDate(const String &today) {
     for (auto &entry : penaltyLedgers) entry.reset();
     lastPenaltyLedgerAttempt = 0;
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) cfg.followIds[i] = 0;
+    armedGames.clear();
+    wledPriorityQueue.clear();
+    for(auto &id:wledPpStoppedIds)id=0;
     saveSettings();
     stopRearLed();
     if (screen == Screen::STATS) screen = Screen::LIVE;
@@ -1655,6 +1671,13 @@ void loadSettings() {
   cfg.touchY0 = prefs.getInt("ty0", 300);
   cfg.touchY1 = prefs.getInt("ty1", 3800);
   selectedGameId = prefs.getUInt("game", 0);
+  // Migrate legacy single-game arming without resetting other settings.
+  if(selectedGameId)armedGames.add(selectedGameId);
+  for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i){
+    const uint32_t id=prefs.getUInt(("armed"+String(i)).c_str(),0);
+    if(id)armedGames.add(id);
+  }
+  selectedGameId=armedGames.primary();
   rebuildCarouselPlan(); // Standings-only fallback until the first NHL fetch.
 }
 
@@ -1686,6 +1709,9 @@ void saveSettings() {
   prefs.putUChar("rearDur", cfg.rearGoalSeconds);
   for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
     prefs.putUInt(("follow" + String(i)).c_str(), cfg.followIds[i]);
+  for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i)
+    prefs.putUInt(("armed"+String(i)).c_str(),armedGames.ids[i]);
+  prefs.putUInt("game",armedGames.primary());
   prefs.putBool("invert", cfg.invertScreen);
   prefs.putBool("carousel", cfg.cycleGames);
   prefs.putBool("standPages", cfg.showStandings);
@@ -3126,11 +3152,23 @@ void pollNhl() {
   nhlConsecutiveFailures = 0;
   nhlLastSuccessAt = millis();
   lastError = "";
-  if (selectedGameId && !selectedGame()) {
-    // Do not keep an old, invisible matchup armed after a calendar rollover.
-    selectedGameId = 0;
-    prefs.putUInt("game", 0);
-    haveBaseline = false;
+  bool armsPruned=false;
+  for(int i=MultiGameArming::kMaxArmed-1;i>=0;--i){
+    const uint32_t id=armedGames.ids[i];
+    if(id&&!isScheduledGame(id)){
+      armedGames.remove(id);
+      wledPriorityQueue.removeGame(id);
+      armsPruned=true;
+    }
+  }
+  if(armsPruned){
+    if(wledActiveGameId&&!isArmedGame(wledActiveGameId))
+      scheduleWledRestoreAll();
+    selectedGameId=armedGames.primary();
+    for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i)
+      prefs.putUInt(("armed"+String(i)).c_str(),armedGames.ids[i]);
+    prefs.putUInt("game",selectedGameId);
+    haveBaseline=false;
   }
   // A followed game is a game-ID from today's schedule, not a season-wide team.
   // Remove followers after a date change so old IDs cannot trigger new events.
@@ -5600,6 +5638,16 @@ void registerRoutes() {
     doc["apIp"] = WiFi.softAPIP().toString();
     doc["mdns"] = mdnsStarted ? mdnsName + ".local" : "";
     doc["selectedId"] = selectedGameId;
+    doc["armedCapacity"] = MultiGameArming::kMaxArmed;
+    doc["armedCount"] = armedGames.count();
+    JsonArray armedList=doc.createNestedArray("armedIds");
+    for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i)
+      if(armedGames.ids[i])armedList.add(armedGames.ids[i]);
+    doc["wledActiveGameId"]=wledActiveGameId;
+    doc["wledQueuedEvents"]=wledPriorityQueue.count;
+    doc["wledQueueDrops"]=wledQueuedDrops;
+    JsonArray owners=doc.createNestedArray("wledOwnerGames");
+    for(uint8_t i=0;i<MAX_WLED;++i)owners.add(wledDeviceGameOwner[i]);
     doc["mode"] = cfg.mode;
     doc["wledEvent"] = CelebrationEngine::label(wledActiveEvent);
     doc["wledParticipants"] = wledEligibleCount(
@@ -5703,6 +5751,8 @@ void registerRoutes() {
       g["emptyNetSide"] = games[i].emptyNetSide;
       g["emptyNetKnown"] = games[i].emptyNetKnown;
       g["followed"] = rearFollows(games[i].id);
+      g["armed"] = isArmedGame(games[i].id);
+      g["armedPriority"] = armPriority(games[i].id);
     }
     sendJson(doc);
   });
@@ -6002,7 +6052,7 @@ void registerRoutes() {
     StaticJsonDocument<128> result;
     result["ok"]=true;
     result["followed"]=rearFollows(id);
-    result["armed"]=id==selectedGameId;
+    result["armed"]=isArmedGame(id);
     sendJson(result);
   });
   // On-device visual test: intentionally does not trigger WLED or rear LED,
