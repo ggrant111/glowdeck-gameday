@@ -4159,7 +4159,7 @@ String buildLiveTickerText(const Game &g) {
             " / "+g.home+" "+stats.blocksHome;
     if(stats.faceAway.length() && stats.faceHome.length())
       text+="   |   FACEOFF: "+g.away+" "+stats.faceAway+
-            "% / "+g.home+" "+stats.faceHome+"%";
+            " / "+g.home+" "+stats.faceHome;
     if(stats.pimAway.length() && stats.pimHome.length())
       text+="   |   PIM: "+g.away+" "+stats.pimAway+
             " / "+g.home+" "+stats.pimHome;
