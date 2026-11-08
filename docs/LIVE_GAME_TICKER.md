@@ -19,10 +19,15 @@ star/follow controls, overlay priority and WLED/audio eligibility are unchanged.
 
 ## Ticker content and feeds
 
-Order: current **BOX** occupants (team, player and penalty minutes/reason),
-then the eight most recent **GOAL** scorers (team, player, period/time and PP
-when applicable), followed by **SOG**, verified **POWER PLAY**, and any
-already-cached **PP / PIM / FACEOFF** totals.
+Order: current **BOX** occupants (team, player and penalty
+minutes/reason), then the eight most recent **GOAL** scorers (team, player,
+period/time, and PP only as a historical goal-strength label), then cached
+**HITS**, **BLOCKS**, **FACEOFF** and **PIM** totals (away/home teams named).
+
+**No duplicate scoreboard stats:** the main live screen already includes
+shots on goal and the current power-play indicator. Neither the SOG
+figures nor live PP status nor season-to-date PP totals are repeated
+in this ticker. Goal-scorer entries can still identify a PP goal.
 
 Player-level goal and penalty data come from the same **filtered NHL
 `/v1/gamecenter/{id}/landing` summary request** used for penalty verification.
@@ -42,9 +47,13 @@ shown as `BOX: EMPTY`. Misconduct records are not
 misidentified as a two-minute PP. NHL player names/box snapshots can lag the
 scoreboard by one fetch interval.
 
-The other live stats come from the existing score and right-rail cache.
-Missing player names and unavailable numerical stats use placeholders; do
-not infer identities, scores or percentages.
+The other live stats come from the existing NHL /right-rail JSON and
+the same per-game carousel cache. HITS and BLOCKS are read independently
+of the limited five-row on-screen stats page, so they remain available
+even when that page is already full. Unavailable values are omitted,
+never inferred. Faceoff values already include the percent sign from the
+original percentage conversion (no duplicated %% signs). No extra API
+request, memory-heavy unfiltered parse or additional event is added.
 
 ## Checks
 
