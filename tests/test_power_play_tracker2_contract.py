@@ -30,7 +30,7 @@ assert 'hasPpGoalSince' in ledger and 'Evidence evidenceAt(' in ledger
 assert 'manpowerCandidate(' in s
 assert 'wledPpStoppedSessions' in s
 assert 'session->session!=wledPpStoppedSessions[i]' in s
-assert 'if(!candidate||urgency>winningUrgency)' in s
+assert 'if(!target||urgency>winningUrgency)' in s
 assert 'const uint32_t age=candidate->loaded?' in s
 assert 'session->side?35UL' in s
 assert 'drawS3ArenaFitted("PP NEXT: "' in s
