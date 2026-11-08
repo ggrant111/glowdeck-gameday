@@ -1,0 +1,142 @@
+name: Release GameDay firmware and ESP Web installer
+
+# Version pin is committed LAST, after the release scripts/workflow are ready.
+# Editing release/VERSION on main or manually dispatching this workflow builds,
+# validates and publishes both full USB factory + app-only OTA binaries.
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Version matching release/VERSION (example v2026.11.08-beta.1)"
+        required: true
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - release/VERSION
+
+permissions:
+  contents: read
+
+concurrency:
+  group: glowdeck-firmware-release
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    name: Build, validate and publish release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate release version and source
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d ' \r\n' < release/VERSION)"
+          if ! [[ "$VERSION" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+            echo "::error::Invalid release/VERSION: $VERSION"
+            exit 1
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$VERSION" != "${{ inputs.release_version }}" ]; then
+            echo "::error::Dispatched version must equal release/VERSION"
+            exit 1
+          fi
+          echo "RELEASE_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Publishing $VERSION from $GITHUB_SHA"
+
+      - name: Install release toolchain
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install platformio==6.1.18 Pillow==11.3.0 CairoSVG==2.8.2 esptool==4.8.1
+
+      - name: Validate critical GameDay behavior before publication
+        run: |
+          python tests/check_web_ui.py
+          python tests/test_web_portal_ux.py
+          python tests/test_power_play_tracker2_contract.py
+          python tests/test_nhl_live_ticker_contract.py
+          python tests/test_wled_phase8d_contract.py
+          python tests/test_wled_phase8e_quick_setup_contract.py
+          python tests/test_s3_live_audio_reliability_contract.py
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_hue_color_policy.cpp -o /tmp/hue-policy
+          /tmp/hue-policy
+
+      - name: Generate official NHL logo assets
+        run: python scripts/generate_logos.py
+
+      - name: Compile original ESP32 CYD
+        run: pio run -e cyd
+
+      - name: Compile Waveshare ESP32-S3 3.5
+        run: pio run -e s3_waveshare_35
+
+      - name: Generate merged USB factory images, separate OTA images and manifest
+        run: python scripts/package_web_release.py --version "$RELEASE_VERSION"
+
+      - name: Validate images, size, flash offsets, SHA256 and installer bundle
+        run: python tests/test_web_release.py dist/web-release
+
+      - name: Publish GitHub Release with matched firmware assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $RELEASE_VERSION already exists. Update release/VERSION; published binaries must remain immutable."
+            exit 1
+          fi
+          gh release create "$RELEASE_VERSION" dist/web-release/release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "GlowDeck GameDay $RELEASE_VERSION" \
+            --notes-file docs/WEB_FLASH_RELEASE_NOTES.md \
+            --prerelease
+          echo "Release published: https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_VERSION"
+
+      - name: Save built HTTPS installer site for Pages job
+        uses: actions/upload-artifact@v4
+        with:
+          name: glowdeck-web-installer-site
+          path: dist/web-release/site/
+          if-no-files-found: error
+
+  deploy-installer:
+    name: Deploy browser installer to GitHub Pages
+    needs: build-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download validated installer site
+        uses: actions/download-artifact@v4
+        with:
+          name: glowdeck-web-installer-site
+          path: site
+
+      # If this fails with "Pages is not enabled", the repo owner must set
+      # Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+      # GITHUB_TOKEN cannot auto-enable Pages (configure-pages enablement needs PAT).
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Package Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+      - name: Deploy HTTPS installer and firmware on same origin
+        id: deployment
+        uses: actions/deploy-pages@v4
