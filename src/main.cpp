@@ -3417,7 +3417,18 @@ void fetchFollowedPowerPlays() {
   next.checkedAt=millis();
   *book=next;
   const uint8_t oldPP=target->ppSide;
-  validatePowerPlay(*target);
+  // Never extend the PP2 lighting grace using an old scoreboard clock.
+  // A landing summary may remain reachable even while score/{date} has
+  // stopped updating; its penalty is not proof that the clock hasn't moved.
+  // The last trusted session expires safely after its bounded grace.
+  if(nhlLastSuccessAt &&
+     uint32_t(millis()-nhlLastSuccessAt)<=90000UL)
+    validatePowerPlay(*target);
+  else Serial.printf("[PP2] id=%lu landing cached but scoreboard "
+                     "age=%lus: withholding stale-clock PP confirmation\\n",
+      (unsigned long)target->id,
+      (unsigned long)(nhlLastSuccessAt?
+          uint32_t(millis()-nhlLastSuccessAt)/1000UL:0UL));
   if(oldPP!=target->ppSide && screen==Screen::LIVE &&
      currentCarouselPage().kind==LiveCarousel::Kind::GAME &&
      &games[currentCarouselPage().index]==target && !overlayController.active()) {
