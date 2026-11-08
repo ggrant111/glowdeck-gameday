@@ -6,7 +6,9 @@ assert '#include "NhlLiveTicker.h"' in s
 assert 'liveTickerFeed=liveTickerWork' in s
 assert 'goal["firstName"]["default"]=true' in s
 assert 'goal["lastName"]["default"]=true' in s
-assert 'penalty["committedByPlayer"]=true' in s
+assert 'penalty["committedByPlayer"]["firstName"]["default"]=true' in s
+assert 'penalty["committedByPlayer"]["lastName"]["default"]=true' in s
+assert 'penalty["servedBy"]["default"]=true' in s
 assert 'liveTickerWork.applyPowerPlayGoals()' in s
 assert 'tickerTargetVisible' in s
 assert 'liveTickerWork.addPenalty' in s and 'liveTickerWork.addGoal' in s
@@ -20,5 +22,4 @@ assert 'gameIsLive(g)' in s and 'NhlLiveTicker::kStepMs' in s
 assert 'kMaxGoals = 16' in header and 'kMaxPenalties = 20' in header
 # Keep the scored-goal/PP/goal horn eligibility separated from ticker UI.
 assert 'observePowerPlayEvents();' in s
-assert 'reconcileGoal' not in s or True
 print("Live ticker CYD/S3, NHL names, bounded storage and 480x20 repaint contract OK")
