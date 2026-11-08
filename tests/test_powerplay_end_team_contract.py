@@ -22,7 +22,7 @@ assert 'description = String(e.team) + " BACK AT FULL STRENGTH";' in s
 assert 'return String(e.team)+" BACK AT FULL STRENGTH";' in s
 # The shared queue uses the team parameter for its logo and color.
 queue=s.split("bool queueGameOverlay(const Game *g",1)[1].split(
-    "bool",1)[0]
+    "void detectRearGoalChanges() {",1)[0]
 assert "item.color = teamRgb(team);" in queue
 assert "EventOverlay::copy(item.team, team.c_str()" in queue
 print("PASS PP_END overlay/logo/colors/event history use formerly shorthanded team; PP_START unchanged")
