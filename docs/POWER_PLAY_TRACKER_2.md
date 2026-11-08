@@ -68,6 +68,12 @@ No new always-on play-by-play requests or unfiltered JSON payloads.
 - `POWER_PLAY_START` and `POWER_PLAY_END` Activity records are emitted
   once from the tracker transition queue. A resume does not replay an audio
   clip, send another overlay or create a duplicate NHL start event.
+- Event ownership is deliberately different at each edge: `POWER_PLAY_START`
+  names the team **with the advantage**, whereas `POWER_PLAY_END` names the
+  team **that was shorthanded and returns to full strength**. Both CYD and
+  Waveshare S3 use that team's logo/colors/message. The Activity `team`
+  field and PP2 serial line match the screen; no NHL eligibility or lights
+  are changed by this presentation correction.
 - If NHL network evidence is stale for more than 120s, output is safely
   released, while the true session identity can survive reconnect.
 
