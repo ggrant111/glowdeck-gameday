@@ -336,6 +336,7 @@ struct CarouselStats {
   uint32_t id = 0, updatedAt = 0;
   bool loaded = false;
   String ppAway, ppHome, pimAway, pimHome, faceAway, faceHome;
+  String hitsAway, hitsHome, blocksAway, blocksHome;
   String recordAway, recordHome, pointsAway, pointsHome;
 };
 CarouselStats carouselStats[MAX_GAMES];
@@ -1624,6 +1625,27 @@ void fetchDetailStats(uint32_t id) {
           {"sog", "SHOTS"}
         };
         JsonArray values = parsed["teamGameStats"].as<JsonArray>();
+        // Read all relevant team totals from the same right-rail JSON,
+        // independently of the five visible STATS-page rows. A SHOTS row
+        // can consume one of those five, hiding BLOCKS from the detail page.
+        // Ticker-only totals must not be silently dropped for that reason.
+        for (uint8_t idx=0;idx<gameCount;++idx) {
+          if(games[idx].id!=id)continue;
+          CarouselStats &cached=statsFor(idx);
+          cached.hitsAway="";cached.hitsHome="";
+          cached.blocksAway="";cached.blocksHome="";
+          for (JsonObject row : values) {
+            const String category=row["category"].as<String>();
+            if(category.equalsIgnoreCase("hits")) {
+              cached.hitsAway=row["awayValue"].as<String>();
+              cached.hitsHome=row["homeValue"].as<String>();
+            } else if(category.equalsIgnoreCase("blockedShotAttempts")) {
+              cached.blocksAway=row["awayValue"].as<String>();
+              cached.blocksHome=row["homeValue"].as<String>();
+            }
+          }
+          break;
+        }
         for (const auto &target : targets) {
           for (JsonObject row : values) {
             String category = row["category"].as<String>();
@@ -4129,10 +4151,18 @@ String buildLiveTickerText(const Game &g) {
     if(games[i].id!=g.id || !carouselStats[i].loaded ||
        carouselStats[i].id!=g.id)continue;
     const CarouselStats &stats=carouselStats[i];
-    if(stats.pimAway.length() && stats.pimHome.length())
-      text+="   |   PIM: "+stats.pimAway+"-"+stats.pimHome;
+    if(stats.hitsAway.length() && stats.hitsHome.length())
+      text+="   |   HITS: "+g.away+" "+stats.hitsAway+
+            " / "+g.home+" "+stats.hitsHome;
+    if(stats.blocksAway.length() && stats.blocksHome.length())
+      text+="   |   BLOCKS: "+g.away+" "+stats.blocksAway+
+            " / "+g.home+" "+stats.blocksHome;
     if(stats.faceAway.length() && stats.faceHome.length())
-      text+="   |   FACEOFF: "+stats.faceAway+"% / "+stats.faceHome+"%";
+      text+="   |   FACEOFF: "+g.away+" "+stats.faceAway+
+            "% / "+g.home+" "+stats.faceHome+"%";
+    if(stats.pimAway.length() && stats.pimHome.length())
+      text+="   |   PIM: "+g.away+" "+stats.pimAway+
+            " / "+g.home+" "+stats.pimHome;
     break;
   }
   if(text.length()>1000)text.remove(1000);
