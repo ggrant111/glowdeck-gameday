@@ -8980,7 +8980,13 @@ void tickHueCelebrations(){
     lastPpAttempt=now;
     dispatchHueEvent(CelebrationEngine::Event::POWER_PLAY,ppColor,ppSeq,ppId);
   }
-  hue.tick();
+  // WAV streaming runs in loopTask; even a local TLS handshake can starve
+  // its audio feeder. Defer Hue I/O until playback is no longer active.
+  // This does not delay NHL polling, rear LEDs or existing WLED effects.
+#ifdef GLOWDECK_WAVESHARE_S3
+  if(!s3Audio.playing())
+#endif
+    hue.tick();
   if(hueSeenRevision!=hue.revision){
     hueSeenRevision=hue.revision;
     GameEventLog::Entry *row=gameEventHistory.find(hue.auditSequence);
