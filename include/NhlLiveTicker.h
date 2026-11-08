@@ -104,6 +104,11 @@ struct Feed {
   // offsetting majors and misconducts do not get marked as released.
   // Invoked after ALL penalties/goals have been collected from landing.
   void applyPowerPlayGoals() {
+    // Idempotent if a live snapshot is re-evaluated as the scoreboard clock
+    // advances. Never release a second penalty on the same PP goal.
+    for(uint8_t i=0;i<penaltyCount;++i)
+      penalties[i].end=uint16_t(penalties[i].at+
+                                 uint16_t(penalties[i].minutes)*60U);
     for(uint8_t g=0;g<goalCount;++g) {
       const Goal &goal=goals[g];
       if(!goal.powerPlay)continue;
