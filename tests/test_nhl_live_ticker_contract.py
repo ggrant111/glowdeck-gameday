@@ -6,9 +6,19 @@ assert '#include "NhlLiveTicker.h"' in s
 assert 'liveTickerFeed=liveTickerWork' in s
 assert 'goal["firstName"]["default"]=true' in s
 assert 'goal["lastName"]["default"]=true' in s
-assert 'penalty["committedByPlayer"]["firstName"]["default"]=true' in s
-assert 'penalty["committedByPlayer"]["lastName"]["default"]=true' in s
-assert 'penalty["servedBy"]["default"]=true' in s
+assert 'penalty["committedByPlayer"]=true' in s
+assert 'penalty["servedBy"]=true' in s
+assert 'NhlLiveTicker::validPlayerName(valueText)' in s
+assert 'if(player.isEmpty())player=fullName(committed);' in s
+assert 'if(boxesFresh && !active)text+="EMPTY";' in s
+assert 'else if(!boxesFresh)text+=g.intermission?"INTERMISSION":"--";' in s
+assert 'uint8_t liveTickerPixelOffset=0;' in s
+assert 'liveTickerNextByte(uint16_t index)' in s
+assert '++liveTickerPixelOffset;' in s
+assert 'String liveTickerWindow(uint16_t maxWidth,uint8_t font)' in s
+assert 'tft.textWidth(liveTickerText,2)>' not in s
+assert 'kStepMs = 30' in header
+assert 'validPlayerName' in header
 assert 'liveTickerWork.applyPowerPlayGoals()' in s
 assert 'tickerTargetVisible' in s
 assert 'liveTickerWork.addPenalty' in s and 'liveTickerWork.addGoal' in s

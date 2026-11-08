@@ -8,9 +8,31 @@
 namespace NhlLiveTicker {
 constexpr uint8_t kMaxGoals = 16;
 constexpr uint8_t kMaxPenalties = 20;
-constexpr uint32_t kStepMs = 180;
+constexpr uint32_t kStepMs = 30; // one pixel each frame (~33 px/s)
 constexpr uint8_t kSeparatorChars = 5;
 
+inline bool asciiEqualsIgnoreCase(const char *a,const char *b) {
+  if(!a || !b)return false;
+  while(*a && *b) {
+    char x=*a++, y=*b++;
+    if(x>='A' && x<='Z')x=char(x-'A'+'a');
+    if(y>='A' && y<='Z')y=char(y-'A'+'a');
+    if(x!=y)return false;
+  }
+  return *a==0 && *b==0;
+}
+// Missing NHL fields can stringify to the literal "null". Treat that as
+// absent, not as a player on the ice/serving a penalty.
+inline bool validPlayerName(const char *name) {
+  if(!name)return false;
+  while(*name==' ' || *name==9)++name;
+  if(!*name)return false;
+  return !asciiEqualsIgnoreCase(name,"null") &&
+         !asciiEqualsIgnoreCase(name,"undefined") &&
+         !asciiEqualsIgnoreCase(name,"n/a") &&
+         !asciiEqualsIgnoreCase(name,"unknown") &&
+         !asciiEqualsIgnoreCase(name,"--");
+}
 inline void copy(char *out, size_t cap, const char *source) {
   if (!cap) return;
   if (!source) source = "";
@@ -83,7 +105,7 @@ struct Feed {
     p.minutes=minutes; p.side=side;
     p.releasable=strcmp(type,"MAJ")!=0;
     copy(p.team,sizeof(p.team),team);
-    copy(p.player,sizeof(p.player),player);
+    copy(p.player,sizeof(p.player),validPlayerName(player)?player:"");
     copy(p.reason,sizeof(p.reason),reason);
     return true;
   }
@@ -96,7 +118,7 @@ struct Feed {
     g.period=period;g.at=absolute(period,elapsed);g.side=side;
     g.powerPlay=isPowerPlayGoal(strength);
     copy(g.team,sizeof(g.team),team);
-    copy(g.player,sizeof(g.player),player);
+    copy(g.player,sizeof(g.player),validPlayerName(player)?player:"");
     copy(g.time,sizeof(g.time),time);
     return true;
   }
