@@ -152,6 +152,7 @@ struct Settings {
 HueBridge::Engine hue; // Independent Hue bridge, never a WLED slot.
 uint32_t hueSeenRevision=0;
 uint32_t hueTestUntil=0;
+MultiGameArming::Queue huePriorityQueue;
 Preferences prefs;
 #ifdef GLOWDECK_WAVESHARE_S3
 GameDayS3Display tft;
@@ -3069,8 +3070,19 @@ void dispatchHueEvent(CelebrationEngine::Event event,uint32_t color,
   if(!hue.ready()||
      !HuePolicy::participates(hue.config.enabled,hue.config.events,event))return;
   if(!hue.idle()&&CelebrationEngine::temporary(hue.event)&&
-     MultiGameArming::priority(event)<=MultiGameArming::priority(hue.event))
-    return; // Never interrupt a high-priority goal with a PP.
+     MultiGameArming::priority(event)<=MultiGameArming::priority(hue.event)){
+    // Match WLED's bounded multi-game goal queue: second simultaneous
+    // scored events cannot erase the first game's Hue celebration.
+    if(gameId){
+      MultiGameArming::Request item;
+      item.event=event;item.gameId=gameId;item.color=color;
+      item.sequence=sequence;
+      if(!huePriorityQueue.add(item,armedGames))return;
+      GameEventLog::Entry *queued=gameEventHistory.find(sequence);
+      if(queued)queued->hue=GameEventLog::Wled::PENDING;
+    }
+    return;
+  }
   hue.begin(event,color,sequence,gameId);
   GameEventLog::Entry *row=gameEventHistory.find(sequence);
   if(row)row->hue=GameEventLog::Wled::PENDING;
@@ -8975,8 +8987,14 @@ void tickHueCelebrations(){
       hueTestUntil=0;hue.stop();
     }
   }
+  if(hue.idle()&&huePriorityQueue.count){
+    MultiGameArming::Request next;
+    if(huePriorityQueue.pop(next,armedGames))
+      dispatchHueEvent(next.event,next.color,next.sequence,next.gameId);
+  }
   static uint32_t lastPpAttempt=0;
-  if(ppId&&hue.idle()&&uint32_t(now-lastPpAttempt)>=8000UL){
+  if(ppId&&hue.idle()&&!huePriorityQueue.count&&
+     uint32_t(now-lastPpAttempt)>=8000UL){
     lastPpAttempt=now;
     dispatchHueEvent(CelebrationEngine::Event::POWER_PLAY,ppColor,ppSeq,ppId);
   }
