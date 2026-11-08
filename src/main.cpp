@@ -45,6 +45,7 @@
 #include "PowerPlayLogPolicy.h"
 #include "NhlPowerPlayEvidence.h"
 #include "NhlPenaltyLedger.h"
+#include "NhlLiveTicker.h"
 #include "NhlOnIce.h"
 #include "EventOverlay.h"
 #include "DisplayEventPolicy.h"
@@ -183,6 +184,14 @@ struct PowerPlaySnapshot {
 PowerPlaySnapshot ppCache[MAX_GAMES];
 NhlPenaltyLedger::Book penaltyLedgers[MAX_GAMES];
 uint32_t lastPenaltyLedgerAttempt = 0;
+// Player-level goal/box details are cached ONLY for the visible game.
+// The existing filtered gamecenter landing request supplies this data.
+NhlLiveTicker::Feed liveTickerFeed, liveTickerWork;
+String liveTickerText;
+uint32_t liveTickerTextGameId=0, liveTickerRefreshAt=0, liveTickerScrollAt=0;
+uint8_t liveTickerShownGoalCount=0;
+uint16_t liveTickerScroll=0;
+bool liveTickerDirty=false;
 enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY, DIAGNOSTIC };
 RearEvent rearEvent = RearEvent::IDLE;
 uint32_t rearGoalAt = 0, rearGoalColor = 0, rearGoalDuration = 0;
@@ -1144,6 +1153,14 @@ void prepareNewScoreboardDate(const String &today) {
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
     for (auto &entry : penaltyLedgers) entry.reset();
     lastPenaltyLedgerAttempt = 0;
+    liveTickerFeed.reset();
+    liveTickerWork.reset();
+    liveTickerText = "";
+    liveTickerTextGameId = 0;
+    liveTickerScroll = 0;
+    liveTickerDirty = false;
+    liveTickerRefreshAt = 0;
+    liveTickerShownGoalCount = 0;
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i) cfg.followIds[i] = 0;
     armedGames.clear();
     wledPriorityQueue.clear();
@@ -3100,14 +3117,19 @@ void fetchFollowedPowerPlays() {
        uint32_t(millis()-candidate->checkedAt)<30000UL)continue;
     // The game visible on the CYD is highest priority for timely PP badges,
     // followed by the armed game and any additional followed games.
-    const uint8_t priority=DisplayEventPolicy::favoriteMatch(
-        cfg.favoriteTeams,g.away.c_str(),g.home.c_str()) ? 5
-        : shown ? 4 : g.id==selectedGameId ? 3 : rearFollows(g.id) ? 2 : 1;
+    const uint8_t priority=shown ? 6 :
+        DisplayEventPolicy::favoriteMatch(
+          cfg.favoriteTeams,g.away.c_str(),g.home.c_str()) ? 5
+        : g.id==selectedGameId ? 3 : rearFollows(g.id) ? 2 : 1;
     if(priority>best) {
       best=priority;target=&g;book=candidate;
     }
   }
   if(!target||!book)return;
+  const bool tickerTargetVisible=screen==Screen::LIVE &&
+      visible.kind==LiveCarousel::Kind::GAME &&
+      visible.index<gameCount && &games[visible.index]==target;
+  if(tickerTargetVisible)liveTickerWork.reset(target->id);
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
@@ -3124,7 +3146,7 @@ void fetchFollowedPowerPlays() {
   }
   // Keep only event keys needed for verified penalties. Filtering in the
   // stream avoids allocating the complete (occasionally large) game landing.
-  DynamicJsonDocument filter(2048);
+  DynamicJsonDocument filter(3072);
   JsonObject summary = filter["summary"].to<JsonObject>();
   JsonObject penaltyPeriod = summary["penalties"][0].to<JsonObject>();
   penaltyPeriod["periodDescriptor"]["number"]=true;
@@ -3134,13 +3156,19 @@ void fetchFollowedPowerPlays() {
   penalty["duration"]=true;
   penalty["descKey"]=true;
   penalty["teamAbbrev"]["default"]=true;
+  penalty["committedByPlayer"]=true;
+  penalty["servedByPlayer"]=true;
+  penalty["playerName"]=true;
   JsonObject scorePeriod = summary["scoring"][0].to<JsonObject>();
   scorePeriod["periodDescriptor"]["number"]=true;
   JsonObject goal=scorePeriod["goals"][0].to<JsonObject>();
   goal["timeInPeriod"]=true;
   goal["strength"]=true;
   goal["teamAbbrev"]["default"]=true;
-  DynamicJsonDocument doc(14336);
+  goal["firstName"]["default"]=true;
+  goal["lastName"]["default"]=true;
+  goal["name"]["default"]=true;
+  DynamicJsonDocument doc(24576);
   if(filter.overflowed()||!doc.capacity()) {
     http.end();return;
   }
@@ -3164,21 +3192,62 @@ void fetchFollowedPowerPlays() {
       const String team=call["teamAbbrev"]["default"].as<String>();
       const uint8_t penalized=team==target->home ? 1 :
           team==target->away ? 2 : 0;
-      next.addPenalty(p,call["timeInPeriod"]|"",
-          penalized,call["type"]|"",call["duration"]|0,
+      const char *when=call["timeInPeriod"]|"";
+      const char *type=call["type"]|"";
+      const uint8_t minutes=call["duration"]|0;
+      next.addPenalty(p,when,penalized,type,minutes,
           call["descKey"]|"");
+      if(tickerTargetVisible) {
+        uint16_t elapsed=0;
+        if(NhlPenaltyLedger::Book::parseTime(when,elapsed)) {
+          String player=call["committedByPlayer"].as<String>();
+          if(player.isEmpty())
+            player=call["committedByPlayer"]["default"].as<String>();
+          if(player.isEmpty())player=call["servedByPlayer"].as<String>();
+          if(player.isEmpty())player=call["playerName"].as<String>();
+          if(player.isEmpty())player=call["playerName"]["default"].as<String>();
+          liveTickerWork.addPenalty(p,elapsed,penalized,team.c_str(),
+              player.c_str(),call["descKey"]|"",type,minutes);
+        }
+      }
     }
   }
   for (JsonVariantConst period : scoring) {
     const uint8_t p=period["periodDescriptor"]["number"]|0;
     for (JsonVariantConst goal : period["goals"].as<JsonArrayConst>()) {
       const char *strength=goal["strength"]|"";
-      if(strcmp(strength,"pp") && strcmp(strength,"PP"))continue;
       const String team=goal["teamAbbrev"]["default"].as<String>();
       const uint8_t scoringSide=team==target->home ? 1 :
           team==target->away ? 2 : 0;
-      next.addPpGoal(p,goal["timeInPeriod"]|"",scoringSide);
+      const char *when=goal["timeInPeriod"]|"";
+      // Keep verified PP event eligibility exactly as it was before ticker.
+      if(!strcmp(strength,"pp") || !strcmp(strength,"PP"))
+        next.addPpGoal(p,when,scoringSide);
+      if(tickerTargetVisible) {
+        uint16_t elapsed=0;
+        if(NhlPenaltyLedger::Book::parseTime(when,elapsed)) {
+          String player=goal["name"]["default"].as<String>();
+          if(player.isEmpty()) {
+            player=goal["firstName"]["default"].as<String>();
+            const String last=goal["lastName"]["default"].as<String>();
+            if(player.length() && last.length())player+=" ";
+            player+=last;
+          }
+          liveTickerWork.addGoal(p,elapsed,scoringSide,team.c_str(),
+              player.c_str(),when,strength);
+        }
+      }
     }
+  }
+  if(tickerTargetVisible) {
+    liveTickerWork.applyPowerPlayGoals();
+    liveTickerWork.fetchedAt=millis();
+    liveTickerFeed=liveTickerWork;
+    liveTickerRefreshAt=0;
+    liveTickerDirty=true;
+    Serial.printf("[TICKER] game=%lu goals=%u penalties=%u\\n",
+        (unsigned long)target->id,liveTickerFeed.goalCount,
+        liveTickerFeed.penaltyCount);
   }
   next.loaded=true;
   next.checkedAt=millis();
@@ -3968,6 +4037,133 @@ void drawScoreboardStatic(const Game &g) {
   tft.drawFastVLine(211, 206, 22, ARENA_LINE);
 }
 
+
+// Live ticker is presentation-only: never arms a game, changes PP evidence,
+// or starts a WLED/audio event. Content is derived from official NHL summaries
+// already fetched for live PP verification plus the cached team-stat rail.
+String buildLiveTickerText(const Game &g) {
+  String text;
+  text.reserve(860);
+  const bool haveFeed=liveTickerFeed.gameId==g.id &&
+                      liveTickerFeed.fetchedAt!=0;
+  uint16_t remaining=0;
+  const bool haveClock=g.period>0 &&
+      NhlPenaltyLedger::Book::parseTime(g.clock.c_str(),remaining);
+  const bool regularOt=g.period==4 && g.periodType=="OT" &&
+      ((g.id/10000UL)%100UL)==2UL;
+  const uint16_t at=haveClock?
+      NhlLiveTicker::elapsedAt(g.period,remaining,regularOt):0;
+  const bool boxesFresh=haveFeed && haveClock && !g.intermission &&
+      uint32_t(millis()-liveTickerFeed.fetchedAt)<75000UL;
+  text+="BOX: ";
+  uint8_t active=0;
+  if(boxesFresh) {
+    for(uint8_t i=0;i<liveTickerFeed.penaltyCount;++i){
+      const auto &p=liveTickerFeed.penalties[i];
+      if(!NhlLiveTicker::inBox(at,p.at,p.end))continue;
+      if(active++)text+=", ";
+      text+=p.team;
+      text+=" ";
+      text+=p.player[0]?p.player:"PLAYER TBD";
+      text+=" (";
+      text+=String(p.minutes);
+      text+="m";
+      if(p.reason[0]){text+=" ";text+=p.reason;}
+      text+=")";
+      if(active==4)break; // four names is enough for a 480px marquee
+    }
+  }
+  if(!boxesFresh)text+="UPDATING";
+  else if(!active)text+="CLEAR";
+  text+="   |   GOALS: ";
+  if(haveFeed){
+    if(!liveTickerFeed.goalCount)text+="NONE YET";
+    else {
+      uint8_t shown=0;
+      for(int16_t i=int16_t(liveTickerFeed.goalCount)-1;i>=0;--i){
+        const auto &goal=liveTickerFeed.goals[i];
+        if(shown++)text+="; ";
+        text+=goal.team;
+        text+=" ";
+        text+=goal.player[0]?goal.player:"GOAL SCORER TBD";
+        text+=" (P";
+        text+=String(goal.period);
+        text+=" ";
+        text+=goal.time;
+        if(goal.powerPlay)text+=" PP";
+        text+=")";
+        if(shown>=8)break; // most recent eight scorers
+      }
+    }
+  } else text+="UPDATING";
+  text+="   |   SOG: ";
+  text+=g.away+" "+(g.awayShots>=0?String(g.awayShots):String("--"));
+  text+=" - "+g.home+" "+(g.homeShots>=0?String(g.homeShots):String("--"));
+  if(g.ppDataKnown && g.ppSide && uint32_t(millis()-g.ppUpdatedAt)<45000UL){
+    text+="   |   POWER PLAY: ";
+    text+=g.ppSide==1?g.home:g.away;
+  }
+  for(uint8_t i=0;i<gameCount;++i){
+    if(games[i].id!=g.id || !carouselStats[i].loaded ||
+       carouselStats[i].id!=g.id)continue;
+    const CarouselStats &stats=carouselStats[i];
+    if(stats.ppAway.length() && stats.ppHome.length())
+      text+="   |   PP: "+g.away+" "+stats.ppAway+" / "+
+            g.home+" "+stats.ppHome;
+    if(stats.pimAway.length() && stats.pimHome.length())
+      text+="   |   PIM: "+stats.pimAway+"-"+stats.pimHome;
+    if(stats.faceAway.length() && stats.faceHome.length())
+      text+="   |   FACEOFF: "+stats.faceAway+"% / "+stats.faceHome+"%";
+    break;
+  }
+  if(text.length()>1000)text.remove(1000);
+  return text;
+}
+void refreshLiveTickerText(const Game &g) {
+  const String updated=buildLiveTickerText(g);
+  const uint8_t goals=liveTickerFeed.gameId==g.id?liveTickerFeed.goalCount:0;
+  const bool newGame=liveTickerTextGameId!=g.id;
+  const bool newGoals=goals!=liveTickerShownGoalCount;
+  if(newGame || newGoals)liveTickerScroll=0;
+  if(newGame || updated!=liveTickerText)liveTickerDirty=true;
+  liveTickerText=updated;
+  liveTickerTextGameId=g.id;
+  liveTickerShownGoalCount=goals;
+  if(liveTickerText.length())
+    liveTickerScroll%=liveTickerText.length();
+}
+// Display only complete characters within the physical ticker width, avoiding
+// clipped glyphs and dirty pixels outside the separate ticker region.
+String liveTickerWindow(uint16_t maxWidth,uint8_t font) {
+  if(!liveTickerText.length())return String("NHL LIVE");
+  if(tft.textWidth(liveTickerText,font)<=maxWidth)return liveTickerText;
+  const uint16_t len=liveTickerText.length();
+  String visible;
+  visible.reserve(90);
+  uint16_t width=0;
+  for(uint16_t n=0;n<len+NhlLiveTicker::kSeparatorChars;++n){
+    const uint16_t index=uint16_t((uint32_t(liveTickerScroll)+n)%
+                                   (len+NhlLiveTicker::kSeparatorChars));
+    const char c=index<len?liveTickerText[index]:' ';
+    const String one(c);
+    const uint16_t cw=tft.textWidth(one,font);
+    if(width+cw>maxWidth)break;
+    visible+=c;
+    width+=cw;
+  }
+  return visible;
+}
+void drawLiveTickerCYD(const Game &g) {
+  if(!gameIsLive(g))return;
+  tft.fillRect(10,206,300,25,ARENA_PLATE);
+  tft.fillRect(10,207,2,23,to565(teamRgb(g.away)));
+  tft.fillRect(308,207,2,23,to565(teamRgb(g.home)));
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(WHITE,ARENA_PLATE);
+  tft.drawString(liveTickerWindow(286,2),16,219,2);
+  tft.setTextDatum(TL_DATUM);
+}
+
 void drawLiveReadout(const Game &g) {
   // This function updates the *same game* without erasing/redrawing logos.
   tft.fillRoundRect(73, 36, 174, 33, 5, ARENA_PLATE);
@@ -4045,6 +4241,10 @@ void drawLiveReadout(const Game &g) {
       const int homePct = (int)(cached.faceHome.toFloat() + 0.5f);
       footerRight = "FO " + String(awayPct) + "-" + String(homePct) + "%";
     }
+  }
+  if(gameIsLive(g)) {
+    drawLiveTickerCYD(g);
+    return;
   }
   tft.fillRect(10, 204, 298, 27, ARENA_PLATE);
   tft.setTextColor(ICE_TEXT, ARENA_PLATE);
@@ -4606,6 +4806,20 @@ void drawS3ArenaFollowStar(const Game &g) {
   }
   tft.setTextDatum(previousDatum);
 }
+void drawS3ArenaTicker(const Game &g) {
+  if(!gameIsLive(g))return;
+  // Separate 480x20 dirty strip: no arena, logos, score or control redraw.
+  // Y=269..288 remains above the lowest icon pixels (starts at ~291).
+  tft.fillRect(0,269,480,20,0x1083);
+  tft.drawFastHLine(0,269,480,0x2987);
+  tft.fillRect(0,270,3,18,to565(teamRgb(g.away)));
+  tft.fillRect(477,270,3,18,to565(teamRgb(g.home)));
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(WHITE);
+  tft.drawString(liveTickerWindow(458,2),11,279,2);
+  tft.setTextDatum(TL_DATUM);
+}
+
 void drawS3ArenaScoreboard(const Game &g) {
   if(!s3Arena.restore(tft))return;
   const uint16_t away=to565(teamRgb(g.away));
@@ -4638,6 +4852,7 @@ void drawS3ArenaScoreboard(const Game &g) {
                  String(carouselPageCount()),240,279,1);
   tft.setTextDatum(TL_DATUM);
   drawS3ArenaReadout(g);
+  drawS3ArenaTicker(g);
 }
 #endif
 
@@ -8343,6 +8558,35 @@ void loop() {
       uint32_t(now - lastCarouselAdvance) >= uint32_t(cfg.cycleSeconds) * 1000UL) {
     advanceCarousel(1);
   }
+
+  // Five frames/second affects ONLY the bottom ticker strip; scoreboard
+  // updates and NHL networking retain their existing cadence and priority.
+  if(!overlayController.active() && screen==Screen::LIVE &&
+     showingGamePage() && gameCount) {
+    const LiveCarousel::Page visible=currentCarouselPage();
+    if(visible.index<gameCount && gameIsLive(games[visible.index])) {
+      const Game &g=games[visible.index];
+      if(liveTickerTextGameId!=g.id ||
+         uint32_t(now-liveTickerRefreshAt)>=2500UL) {
+        liveTickerRefreshAt=now;
+        refreshLiveTickerText(g);
+      }
+      if(uint32_t(now-liveTickerScrollAt)>=NhlLiveTicker::kStepMs &&
+         tft.textWidth(liveTickerText,2)>
+#ifdef GLOWDECK_WAVESHARE_S3
+            458
+#else
+            286
+#endif
+         ) {
+        liveTickerScrollAt=now;
+        liveTickerScroll=NhlLiveTicker::scrollNext(
+            liveTickerScroll,uint16_t(liveTickerText.length()+
+                                    NhlLiveTicker::kSeparatorChars));
+        liveTickerDirty=true;
+      }
+    } else liveTickerDirty=false;
+  }
   if (needDetailLoad && screen == Screen::STATS) {
     needDetailLoad = false;
     fetchDetailStats(detailGameId);
@@ -8402,11 +8646,14 @@ void loop() {
 #ifdef GLOWDECK_WAVESHARE_S3
   bool displayChanged = false;
   bool s3ScoreOnlyFrame = false;
+  bool s3TickerFrame=false;
   uint8_t s3PartialMask=S3BroadcastFrame::BOTH;
 #endif
+  const bool fullDrawThisLoop=needsDraw;
   if (needsDraw) {
     partialLiveUpdate = false;
     draw();
+    liveTickerDirty=false;
 #ifdef GLOWDECK_WAVESHARE_S3
     displayChanged = true;
 #endif
@@ -8477,16 +8724,37 @@ void loop() {
     drawLiveReadout(games[featuredIndex % gameCount]);
 #endif
   }
+  if(!fullDrawThisLoop && !overlayController.active() &&
+     liveTickerDirty && screen==Screen::LIVE && showingGamePage() &&
+     gameCount) {
+    const LiveCarousel::Page page=currentCarouselPage();
+    if(page.index<gameCount && gameIsLive(games[page.index])) {
+#ifdef GLOWDECK_WAVESHARE_S3
+      if(tft.nativeLayout() && s3Arena.ready()){
+#if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
+        drawS3ArenaTicker(games[page.index]);
+        s3TickerFrame=true;
+        displayChanged=true;
+#endif
+      }else
+#endif
+        drawLiveTickerCYD(games[page.index]);
+    }
+    liveTickerDirty=false;
+  }
 #ifdef GLOWDECK_WAVESHARE_S3
   if (displayChanged) {
     const uint32_t transferStarted=millis();
     uint32_t bytesSent=S3BroadcastFrame::kFullBytes;
-    if(s3ScoreOnlyFrame && !overlayController.active())
-      bytesSent=s3Arena.ready()?
+    if((s3ScoreOnlyFrame||s3TickerFrame) && !overlayController.active()) {
+      bytesSent=s3ScoreOnlyFrame?
+          (s3Arena.ready()?
           S3BroadcastFrame::transferBytes(s3PartialMask):
           uint32_t(S3Raster::kClockScore.w*S3Raster::kClockScore.h*2+
-                   S3Raster::kShots.w*S3Raster::kShots.h*2);
-    if (s3ScoreOnlyFrame && !overlayController.active()) {
+                   S3Raster::kShots.w*S3Raster::kShots.h*2)):0;
+      if(s3TickerFrame)bytesSent+=480UL*20UL*2UL;
+    }
+    if ((s3ScoreOnlyFrame||s3TickerFrame) && !overlayController.active()) {
       // Two small SPI transfers instead of the full 480x320 (~300 KiB).
       // Full redraws always transmit all pixels, so changing away from
       // standings/stats/events can never preserve portions of old pages.
@@ -8494,24 +8762,27 @@ void loop() {
       if(s3Arena.ready()){
         const auto top=S3NativeLayout::kBroadcastReadoutTop;
         const auto bottom=S3NativeLayout::kBroadcastReadoutBottom;
-        if(s3PartialMask&S3BroadcastFrame::TOP)
+        if(s3ScoreOnlyFrame && (s3PartialMask&S3BroadcastFrame::TOP))
           tft.presentRegion(top.x,top.y,top.w,top.h);
-        if(s3PartialMask&S3BroadcastFrame::BOTTOM)
+        if(s3ScoreOnlyFrame && (s3PartialMask&S3BroadcastFrame::BOTTOM))
           tft.presentRegion(bottom.x,bottom.y,bottom.w,bottom.h);
+        if(s3TickerFrame)tft.presentRegion(0,269,480,20);
       } else
 #endif
       {
         const auto score=S3Raster::kClockScore;
         const auto shots=S3Raster::kShots;
-        tft.presentRegion(score.x,score.y,score.w,score.h);
-        tft.presentRegion(shots.x,shots.y,shots.w,shots.h);
+        if(s3ScoreOnlyFrame){
+          tft.presentRegion(score.x,score.y,score.w,score.h);
+          tft.presentRegion(shots.x,shots.y,shots.w,shots.h);
+        }
       }
     } else {
       tft.present();
     }
 #if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
     if(s3Arena.ready()){
-      if(s3ScoreOnlyFrame)++s3PerfPartialFrames;
+      if(s3ScoreOnlyFrame||s3TickerFrame)++s3PerfPartialFrames;
       else ++s3PerfFullFrames;
       s3PerfTransferBytes+=bytesSent;
       const uint32_t elapsed=millis()-transferStarted;
