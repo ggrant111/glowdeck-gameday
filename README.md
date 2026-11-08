@@ -4,6 +4,17 @@
 
 > **New here?** Follow [1. Choose your hardware](#1-choose-your-hardware), [2. Install firmware over USB](#2-install-firmware-over-usb-first-time), and [3. Connect Wi-Fi and open the dashboard](#3-connect-wi-fi-and-open-the-dashboard). External lighting and custom audio are optional. **Do not flash the wrong board's firmware.**
 
+## Install with ESP Web Tools (USB browser installer)
+
+**Fastest route for a brand-new board:** The release workflow produces a board-matched **merged factory image** and an HTTPS [GlowDeck USB installer](https://ggrant111.github.io/glowdeck-gameday/) built with [ESP Web Tools](https://esphome.github.io/esp-web-tools/). **The GitHub Pages installer link is available only after the Pages deployment is enabled and succeeds.** If it is unavailable, use [GitHub Releases](https://github.com/ggrant111/glowdeck-gameday/releases) to download a matching factory image or follow the PlatformIO steps below.
+
+1. Connect the **original CYD** or the **Waveshare S3 ST7796** via USB data cable to a computer running desktop **Chrome or Edge**. This will **not** work from an iPhone or iPad.
+2. Open the HTTPS installer, select **Connect & install GameDay**, choose the correct serial port, and approve the browser prompt. The firmware manifest selects **ESP32** or **ESP32-S3** automatically from the detected chip, but cannot detect an incompatible display variant using the same chip.
+3. Confirm any installation/erase prompt. **A full factory image overwrites stored NVS settings**, even if you skip a separate full-chip erase. Do not use it to upgrade a configured device.
+4. On the touchscreen, open **SETUP**, connect to the displayed `GlowDeck-XXXXXX` Wi-Fi, and open **http://192.168.4.1** to complete home Wi-Fi setup using the steps below.
+
+For devices **already running GameDay**, download the matching **`-ota.bin`** from the release and upload it in **Device → Firmware & Maintenance** instead of choosing a USB factory reinstall. The published release includes both USB factory and OTA files plus checksums. See [release/Pages instructions](docs/WEB_INSTALLER.md) and [GitHub Releases](https://github.com/ggrant111/glowdeck-gameday/releases).
+
 ## What you can do
 
 - View NHL games, live scores, game clock, shots on goal, team logos/colors, pregame records, standings, and a live scrolling goal/penalty/stat ticker.
@@ -36,7 +47,7 @@ For details, see [CYD pin map](docs/HARDWARE.md) and [Waveshare S3 board guide](
 
 ## 2. Install firmware over USB (first time)
 
-**Important:** A GitHub Actions `firmware.bin` is an **application image**, not a complete blank-chip factory flasher. For the first install, use the matching PlatformIO environment to build **and upload** the bootloader, partition information, and application correctly. Later updates can use the browser OTA screen.
+**Important:** An app-only `firmware.bin` (or `-ota.bin`) is **not** a complete blank-chip factory flasher. For the first install, either use the ESP Web Tools **factory** image above, or use the matching PlatformIO environment to build **and upload** the bootloader, partition information, and application correctly. Later updates can use browser OTA.
 
 ### A. Install the development tools
 
