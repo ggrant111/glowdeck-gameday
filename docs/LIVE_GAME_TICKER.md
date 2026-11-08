@@ -14,8 +14,8 @@ star/follow controls, overlay priority and WLED/audio eligibility are unchanged.
   live, in `x=10..309, y=206..230`. Non-live footer stats are unchanged.
 - During goal/PP overlays, the ticker is not repainted. The normal live slide
   resumes automatically and its cached content is redrawn.
-- One character advances every 180 ms only when the line exceeds the
-  available width. Text that fits remains stationary.
+- One **pixel advances every 30 ms** (~33 px/sec) only when the line exceeds
+  the available width. UTF-8 boundaries are preserved; text that fits stays still.
 
 ## Ticker content and feeds
 
@@ -37,7 +37,8 @@ is based on the NHL's period clock (including five-minute regular-season OT).
 Power-play goals release the oldest eligible opposing minor, including the
 correct double-minor segment. Penalties without a safe time or team identity
 are not labeled as currently active. When the data are not fresh, the ticker
-says `BOX: UPDATING` instead of guessing. Misconduct records are not
+shows `BOX: --` rather than guessing. A fresh, verified empty box is
+shown as `BOX: EMPTY`. Misconduct records are not
 misidentified as a two-minute PP. NHL player names/box snapshots can lag the
 scoreboard by one fetch interval.
 
@@ -57,3 +58,15 @@ a PP goal, or intermission and confirm the **BOX** list clears appropriately.
 Verify that the scoreboard does not flicker while the ticker moves, and that
 tap-to-stats, star/follow, pause, left/right navigation and goal overlays
 retain their current behavior. No new setting or saved state is introduced.
+
+## Name and animation robustness (Nov 2026)
+
+The penalty parser accepts NHL `committedByPlayer` as a name object or a
+string, falls back to `servedBy` on bench minors, and rejects literal
+`null`/`undefined`/`n/a` values. If the feed does not identify a penalized
+player, the strip shows `PLAYER TBD` rather than `null`; the offense and
+minutes remain visible. The marquee advances in individual pixels at a
+30ms cadence rather than jumping one full glyph every 180ms. Scrolling is
+still tied to normal loop availability, so an interrupted NHL HTTPS fetch
+can temporarily delay a frame; no second render buffer or network task is
+introduced.
