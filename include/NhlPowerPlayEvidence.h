@@ -26,6 +26,17 @@ inline uint8_t skaterAdvantage(const char *code) {
   if (away>home) return 2; // away power play candidate
   return 0;
 }
+// Some /score/{date} responses omit situationDescriptions during TV breaks,
+// but retain official on-ice strengths. A 5-on-4 / 4-on-3 with both goalies
+// present can be a *candidate* only; an actual start additionally requires
+// the separately fetched NHL penalty ledger to confirm the same side.
+// Never infer a PP from goalie-pulled 6-on-5 or a delayed extra attacker.
+inline uint8_t manpowerCandidate(int away,int home,
+                                 bool awayPulled,bool homePulled) {
+  if(awayPulled||homePulled||away<3||away>5||home<3||home>5)
+    return 0;
+  return home>away?1:away>home?2:0;
+}
 // Require the NHL PP label in the live scoreboard. Team strength by itself
 // can NEVER create an event. When an official PBP situation is available,
 // it additionally must show both goalies present and match the team label.

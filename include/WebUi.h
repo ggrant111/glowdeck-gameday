@@ -369,6 +369,13 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 </section>
 <section id="events" class="panel">
 <div class="section-intro"><div class="eyebrow">ACTIVITY LOG</div><h2>What happened, and what fired</h2><p>League observations and the exact commands sent to your physical lights.</p></div>
+<div class="card" id="pp2Diagnostics">
+<div class="eyebrow">POWER-PLAY TRACKER 2.0</div>
+<h2>Verified power plays</h2>
+<p class="small muted">Live session identity and NHL evidence behind the on-screen PP indicator and WLED pulses. A <strong>HELD</strong> session means an existing penalty is still tracked while an NHL update is incomplete; <strong>INTERMISSION</strong> preserves the session without pulsing lights.</p>
+<div class="actions"><button id="refreshPpTracker" class="ghost">Refresh PP diagnostics</button></div>
+<div id="ppTrackerRows" aria-live="polite"><p class="muted">Open Activity to load current power-play sessions.</p></div>
+</div>
 <div class="card"><h2>Game events & light activity</h2>
 <p>Review NHL goals, power plays, puck drops and finals. Check the on-device LED (where supported) and each opted-in WLED controller. This is an event audit, not a Test Lab.</p>
 <p class="small muted">WLED “Command accepted” means the controller acknowledged the HTTP request. It does not independently confirm visible light output. The latest 64 events remain in memory <b>until the device reboots</b>. No historical events are backfilled.</p>
@@ -1142,6 +1149,38 @@ function renderEventRows(targetId, rows){
   }
   rows.forEach(row=>target.append(createEventElement(row)));
 }
+async function refreshPpTracker(){
+  const data=await api("/api/pp-tracker");
+  const target=$("ppTrackerRows");target.replaceChildren();
+  const games=data.games||[];
+  if(!games.length){
+    const p=document.createElement("p");
+    p.className="muted";p.textContent="No live or tracked NHL games.";
+    target.append(p);return;
+  }
+  games.forEach(g=>{
+    const card=document.createElement("div");card.className="item";
+    const title=document.createElement("strong");
+    title.textContent=g.matchup+" · PP #"+(g.session||0)+" · "+g.phase;
+    const state=document.createElement("div");
+    state.className="small";
+    state.textContent="Reason: "+(g.reason||"Unknown")+
+      " · indicator: "+(g.indicatorSide||"off")+
+      " · NHL label: "+(g.candidateSide||"none")+
+      " · penalty ledger: "+(g.ledgerSide||"even")+
+      " · intermission: "+(g.intermission?"yes":"no");
+    const timing=document.createElement("div");
+    timing.className="small muted";
+    timing.textContent="Period "+(g.period||"?")+" · "+(g.clock||"--")+
+      " · penalty key "+(g.penaltyKey||"none")+
+      " · current game clock "+(g.gameClockAt??"--")+
+      " · penalty end "+(g.penaltyEndAt||"--")+
+      " · evidence age "+(g.evidenceAgeMs>=0?
+        Math.floor(g.evidenceAgeMs/1000)+"s":"unknown")+
+      " · WLED: "+(g.wledOwner?"playing":"not controlling");
+    card.append(title,state,timing);target.append(card);
+  });
+}
 async function refreshEventSummary(){
   const data=await api("/api/events?category=all&offset=0&limit=5");
   renderEventRows("recentGameEvents",data.events||[]);
@@ -1508,6 +1547,8 @@ async function refresh(){
   currentStatus=s;currentGames=g.games||[];
   renderStatus();renderGames();renderRearFollowed();
   await refreshEventSummary().catch(()=>{});
+  if($("events").classList.contains("active"))
+    await refreshPpTracker().catch(()=>{});
 }
 function renderDevices(){
   const list=$("deviceList");list.replaceChildren();
@@ -2627,6 +2668,7 @@ $("s3AudioProbe").onclick=()=>perform(async()=>{
 });
 $("eventCategory").onchange=()=>{eventOffset=0;perform(loadEventLog)};
 $("refreshEventLog").onclick=()=>perform(loadEventLog);
+$("refreshPpTracker").onclick=()=>perform(refreshPpTracker);
 $("eventOlder").onclick=()=>{eventOffset+=12;perform(loadEventLog)};
 $("eventNewer").onclick=()=>{eventOffset=Math.max(0,eventOffset-12);perform(loadEventLog)};
 $("clearEventLog").onclick=()=>perform(async()=>{

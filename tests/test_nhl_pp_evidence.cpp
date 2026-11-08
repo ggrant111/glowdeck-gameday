@@ -19,6 +19,13 @@ int main() {
   assert(!confirmedSide(true,false,"1551"));
   assert(!confirmedSide(true,false,"1560"));
   assert(!confirmedSide(false,true,"1451"));
+  // Manpower is only a candidate and is subject to penalty validation.
+  assert(manpowerCandidate(4,5,false,false)==1);
+  assert(manpowerCandidate(5,4,false,false)==2);
+  assert(manpowerCandidate(4,4,false,false)==0);
+  assert(manpowerCandidate(5,6,false,true)==0);
+  assert(manpowerCandidate(5,6,false,false)==0);
+  assert(manpowerCandidate(4,5,true,false)==0);
   assert(isPenaltySkaterReduction("MIN",2));
   assert(!isPenaltySkaterReduction("MIS",10));
   assert(!isPenaltySkaterReduction("GAM",10));

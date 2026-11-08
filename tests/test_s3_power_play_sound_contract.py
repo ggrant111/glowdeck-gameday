@@ -5,13 +5,12 @@ s=Path("src/main.cpp").read_text(encoding="utf-8")
 ui=Path("include/WebUi.h").read_text(encoding="utf-8")
 audio=Path("include/S3GoalAudio.h").read_text(encoding="utf-8")
 pp=s.split("void observePowerPlayEvents() {",1)[1].split("Game *gameById",1)[0]
-assert "const bool followed = rearFollows(g.id);" in pp
-assert "g.ppDataKnown" in pp and "g.ppUpdatedAt" in pp
-assert "PowerPlayLogPolicy::observe(" in pp
-assert "if (change.started) {" in pp
-start=pp.split("if (change.started) {",1)[1]
-end=pp.split("if (change.ended) {",1)[1].split("if (change.started) {",1)[0]
-assert "if(followed) startPowerPlaySound(entry.sequence);" in start
+assert "const bool followed=rearFollows(g.id);" in pp
+assert "session->takePending()" in pp
+assert "if(change.started){" in pp
+start=pp.split("if(change.started){",1)[1]
+end=pp.split("if(change.ended){",1)[1].split("if(change.started){",1)[0]
+assert "if(followed)startPowerPlaySound(entry.sequence);" in start
 assert "else entry.audio=GameEventLog::Audio::NOT_ARMED;" in start
 assert "startPowerPlaySound(" not in end
 assert "const uint8_t source=cfg.s3PpSound;" in s

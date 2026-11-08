@@ -22,6 +22,11 @@ jobs:
           /tmp/glowdeck-penalty-ledger
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_nhl_on_ice.cpp -o /tmp/glowdeck-on-ice
           /tmp/glowdeck-on-ice
+      - name: Test PP2 session tracking, TV breaks, intermission, NHL goals and multi-device parity
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_nhl_powerplay_tracker2.cpp -o /tmp/glowdeck-pp2
+          /tmp/glowdeck-pp2
+          python tests/test_power_play_tracker2_contract.py
       - name: Test live scorer ticker, penalty box and isolated LCD repaint
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_nhl_live_ticker.cpp -o /tmp/glowdeck-nhl-live-ticker
