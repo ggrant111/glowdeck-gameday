@@ -769,7 +769,7 @@ void validatePowerPlay(Game &g) {
     input.penaltyAt=evidence.penaltyAt;
     input.penaltyEndAt=evidence.endAt;
     if(session->side && input.ledgerSide==0 &&
-       session->anchorPenaltyAt){
+       session->anchorKey){
       input.verifiedPpGoalEnd=ledger->hasPpGoalSince(
           session->side,session->anchorPenaltyAt,input.gameAt);
     }
@@ -4402,6 +4402,15 @@ void drawLiveReadout(const Game &g) {
   } else {
     tft.fillRect(79,143,62,18,ARENA_PLATE);
     tft.fillRect(179,143,62,18,ARENA_PLATE);
+    const NhlPowerPlayTracker2::Watch *session=
+        powerPlaySession(g.id,false);
+    if(gameIsLive(g)&&g.intermission&&session&&session->side &&
+       session->phase==NhlPowerPlayTracker2::Phase::INTERMISSION){
+      const int16_t x=session->side==2?79:179;
+      tft.fillRoundRect(x,143,62,18,4,0xC3A0);
+      tft.setTextColor(WHITE,0xC3A0);
+      tft.drawString("PP NEXT",x+31,152,1);
+    }
   }
   tft.fillRect(10, 169, 300, 25, ARENA_PLATE);
   tft.setTextColor(ICE_TEXT, ARENA_PLATE);
@@ -4780,6 +4789,7 @@ S3BroadcastFrame::Snapshot captureS3ArenaFrame(const Game &g,uint32_t now){
       phase,g.ppDataKnown,g.ppSide,g.ppUpdatedAt,
       g.emptyNetKnown,g.emptyNetSide,g.emptyNetUpdatedAt,now);
   S3BroadcastFrame::mixNumber(bottom,uint32_t(phase));
+  S3BroadcastFrame::mixNumber(bottom,uint32_t(g.ppPhase));
   S3BroadcastFrame::mixNumber(bottom,uint32_t(g.awayShots));
   S3BroadcastFrame::mixNumber(bottom,uint32_t(g.homeShots));
   S3BroadcastFrame::mixNumber(bottom,special.signature());
@@ -4940,8 +4950,14 @@ void drawS3ArenaReadout(const Game &g,uint8_t mask=S3BroadcastFrame::BOTH) {
         drawS3ArenaFitted(enTeam,240,255,100,2,WHITE);
       }
     } else if(view.phase==S3Broadcast::Phase::INTERMISSION) {
+      const NhlPowerPlayTracker2::Watch *session=
+          powerPlaySession(g.id,false);
       tft.setTextColor(S3_AQUA);
-      tft.drawString("INTERMISSION",240,245,1);
+      if(session&&session->side &&
+         session->phase==NhlPowerPlayTracker2::Phase::INTERMISSION){
+        drawS3ArenaFitted("PP NEXT: "+
+            (session->side==1?g.home:g.away),240,245,128,1,0xFDA6);
+      }else tft.drawString("INTERMISSION",240,245,1);
     } else if(view.phase==S3Broadcast::Phase::FINAL) {
       if(view.winnerSide) {
         tft.setTextColor(S3_MUTED);
