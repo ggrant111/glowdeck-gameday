@@ -25,7 +25,7 @@ inline bool asciiEqualsIgnoreCase(const char *a,const char *b) {
 // absent, not as a player on the ice/serving a penalty.
 inline bool validPlayerName(const char *name) {
   if(!name)return false;
-  while(*name==' ' || *name=='\\t')++name;
+  while(*name==' ' || *name==9)++name;
   if(!*name)return false;
   return !asciiEqualsIgnoreCase(name,"null") &&
          !asciiEqualsIgnoreCase(name,"undefined") &&
