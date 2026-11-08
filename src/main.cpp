@@ -783,7 +783,7 @@ void validatePowerPlay(Game &g) {
      oldSide!=session->side){
     Serial.printf("[PP2] id=%lu session=%lu state=%s reason=%s side=%u "
                   "label=%u ledger=%u fresh=%u clock=%u at=%u ends=%u "
-                  "out=%u start=%u end=%u resume=%u\\n",
+                  "out=%u start=%u end=%u resume=%u\n",
         (unsigned long)g.id,(unsigned long)session->session,
         NhlPowerPlayTracker2::phaseName(session->phase),
         NhlPowerPlayTracker2::reasonName(session->reason),
@@ -804,7 +804,7 @@ void tickPowerPlaySessions(uint32_t now) {
     NhlPowerPlayTracker2::Watch *session=powerPlaySession(g.id,false);
     if(session && session->tick(now,g.intermission)){
       Serial.printf("[PP2] id=%lu session=%lu state=UNKNOWN "
-                    "reason=trusted-evidence-timeout\\n",
+                    "reason=trusted-evidence-timeout\n",
           (unsigned long)g.id,(unsigned long)session->session);
     }
     syncPowerPlayOutput(g,now);
@@ -1128,7 +1128,7 @@ void observePowerPlayEvents() {
           g,GameEventLog::Type::POWER_PLAY_END,team,0).sequence;
       queueGameOverlay(&g,EventOverlay::Kind::POWER_PLAY_END,team,seq,true);
       if(g.id==selectedGameId)armedPpLogSeq=0;
-      Serial.printf("[PP2 EVENT] game=%lu session=%lu END %s\\n",
+      Serial.printf("[PP2 EVENT] game=%lu session=%lu END %s\n",
           (unsigned long)g.id,(unsigned long)session->session,team.c_str());
     }
     if(change.started){
@@ -1143,12 +1143,12 @@ void observePowerPlayEvents() {
                        team,entry.sequence,true);
       if(followed)startPowerPlaySound(entry.sequence);
       else entry.audio=GameEventLog::Audio::NOT_ARMED;
-      Serial.printf("[PP2 EVENT] game=%lu session=%lu START %s\\n",
+      Serial.printf("[PP2 EVENT] game=%lu session=%lu START %s\n",
           (unsigned long)g.id,(unsigned long)session->session,team.c_str());
     }
     if(change.resumed) {
       // Resume is not a second NHL start: no horn, overlay, or log duplication.
-      Serial.printf("[PP2 EVENT] game=%lu session=%lu RESUMED\\n",
+      Serial.printf("[PP2 EVENT] game=%lu session=%lu RESUMED\n",
           (unsigned long)g.id,(unsigned long)session->session);
     }
   }
@@ -3409,7 +3409,7 @@ void fetchFollowedPowerPlays() {
     liveTickerFeed=liveTickerWork;
     liveTickerRefreshAt=0;
     liveTickerDirty=true;
-    Serial.printf("[TICKER] game=%lu goals=%u penalties=%u\\n",
+    Serial.printf("[TICKER] game=%lu goals=%u penalties=%u\n",
         (unsigned long)target->id,liveTickerFeed.goalCount,
         liveTickerFeed.penaltyCount);
   }
@@ -3425,7 +3425,7 @@ void fetchFollowedPowerPlays() {
      uint32_t(millis()-nhlLastSuccessAt)<=90000UL)
     validatePowerPlay(*target);
   else Serial.printf("[PP2] id=%lu landing cached but scoreboard "
-                     "age=%lus: withholding stale-clock PP confirmation\\n",
+                     "age=%lus: withholding stale-clock PP confirmation\n",
       (unsigned long)target->id,
       (unsigned long)(nhlLastSuccessAt?
           uint32_t(millis()-nhlLastSuccessAt)/1000UL:0UL));
@@ -8586,7 +8586,7 @@ void setup() {
   digitalWrite(PIN_BL, HIGH);
 #ifdef GLOWDECK_WAVESHARE_S3
   if (!tft.init()) Serial.println("[S3] Display init or PSRAM allocation failed");
-  Serial.printf("[S3] NHL embedded logos: %u teams, %ux%u SVG rasters, native sprite renderer\\n",
+  Serial.printf("[S3] NHL embedded logos: %u teams, %ux%u SVG rasters, native sprite renderer\n",
                 (unsigned)(sizeof(TEAM_LOGOS)/sizeof(TEAM_LOGOS[0])),
                 (unsigned)TEAM_LOGO_SIZE, (unsigned)TEAM_LOGO_SIZE);
   goalGif.beginStorage();
