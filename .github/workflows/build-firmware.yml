@@ -27,6 +27,11 @@ jobs:
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_nhl_powerplay_tracker2.cpp -o /tmp/glowdeck-pp2
           /tmp/glowdeck-pp2
           python tests/test_power_play_tracker2_contract.py
+      - name: Test NHL polling and PP_END event log while WLED PP stays active
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_wled_restore_fetch_policy.cpp -o /tmp/glowdeck-wled-pp-fetch
+          /tmp/glowdeck-wled-pp-fetch
+          python tests/test_wled_restore_fetch_contract.py
       - name: Test live scorer ticker, penalty box and isolated LCD repaint
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_nhl_live_ticker.cpp -o /tmp/glowdeck-nhl-live-ticker
