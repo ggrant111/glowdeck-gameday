@@ -157,20 +157,29 @@ public:
     const String path="/clip/v2/resource/light/"+config.lights[i];
     if(request(config.ip,config.key,"GET",path,"",&response)!=200)
       return false;
-    DynamicJsonDocument doc(2400);
-    if(deserializeJson(doc,response))return false;
+    // Hue light resources may contain many unrelated capabilities. Filter
+    // down to the actual restore attributes to keep CYD heap stable.
+    StaticJsonDocument<260> filter;
+    filter["data"][0]["on"]["on"]=true;
+    filter["data"][0]["dimming"]["brightness"]=true;
+    filter["data"][0]["color"]["xy"]["x"]=true;
+    filter["data"][0]["color"]["xy"]["y"]=true;
+    filter["data"][0]["color_temperature"]["mirek"]=true;
+    DynamicJsonDocument doc(960);
+    if(deserializeJson(doc,response,DeserializationOption::Filter(filter)))
+      return false;
     JsonObject light=doc["data"][0].as<JsonObject>();
     if(light.isNull())return false;
     colorCapable[i]=light.containsKey("color");
     StaticJsonDocument<350> previous;
     previous["on"]["on"]=light["on"]["on"]|false;
-    if(light["dimming"]["brightness"].is<float>())
+    if(!light["dimming"]["brightness"].isNull())
       previous["dimming"]["brightness"]=light["dimming"]["brightness"].as<float>();
-    if(colorCapable[i] && light["color"]["xy"]["x"].is<float>() &&
-       light["color"]["xy"]["y"].is<float>()) {
+    if(colorCapable[i] && !light["color"]["xy"]["x"].isNull() &&
+       !light["color"]["xy"]["y"].isNull()) {
       previous["color"]["xy"]["x"]=light["color"]["xy"]["x"].as<float>();
       previous["color"]["xy"]["y"]=light["color"]["xy"]["y"].as<float>();
-    }else if(light["color_temperature"]["mirek"].is<int>())
+    }else if(!light["color_temperature"]["mirek"].isNull())
       previous["color_temperature"]["mirek"]=
           light["color_temperature"]["mirek"].as<int>();
     serializeJson(previous,saved[i]);
