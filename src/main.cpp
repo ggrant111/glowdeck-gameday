@@ -6544,6 +6544,59 @@ void registerRoutes() {
     }
     sendJson(doc);
   });
+  // Read-only Power-Play Tracker 2.0 diagnostics. Shared session and
+  // raw official evidence are exposed separately to explain why the badge
+  // and LEDs are playing, held, resumed or stopped. No NHL fetch is made.
+  server.on("/api/pp-tracker",HTTP_GET,[](){
+    if(!authorized())return;
+    DynamicJsonDocument doc(6144);
+    doc["version"]=2;
+    doc["snapshotMs"]=millis();
+    JsonArray rows=doc.createNestedArray("games");
+    for(uint8_t i=0;i<gameCount;++i){
+      const Game &g=games[i];
+      if(g.state!="LIVE"&&g.state!="CRIT"&&g.ppSession==0)continue;
+      const NhlPowerPlayTracker2::Watch *watch=
+          powerPlaySession(g.id,false);
+      JsonObject row=rows.createNestedObject();
+      row["id"]=g.id;row["matchup"]=g.away+" @ "+g.home;
+      row["state"]=g.state;row["intermission"]=g.intermission;
+      row["period"]=g.period;row["clock"]=g.clock;
+      row["phase"]=watch?NhlPowerPlayTracker2::phaseName(watch->phase):
+          "IDLE";
+      row["reason"]=watch?NhlPowerPlayTracker2::reasonName(watch->reason):
+          "no session";
+      row["session"]=watch?watch->session:0;
+      row["trackedSide"]=watch?watch->side:0;
+      row["indicatorSide"]=g.ppSide;
+      row["candidateSide"]=g.ppCandidate;
+      row["situationKnown"]=g.ppSituationKnown;
+      row["penaltyKey"]=watch?watch->anchorKey:0;
+      row["penaltyAt"]=watch?watch->anchorPenaltyAt:0;
+      row["penaltyEndAt"]=watch?watch->expectedEndAt:0;
+      row["evidenceAgeMs"]=(watch&&watch->everTrusted)?
+          int32_t(millis()-watch->lastEvidenceMs):-1;
+      const NhlPenaltyLedger::Book *ledger=nullptr;
+      for(const auto &entry:penaltyLedgers)
+        if(entry.gameId==g.id){ledger=&entry;break;}
+      row["ledgerAgeMs"]=ledger&&ledger->loaded?
+          int32_t(millis()-ledger->checkedAt):-1;
+      uint16_t at=0;
+      const bool clockValid=NhlPenaltyLedger::Book::fromRemaining(
+          g.period,g.clock.c_str(),at,
+          g.period==4&&g.periodType=="OT"&&
+          ((g.id/10000UL)%100UL)==2UL);
+      row["gameClockAt"]=clockValid?int(at):-1;
+      row["ledgerSide"]=ledger&&ledger->loaded&&clockValid?
+          ledger->sideAt(at):0;
+      row["wledOwner"]=wledActiveGameId==g.id &&
+          wledActiveEvent==CelebrationEngine::Event::POWER_PLAY;
+      row["armed"]=isArmedGame(g.id);
+      row["followed"]=rearFollows(g.id);
+    }
+    if(doc.overflowed())return errorResponse("PP diagnostic full",503);
+    sendJson(doc);
+  });
   server.on("/api/stats", HTTP_GET, []() {
     if (!authorized()) return;
     const uint32_t id = strtoul(server.arg("id").c_str(), nullptr, 10);
