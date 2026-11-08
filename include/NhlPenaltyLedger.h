@@ -49,10 +49,11 @@ struct Book {
     return true;
   }
   static bool fromRemaining(uint8_t period, const char *remaining,
-                            uint16_t &at) {
+                            uint16_t &at, bool regularOvertime=false) {
     uint16_t sec=0;
-    if(!parseTime(remaining,sec)||sec>1200||!period)return false;
-    at=(uint16_t)((period-1)*1200+1200-sec);
+    const uint16_t length=(regularOvertime&&period==4)?300:1200;
+    if(!parseTime(remaining,sec)||sec>length||!period||period>5)return false;
+    at=(uint16_t)((period-1)*1200+length-sec);
     return true;
   }
   bool addPenalty(uint8_t period,const char*time,uint8_t penalizedSide,
@@ -79,12 +80,17 @@ struct Book {
     goal.at=at; goal.scoringSide=scoringSide;
     return true;
   }
-  // Calculate active minor/major penalty differential. A PP goal cancels
-  // the oldest active releasable two-minute penalty segment for the other
-  // team. A double-minor advances its active segment; fighting majors never
-  // create a PP. Simultaneous offsetting penalties cancel each other.
-  uint8_t sideAt(uint16_t now) const {
-    if(!loaded)return 0;
+  struct Evidence {
+    uint8_t side=0;
+    uint32_t key=0;
+    uint16_t penaltyAt=0,endAt=0;
+  };
+  // Calculate active minor/major penalty differential. Official PP goals
+  // cancel the oldest releasable opponent minor, including a double minor's
+  // currently serving segment. A goal NEVER cancels a five-minute major.
+  Evidence evidenceAt(uint16_t now) const {
+    Evidence evidence;
+    if(!loaded)return evidence;
     uint16_t endAt[kMaxPenalties]={};
     for(uint8_t i=0;i<penaltyCount;++i)
       endAt[i]=(uint16_t)(penalties[i].at+penalties[i].duration);
@@ -101,8 +107,8 @@ struct Book {
       if(chosen!=255) {
         const Penalty &p=penalties[chosen];
         if(p.duration>120 && endAt[chosen]>goal.at+120)
-          endAt[chosen]=goal.at+120; // next double-minor starts at PP goal
-        else endAt[chosen]=goal.at; // normal minor ends on PP goal
+          endAt[chosen]=goal.at+120; // next double-minor segment
+        else endAt[chosen]=goal.at; // ordinary minor ended
       }
     }
     uint8_t homePen=0,awayPen=0;
@@ -112,9 +118,37 @@ struct Book {
       if(p.penalized==1)++homePen;
       else if(p.penalized==2)++awayPen;
     }
-    if(homePen>awayPen)return 2; // away PP
-    if(awayPen>homePen)return 1; // home PP
-    return 0;
+    if(homePen>awayPen)evidence.side=2; // away PP
+    else if(awayPen>homePen)evidence.side=1; // home PP
+    if(!evidence.side)return evidence;
+    const uint8_t penalized=evidence.side==1?2:1;
+    uint8_t oldest=255;
+    for(uint8_t i=0;i<penaltyCount;++i){
+      const Penalty &p=penalties[i];
+      if(p.penalized!=penalized || now<p.at || now>=endAt[i])
+        continue;
+      if(oldest==255 || p.at<penalties[oldest].at)oldest=i;
+      if(endAt[i]>evidence.endAt)evidence.endAt=endAt[i];
+    }
+    if(oldest!=255){
+      const Penalty &p=penalties[oldest];
+      evidence.penaltyAt=p.at;
+      // Stable for one summary penalty: does not depend on fetch time or
+      // the position of the game in the daily scoreboard.
+      evidence.key=(uint32_t(p.at)<<16) ^
+                   (uint32_t(p.duration)<<3) ^
+                   (uint32_t(p.penalized)<<1) ^ uint32_t(oldest+1U);
+    }
+    return evidence;
+  }
+  uint8_t sideAt(uint16_t now) const { return evidenceAt(now).side; }
+  bool hasPpGoalSince(uint8_t scoringSide,uint16_t fromAt,
+                      uint16_t now) const {
+    if(!loaded || !scoringSide)return false;
+    for(uint8_t i=0;i<goalCount;++i)
+      if(goals[i].scoringSide==scoringSide &&
+         goals[i].at>=fromAt && goals[i].at<=now)return true;
+    return false;
   }
 };
 } // namespace NhlPenaltyLedger
