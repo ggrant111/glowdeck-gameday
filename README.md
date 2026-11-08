@@ -1,206 +1,301 @@
-# GlowDeck GameDay — ESP32 CYD + Waveshare ESP32-S3
+# GlowDeck GameDay
 
-**Hardware targets:** The original ESP32-2432S028R CYD and the Waveshare **ESP32-S3-Touch-LCD-3.5** (ST7796 SPI / FT6336 capacitive touch, 320×480 native portrait panel, used at **480×320 landscape**). Both compile from the same NHL/WLED engine using separate PlatformIO environments. Always select the desired target explicitly with `-e cyd` or `-e s3_waveshare_35`.
+**A standalone NHL scoreboard, live game tracker, and team-color celebration controller for ESP32 touch displays.** GameDay displays today's games and standings, follows live events, and can coordinate the screen, onboard audio/LEDs, WLED controllers, and Philips Hue lights. The ESP32 hosts its own mobile-friendly setup dashboard; no Raspberry Pi, separate web server, or Fire TV app is required.
 
-**Phase 8E — light streaming Quick Setup:** In **Customize → WLED**, every saved controller now has a guided, live-checked "Set up light streaming" flow. Choose Both teams (full-strip Neutral), Home-only, Away-only, or preserve existing segment roles; select a 10/15/20 FPS profile and confirm exclusive use. One action saves zone mapping, participation and DDP preferences, with an optional three-second test in the same panel and a direct stop/restore/disable path. A read-only compatibility check explains problems before changing settings. No WLED LED ranges, scene templates, NHL eligibility, or existing mappings are changed without explicit selection. [Phase 8E guide and acceptance](docs/WLED_PHASE8E_QUICK_SETUP.md).\\n\\n**Phase 8D — optional exclusive real-time DDP streaming:** The embedded WLED portal now offers a separate OFF-by-default DDP opt-in for dedicated full-strip controllers, a 10–20 FPS rate selector, realtime status, a three-second Test Lab preview and emergency stop/restore. True DDP v1 RGB24 packets are sent directly from S3/CYD to UDP 4048, up to 4,096 RGB LEDs per controller using MTU-safe 480-pixel DDP chunks, with two streams. Before streaming, WLED's live status, LED count, RGB type, segment coverage, team eligibility and effective zone durations are checked; any shared/unassigned/opposite-team/unsuitable controller keeps **8C native JSON**, and verified power plays always use native JSON. Original NHL arm/follow rules and 8A/8B/8C settings are untouched. [Phase 8D protocol, wiring-free setup, fallback and hardware acceptance](docs/WLED_PHASE8D_OPTIONAL_DDP.md).\n\n**Phase 8C — WLED celebration scene builder:** The local Customize → WLED portal now offers **15 opt-in scene templates per controller** (5 NHL events × Home/Away/Neutral) with independent native WLED effects (7 supported choices), speed, intensity, brightness, Automatic/Team/White/Custom RGB colors, and optional 2–30-second zone durations for temporary events. The engine restores individual zones when their duration ends, without rewriting unassigned segments. Saved templates are CRC-validated in per-controller NVS blobs; **Inherit** preserves exact 8B behavior, even on upgraded controllers. Three-second saved-scene previews use the original scoped restore mechanism without triggering NHL events or audio. **No DDP** or new eligibility conditions. See [Phase 8C scene builder, API and acceptance guide](docs/WLED_PHASE8C_SCENE_BUILDER.md).\n\n**Phase 8B — native WLED segment zones:** Each of eight WLED controllers can keep legacy whole-controller celebrations or opt into independent HOME / AWAY / NEUTRAL / UNASSIGNED roles for up to 16 existing segments. The Customize → WLED editor reads live segment IDs, names and LED ranges; a 1.8s per-segment Identify preview restores the tested segment. Mapped goal/PP commands target only matching native JSON segment IDs and restore only the changed segments; NHL armed/followed eligibility is unchanged, existing four preferences persist, and DDP remains postponed. [Phase 8B assignment and hardware acceptance](docs/WLED_PHASE8B_SEGMENT_ZONES.md).\n\n**Phase 8A — WLED local discovery and eight-controller management:** The GameDay web portal can scan for `_wled._tcp` services, verify WLED JSON identities, show name/version/LED count and stage controllers safely **disabled** until explicitly enabled/saved. Manual IPv4 verification remains available. All eight saved controllers have distinct name, IP and NHL event opt-in controls; the legacy 4 device preferences and arm/follow semantics are retained. Scan never runs continuously or causes lights to change. See [Phase 8A build and physical acceptance](docs/WLED_PHASE8A_DISCOVERY.md).\n\n**Phase 7D — Arena-inspired GameDay web command center:** Reorganized the local firmware web portal from eight mixed settings/testing tabs into **Overview, Live games, Customize, Test Lab, Device and Activity**. Broadcasters-style NHL live scorecard and team-primary accents now match the native S3 game screen. Customize uses task-specific sections for Favorites, Screen, WLED, Sound and LEDs; all manual celebrations, channel tests, speaker diagnostics and previews are centralized in Test Lab. Device contains network, security, firmware and health. Shared save with unsaved-change indicator preserves all original API and NVS keys, while favorite/team, S3 volume/WAV and case-lighting controls retain their explicit apply actions. Both CYD and S3 share the same UI with board-specific sections hidden appropriately. See [Phase 7D portal audit, architecture and acceptance](docs/WEB_PORTAL_7D_UX_OVERHAUL.md).\n\n**Waveshare S3 Phase 7C — independent left/right case LEDs (software only):** Two WS2812B RGB strips are supported on **Waveshare ST7796 32-pin expansion GPIO17 (header pin 14, LEFT/HOME)** and **GPIO18 (header pin 16, RIGHT/AWAY)**, buffered through an external **74AHCT125 level shifter**, powered from a **separate fused 5V supply** with common GND. Firmware has independently controlled goal strobes/chases, verified PP pulses, armed game-start/final effects, isolated RGB diagnostics, and an authenticated case-lighting configuration panel. **Safe default OFF**, with explicit wired-confirmation required to enable; 1–16 LEDs/side with 50% digital brightness cap. Audio, CYD, goal GIF, NHL event admission and WLED are unchanged. Includes the [editable wiring diagram](docs/assets/s3_phase7c_case_led_wiring.svg) and [full BOM / installation and acceptance guide](docs/S3_PHASE7C_CASE_LEDS.md). Physical hardware testing is deferred until the case/strips are assembled.\n\n**Waveshare S3 Phase 7B.1/7B.2 — custom WAV library:** The S3 Settings audio card now supports **three persistent LittleFS sound slots**, browser WAV upload (PCM16 mono/stereo 8–48kHz; max 768KB / 10s), sound preview, built-in vs custom selection and deletion. Playback streams from flash through the nonblocking ES8311 task with safe 48kHz resampling. The selected sound and descriptive file names survive ordinary OTA and reboot; missing or corrupted custom files fall back to the working synthesized horn. The 30–80% gain setting, NHL event admission, WLED, goal GIF, CYD and Fire TV are preserved. **CI/firmware builds do not replace actual speaker testing.** See [Phase 7B sound library guide](docs/S3_PHASE7B_WAV_LIBRARY.md).\n\n**Waveshare S3 Phase 7A.2 — louder goal horn and adjustable volume:** The speaker and codec have now been physically confirmed working, but the original 220–330Hz horn was too quiet. The new S3 horn adds stronger upper harmonics (440/660/880Hz), uses bounded 30k PCM headroom, and starts at the Waveshare reference 70% ES8311 level. In web **Settings → Onboard speaker**, choose **30–80%** and **Apply volume**, then preview the horn; the chosen level persists across reboots. The 1kHz diagnostic, CYD, Fire TV, NHL and WLED logic remain independent. Improved audible loudness still needs an on-device retest. See [7A.2 horn loudness guide](docs/S3_PHASE7A2_HORN_LOUDNESS.md).\n\n**Waveshare S3 Phase 7A.1 — silent speaker diagnostics:** If the connected speaker does not play a horn, use the S3 dashboard's new **Test speaker · 1 kHz** and **Check audio diagnostics** controls. The 50%-volume test provides an audible mid-range reference and exposes actual ES8311 DAC readback, TCA9554 P7 amp state, I2S frames sent and stream failures instead of treating codec initialization as proof of audible sound. NHL/WLED events and CYD GPIO26 are unchanged. See [7A.1 diagnostics and speaker test](docs/S3_PHASE7A1_AUDIO_DIAGNOSTICS.md). Physical sound still needs verification.
+> **New here?** Follow [1. Choose your hardware](#1-choose-your-hardware), [2. Install firmware over USB](#2-install-firmware-over-usb-first-time), and [3. Connect Wi-Fi and open the dashboard](#3-connect-wi-fi-and-open-the-dashboard). External lighting and custom audio are optional. **Do not flash the wrong board's firmware.**
 
-**Waveshare S3 Phase 7A — onboard goal horn:** The ST7796 Waveshare board now initializes its ES8311 (I2S GPIO12/13/15/16 and amplifier TCA9554 P7) and runs a small 900 ms, 50%-codec-volume synthesized horn from a dedicated playback task. A **speaker-only preview** in web Settings verifies output without starting NHL events or WLED; actual armed/followed NHL goals honor the existing horn opt-in. The S3 reports codec readiness/errors and fails safely if it is missing. CYD, Fire TV and LED outputs are unchanged. Audio hardware still requires a physical speaker test. See [Phase 7A setup and acceptance](docs/S3_PHASE7A_ONBOARD_AUDIO.md).\n\n**Waveshare S3 Phase 6D — acceptance and stability:** Physical text and NHL logo placement have been accepted by the device owner, and touchscreen positioning was reported as working well. Automated release tests now stress 45,000 event/refresh cycles, timer wraparound, bounded overlay queues, full-scene restoration, and S3-only UI fallback; both PlatformIO firmware variants must still compile. This completes the **placement and touch acceptance milestone**. Real-device overlay animation smoothness, long soak timing and memory stability remain observational checks, not claimed physical passes. See [Phase 6D release notes](docs/S3_PHASE6D_RELEASE_ACCEPTANCE.md).
+## What you can do
 
-**Waveshare S3 Phase 6C — unified broadcast pages:** The same dark, de-boxed S3 style now applies to **All Games, four-game summaries, Game Stats, conference/division Standings, Setup, Touch Check, no-game screens and event/GIF chrome**. Existing real NHL data, 4-row touch hit maps, follow/arm stars, goal overlays and 320×240 unscaled GIFs are preserved, while the Arena Live Game and Phase 6B.4 selective SPI refresh remain unchanged. No extra framebuffer, request, CYD or Fire TV changes. The S3-only `GLOWDECK_S3_PHASE6C_UI=0` flag instantly restores the former secondary screens for troubleshooting. See [Phase 6C guide](docs/S3_PHASE6C_BROADCAST_PAGES.md). Physical Waveshare verification is still needed.
+- View NHL games, live scores, game clock, shots on goal, team logos/colors, pregame records, standings, and a live scrolling goal/penalty/stat ticker.
+- Follow games from the touchscreen or **Live games** dashboard and separately **arm** the games and team sides eligible for external celebrations.
+- Display live goal, verified power-play, game-start, and game-finish event overlays. League-wide display-only events do **not** automatically activate external lights or sounds.
+- Trigger team-color celebrations across **up to eight WLED controllers**, with discovery, per-controller event permissions, segment zones, custom scenes, native JSON state restoration, and optional dedicated-controller DDP streaming.
+- Integrate a local **Philips Hue Bridge** and up to **four selected Hue lights** with opt-in event controls and restoration.
+- Use board-specific LEDs and sound, including the Waveshare S3's ES8311 speaker, custom WAV slots, and optional independently wired case-light strips.
+- Inspect the **Activity** event audit, verify power-play state, perform isolated previews in **Test Lab**, and apply subsequent firmware updates through the browser.
 
-**Waveshare S3 Phase 6B.4 — performance & stability:** Arena Live now uses an allocation-free field snapshot to send **only changed top (clock/score) or bottom (SOG/PP/EN/records) RGB565 rectangles**. Unchanged data skips SPI updates; game changes and completed/dismissed event overlays still restore a full 480×320 scene. Once-per-minute serial metrics report full/partial/skipped frames, estimated bytes, worst transfer time and free PSRAM. The immutable arena background remains cached once in PSRAM; CYD, NHL event logic, WLED and Fire TV are unchanged. See [Phase 6B.4 acceptance and performance guide](docs/S3_PHASE6B4_PERFORMANCE.md). Physical S3 validation remains pending.
+The project uses the public NHL API and needs an internet-connected Wi-Fi network for live data. NHL data can lag a broadcast: it is **not** audio/video capture or guaranteed real-time scoring.
 
-**Waveshare S3 Phase 6B.3 — data and navigation:** The Arena Live screen shows stronger SOG readouts and team-linked verified PP/empty-net badges, including both pulled goalies and simultaneous events. Statuses clear automatically when 45-second evidence expires, even without new NHL polling. Short taps anywhere on the main game content open Stats; drags don't trigger touches. Swipe, follow star, GAMES/SETUP, CYD, WLED and Fire TV are preserved. See [Phase 6 broadcast guide](docs/S3_PHASE6_BROADCAST.md).
+## 1. Choose your hardware
 
-**Waveshare S3 Phase 6B.2B — four broadcast game states:** Native Arena Live now distinguishes **Upcoming** (time, VS, cached season records without empty shot placeholders), **Live** (large score, period/clock, SOG, verified PP/empty-net), **Intermission** (score, SOG and completed period), and **Final** (regulation/OT/SO, winner indication only on confirmed completed scores). Same-game data changes restore two small regions from the cached 480×320 image. No new API requests, CYD changes or WLED event-policy changes. See [Phase 6 broadcast guide](docs/S3_PHASE6_BROADCAST.md).
+| Supported device | Build environment | Display | Audio / local lighting |
+| --- | --- | --- | --- |
+| **Waveshare ESP32-S3-Touch-LCD-3.5** (ST7796 SPI, FT6336 capacitive touch) | `s3_waveshare_35` | Native **480 × 320 landscape**; 16 MB flash, 8 MB PSRAM | ES8311 speaker/audio; optional two externally powered case LED strips |
+| **ESP32-2432S028R** (2.8-inch CYD, ILI9341, XPT2046 resistive touch) | `cyd` | **320 × 240 landscape** | Built-in rear RGB indicator; optional GPIO26 speaker output |
 
-**Waveshare S3 follow/footer and larger logos:** Fixed an armed-game text-datum leak that shifted GAMES, page count and SETUP on certain Live carousel slides; footer labels now have explicit left/center/right anchors. Increased the official S3 NHL logo source and Live Game display to **96×96** (previously 80×80); CYD remains 56px. See [broadcast guide](docs/S3_PHASE6_BROADCAST.md).
+**Compatibility matters:**
 
-**Waveshare S3 Phase 6B.2A — cleaner Arena Broadcast:** Removed the outlined score/team/time cards, joined the lower shots/PP zone into one soft strip, softened logo plinths and eliminated the bordered footer and live follow-star card. All NHL overlays, 480×320 native resolution, swipe/follow targets, CYD firmware and WLED events remain unchanged. The background is automatically regenerated at build time and tested for hard border artifacts. See [Phase 6B broadcast guide](docs/S3_PHASE6_BROADCAST.md).
+- The Waveshare **3.5** ST7796 board is **not** the **3.5B** QSPI/AXS15231B model. Their firmware is not interchangeable.
+- The CYD firmware targets the original **ESP32-2432S028R** wiring. Other "CYD" variants may have different controllers/pins.
+- The repository's `platformio.ini` currently defaults to **`s3_waveshare_35`**. Always supply `-e s3_waveshare_35` or `-e cyd` explicitly instead of assuming the default.
+- You need a **USB data cable** appropriate to your board, a USB-capable computer for the initial flash, and 2.4 GHz Wi-Fi. Some Windows systems also need a USB/serial driver.
 
-**Waveshare S3 Phase 6B.1 — dark, true-native arena artwork (Live Game only):** The Live Game background is now a clean, dark **480×320 RGB565** arena graphic, compressed in flash and decompressed **once directly into PSRAM** (no more 192×128 upscaling). The background has no baked logos or text: NHL logos, scores, clock, SOG and PP/EN remain dynamic overlays. A standard-Python generator runs automatically on every S3 PlatformIO build, preventing stale image assets, and CI tests the PNG/RGB565 color conversion, data integrity and preserved display inversion. The minimal corner touch controls and old-UI rollback flag `-D GLOWDECK_S3_PHASE6_LIVE=0` remain. CYD and other S3 pages are unchanged. See [the arena broadcast guide](docs/S3_PHASE6_BROADCAST.md).
+**Optional hardware:** WLED-ready controllers/LED strips; Philips Hue Bridge v2 and supported Hue bulbs; a compatible speaker for your board; or the S3 case-light components described in [the wiring guide](docs/S3_PHASE7C_CASE_LEDS.md). Neither WLED nor Hue is needed to run the scoreboard.
 
-**Waveshare S3 native UI — phases 1–4:** The GameDay scoreboard, four-game summaries, all-games picker, game statistics, eight standings slides, event celebrations, setup and touch-check screens render directly at **480×320** with native touch targets. The Phase 3 stats view includes pregame records or live/final NHL comparisons; standings show accurate rank, GP, W-L-OT and points. The S3 color default now matches the first physical board's verified good display mode, while preserving saved color settings. A user-uploaded 320×240 goal GIF now plays **1:1 centered** within native 480×320 event chrome (no stretching), and the extra resampling framebuffer is removed. Factory FT6336 touch verification replaces legacy resistive calibration on S3. The NHL engine, favorites, WLED celebrations and original CYD remain unchanged. The S3's built-in audio codec and external LED connections are **not enabled** yet; never connect a CYD rear LED to the S3 using the CYD pin map. **Do not install on the `3.5B` QSPI variant.** See [S3 native UI rollout](docs/S3_NATIVE_UI.md) and [Waveshare S3 first-flash guide](docs/WAVESHARE_ESP32_S3_3P5.md).
+For details, see [CYD pin map](docs/HARDWARE.md) and [Waveshare S3 board guide](docs/WAVESHARE_ESP32_S3_3P5.md).
 
-## Original ESP32-2432S028R CYD firmware
+## 2. Install firmware over USB (first time)
 
-**A standalone NHL game-day controller for the ESP32-2432S028R ("Cheap Yellow Display", 2.8" resistive touch).** Pick a game on the touchscreen and use WLED lights to celebrate goals. Configure it from a mobile-friendly website hosted **by the ESP32**.
+**Important:** A GitHub Actions `firmware.bin` is an **application image**, not a complete blank-chip factory flasher. For the first install, use the matching PlatformIO environment to build **and upload** the bootloader, partition information, and application correctly. Later updates can use the browser OTA screen.
 
-**Status: v0.3.7 verified NHL power plays and live empty-net indicators.** PlatformIO compilation and NHL logo generation pass in CI. The previous v0.1.1 color correction and web OTA have been confirmed on a physical ESP32 CYD; new carousel and stats features still need on-device validation.
+### A. Install the development tools
 
-## Touchscreen
+1. Install [Git](https://git-scm.com/downloads) and [Python 3](https://www.python.org/downloads/) (Python 3.11 is used in CI).
+2. Install [Visual Studio Code](https://code.visualstudio.com/) and its [PlatformIO IDE extension](https://platformio.org/install/ide?install=vscode). Run commands below in a **PlatformIO terminal**. Alternatively install the PlatformIO CLI with `python -m pip install platformio==6.1.18`.
+3. Clone and open the **repository root** (the folder containing `platformio.ini`).
 
-- **TODAY:** Full-screen NHL broadcast-style scoreboard with corrected 16-bit RGB565 logos, larger scores, live clock/period and SOG. Swipe left/right to rotate games, tap the matchup for stats, and tap the small top-right menu to reach Games/Setup. No persistent bottom navigation.
-- **GAMES:** Choose the matchup that is armed for goal celebrations. Use prev / next to page.
-- **SETUP:** IP address, Wi-Fi hotspot credentials, test lights and touch calibration.
+~~~sh
+git clone https://github.com/ggrant111/glowdeck-gameday.git
+cd glowdeck-gameday
+~~~
 
-The first score after selecting a game is used as a baseline and never replays an earlier goal.
+### B. Generate embedded assets
 
-**v0.2.2 display correction:** Fixes horizontal striped team logos seen in physical CYD photos, darkens the electric-blue arena background, and formats faceoff fractions as percentages. Hardware confirmation is still needed after OTA.
+The official NHL logo header is generated as part of the repository workflow. Before a local build, install the generator's dependencies and run it:
 
-**v0.2.3:** Fixed the proven 56px-versus-48px logo row-stride mismatch. The build now extracts official team SVG URLs from the NHL score JSON when available, converts them into on-device assets, and loads PP/PIM/FO stats for carousel games automatically (without requiring a visit to the stats page). See [the carousel guide](docs/CAROUSEL.md).
+~~~sh
+python -m pip install Pillow==11.3.0 CairoSVG==2.8.2
+python scripts/generate_logos.py
+~~~
 
-**v0.2.4:** The CYD synchronizes its clock using NTP, checks the configured local date every five seconds, and fetches the NHL scoreboard at `/v1/score/YYYY-MM-DD` rather than the NHL's delayed `/now` redirect. Yesterday's games automatically expire at midnight; empty schedules display "No NHL games scheduled." The Display tab exposes date/time-sync diagnostics. See [Automatic Day Rollover](docs/DAILY_ROLLOVER.md).
+The S3 arena background is regenerated automatically by the S3 PlatformIO pre-build hook. If asset generation fails, fix the Python/dependency error **before** attempting to upload firmware.
 
-**Carousel does not arm games:** Browsing the daily schedule, manually or automatically, does not change which game triggers goal celebrations. Select a game using ARM GOALS on TODAY, ARM on the stats page, or the GAMES list.
+### C. Identify your USB port
 
-**Display appearance:** The screen is intended to be dark navy with white text and teal controls. If your particular CYD displays a pale blue background and pink buttons, toggle **SETUP → INVERT** on the touchscreen, or use **Setup → Correct inverted CYD display colors** in the web dashboard. This preference survives reboots. Unchanged NHL polls no longer force a full-screen redraw.
+Plug the board into the computer using a **data-capable** USB cable and run:
 
-## Verified NHL power plays and empty-net badges (v0.3.7)
+~~~sh
+pio device list
+~~~
 
-The CYD's full-screen LIVE game slide now shows small **PP** (verified power play) and **EN** (empty net; goalie pulled) badges beside the relevant team's abbreviation. If both apply simultaneously the badge reads **PP+EN**. Away is left; home is right. These redraw with live status changes, without extra carousel slides or images.
+On Windows, the port will look like `COM6` (example only). On macOS/Linux it may resemble `/dev/cu.usbserial-...` or `/dev/ttyUSB0`. Use the port reported **for your board** in the commands below. Windows Device Manager can also identify it.
 
-After auditing the official November 3 Anaheim–Vancouver play-by-play, v0.3.7 stops inferring PP from raw skater counts (which can mean a pulled goalie). A current NHL PP label must agree with actual gamecenter penalty and power-play-goal records at the NHL clock. Missing or inconsistent data fails closed instead of creating repeated false PP events. This same verified PP state drives the web Event Log, CYD rear RGB pulse, on-screen PP event overlay, and selected WLED devices. EN is tracked independently and never activates PP lighting by itself.
+If the Waveshare S3 is not detected, try its **BOOT** button while briefly resetting the device, then release BOOT and check the port again. Never choose a port only because it worked with a previous board.
 
-See [official NHL event audit and PP/EN verification guide](docs/NHL_EVENT_VALIDATION.md). Actual on-device/broadcast timing remains subject to the NHL public feed and needs physical verification.
+### D. Build, flash, and monitor — choose ONE board
 
-## Live-first game carousel (v0.3.6)
+**Waveshare S3 3.5-inch (ST7796):**
 
-When NHL games are **live**, the CYD rotates only through full-screen LIVE matchups, plus the minimum number of compact **four-games-per-slide** pages containing every upcoming or finished matchup. During active play, conference/division standings temporarily leave the automatic rotation. **When no NHL games are live**, the previous carousel returns unchanged: all individual game slides plus eight standings slides (if enabled), or standings alone on a no-game day. This reduces the number of screens at the most interesting time of the night.
+~~~sh
+pio run -e s3_waveshare_35
+pio run -e s3_waveshare_35 -t upload --upload-port COM6
+pio device monitor -p COM6 -b 115200
+~~~
 
-Summary rows show away/home teams, team-color accents, upcoming game times or completed final scores. Tap a row for its detailed stats. The layout dynamically updates on NHL game-state transitions without rearming a matchup or affecting CYD RGB/WLED celebrations, live API polling or screen event overlays. Web Dashboard → Display reports which carousel mode is active and how many live/summary slides are included. See [Live-first carousel details](docs/LIVE_FIRST_CAROUSEL.md).
+**Original 2.8-inch ESP32 CYD:**
 
-## Animated NHL event overlays on the CYD (v0.3.5)
+~~~sh
+pio run -e cyd
+pio run -e cyd -t upload --upload-port COM6
+pio device monitor -p COM6 -b 115200
+~~~
 
-A detected **goal, power-play start/end, puck drop or final result** can temporarily take over the 320×240 touchscreen with the team's official logo, color, event title, score and period/clock. Goal overlays flash a thin team-color perimeter; power plays pulse slowly; final screens use calmer effects. After the configurable duration, the **previous exact carousel/standings/stats/setup page returns**. Goals take priority through a bounded four-event queue. NHL polling, the rear RGB LED and any selected WLED controllers continue independently.
+Replace `COM6` with the correct port. In VS Code you can select the appropriate PlatformIO environment and run its **Build** and **Upload** tasks instead. First-time compilation downloads platform/framework libraries and may take longer.
 
-Configure the enabled event types, goal border flashing, logos and durations under the web dashboard **Display → Live event overlays**. Preview each event from the web dashboard without connecting WLED or playing sound. This version uses existing logo sprites and direct RGB565 TFT rendering; **no framebuffer or heavy sprite allocations**. [Read the v0.3.5 overlay guide](docs/EVENT_OVERLAYS.md).
+**Successful first boot:** The GameDay display initializes, serial output appears at **115200 baud**, and a Wi-Fi network named `GlowDeck-XXXXXX` becomes available. A successful compiler result **does not** establish that the touchscreen, speaker, LEDs, or network has passed a real hardware test.
 
-## Power-play logging stability (v0.3.4)
+### E. Alternative: download a ready-built firmware for later OTA
 
-The event dashboard no longer logs repetitive power-play starts when no WLED controllers are configured. Previously, a WLED retry timer could generate a *new NHL PP entry* every 8 seconds, even if zero devices were available. The WLED engine now skips events with no eligible controllers and **only the NHL observer** creates real game-event start/end records.
+1. Open the repository's [GitHub Actions runs](https://github.com/ggrant111/glowdeck-gameday/actions/workflows/build-firmware.yml).
+2. Open a **successful** run of **Build GlowDeck firmware (CYD + ESP32-S3)** for the commit you want.
+3. Download and extract **the matching artifact**:
+   - Waveshare S3: `glowdeck-gameday-s3-waveshare-35-firmware`
+   - CYD: `glowdeck-gameday-cyd-firmware`
+4. Inside the downloaded artifact is `firmware.bin`, used for **subsequent browser OTA**, not as a raw `0x0` factory image.
 
-Power-play history is tracked by stable NHL game ID instead of the mutable scoreboard array position. A short missing/empty PP situation is ignored; a power-play end requires at least two explicit zero-PP reports separated by at least 10 seconds. Real PP starts are still logged only on genuine state changes. The web history hides WLED 1–4 rows if none of those devices are configured and enabled, displaying **No controllers enabled for celebrations** instead.
+Do not flash the S3 binary onto a CYD or vice versa. If a device boot-loops and OTA is unavailable, recover with the matching **PlatformIO USB upload** rather than repeatedly retrying OTA.
 
-The CYD internal RGB LED continues independently from WLED. Existing recorded duplicates from v0.3.3 remain in its RAM session log until reboot or **Clear session log**; updating the firmware reboots and starts a fresh history. Tests cover missing PP data, rapid repeats, real transitions and NHL game identity.
+## 3. Connect Wi-Fi and open the dashboard
 
-## Web-only NHL event & celebration log (v0.3.3)
+1. On the ESP32 display, open **SETUP** and locate the device's **`GlowDeck-XXXXXX`** Wi-Fi hotspot and its **unique password**.
+2. Connect a phone or computer to that hotspot. The phone may report "No Internet" while connected; that is expected.
+3. Open **http://192.168.4.1** in a browser. Use **HTTP**, not HTTPS. When connecting directly through the device's protected setup hotspot, there is **no additional browser/admin sign-in**.
+4. In **Device → Wi-Fi & Access**, select your normal 2.4 GHz home network and enter its password. Save/apply the connection settings.
+5. After the ESP32 joins your home network, read its **LAN IP address** from the device setup/status screen. Reconnect your phone to your normal home Wi-Fi, then browse to **http://YOUR-ESP32-IP/**.
+6. On the **home LAN**, authenticate as username **`admin`**. The **initial admin password** is the unique setup-hotspot password displayed on the device; change the admin password under device settings.
+7. Confirm **Overview** shows a connected device and live NHL information. Check the date, local time zone, and carousel preferences under **Customize → Screen**.
 
-The CYD-hosted dashboard now includes a **Recent game events** panel and an **Event Log** tab. It records observed goals (including score changes), known power-play changes, armed game starts/finals, and manual previews. Each row shows the matchup and score, whether the CYD rear LED was triggered, and separate **command acceptance / snapshot / restore / error** statuses for WLED controllers 1–4 and the LED strips they control. Successful WLED HTTP responses are logged as *command accepted*, not physically verified light output.
+The setup hotspot remains available for recovery when home Wi-Fi credentials change. Keeping the ESP32 and lighting devices on the same trusted local network avoids most discovery and communication failures. Reserving device IP addresses in your router is recommended.
 
-The most recent **64 entries are stored in a fixed-size RAM ring buffer** until reboot (no flash wear or extra physical touchscreen pages). The browser offers filters, paging, refreshing and clearing the current-session log. The first received NHL score establishes a baseline; the log cannot recreate earlier events or guarantee that it observed every NHL play. See [Web Event History](docs/WEB_EVENT_HISTORY.md).
+### Dashboard map
 
-## Dynamic team-color game slides (v0.3.2)
-
-Every full-screen **pregame/live/final NHL matchup** now uses a bold **away team → home team** primary-color backdrop instead of the former blue arena field. Team colors fade together through a soft dark center, with subtle mesh texture and neutral charcoal overlays for clear white score/time/stat text. The 320×240 CYD renders the gradient directly as 80 fixed-point RGB565 strips; there is no framebuffer, bitmap download, heavy graphics dependency, or extra heap allocation. The backdrop is only redrawn on game-slide changes, never during quick partial NHL score refreshes. Conference/division standings and settings screens remain neutral.
-
-See [Team Gradient](docs/TEAM_GRADIENT.md) for design decisions and hardware visual verification.
-
-## Multi-device WLED Celebration Engine (v0.3.1)
-
-The CYD now triggers built-in WLED effects on **only the configured, enabled WLED controllers**. In **WLED / Lights**, enter up to four IPs and flag each controller for goals, power plays, puck drop and/or final results. All participating devices receive identical team colors and effect parameters from a single event timeline: goal strobe-to-chase (or select a simpler goal style), live power-play breathing, game-start wipe and win/loss finales. Afterward the CYD restores each device's original WLED state, including segments. A WLED state could not be saved? That device is skipped rather than risking loss of its previous lighting.
-
-The dashboard provides previews for every event, a Stop/Restore control, per-device result status, and a home/away favorite-team perspective for final outcomes. The rear CYD RGB remains independent; existing saved WLED IPs and enabled flags are preserved. WLED JSON commands use `udpn.nn` to suppress unintended WLED UDP broadcast to excluded devices.
-
-**Timing:** Effects match across opted-in controllers, but sequential HTTP is not frame-perfect synchronization; optional UDP/DDP real-time streaming could address that in a future release. See [WLED Celebration Engine](docs/WLED_CELEBRATION_ENGINE.md) for safety notes, configuration and tests.
-
-## Full NHL conference and division standings (v0.3.0)
-
-Swipe through every current-day matchup, followed by **eight additional standings slides**: Eastern and Western conference rankings in two readable 8-team halves each, plus full Atlantic, Metropolitan, Central and Pacific division rankings. The compact CYD tables show official team rank, games played, W-L-OT and points. The armed game's two teams receive a subtle accent. Games can still be armed and monitored while a rankings slide is displayed.
-
-Standings use the NHL's official dated rankings and refresh separately from the faster 10-second armed live-game score polling. The web Display tab can enable/disable all rankings slides (default on) and shows the current carousel slide. The display works on days with no scheduled NHL games.
-
-**Logo contrast correction:** During asset generation, prefer each team's NHL `darkLogo` / `*_dark.svg` artwork, rather than using `*_light.svg` intended for light backgrounds. The TFT screen's global invert setting is unchanged; verify the contrast of previously inverted team logos on hardware.
-
-See [Full league standings](docs/FULL_LEAGUE_STANDINGS.md) for slide sequence, source data, hardware tests and details.
-
-## ESP32 crash / stack canary fix (v0.2.9)
-
-If v0.2.8 immediately reboots after connecting Wi-Fi with `Guru Meditation: Stack canary watchpoint triggered (loopTask)`, update to v0.2.9. The ESP32's default loop task uses an 8KB stack; HTTPS requests and a 2KB stack-allocated JSON filter exhausted headroom. v0.2.9 sets a 16KB loop stack, moves the NHL scoreboard filter to heap memory with capacity checks, moves large pregame standings scratch arrays out of the stack, and prints the free-stack low-water mark around NHL fetches. The web dashboard also shows **Stack headroom (minimum)**. This does not remove existing timeouts, retries, the daily date logic, WLED effects or settings.
-
-**A boot loop may prevent OTA upload.** For recovery, connect the CYD by USB to your computer and use the compiled firmware from the successful Actions run. The app binary starts at flash offset `0x10000`; if the bootloader still selects a previously OTA-updated partition, the OTA metadata at `0xE000` can be cleared to force booting the flashed primary application without wiping NVS settings. See `docs/STACK_RECOVERY.md` for exact Windows commands.
-
-## Reliable NHL scoreboard downloads (v0.2.8)
-
-The NHL JSON reader now permits up to 12 seconds for an HTTPS response and for a stalled streamed read, avoiding `NHL JSON: IncompleteInput` caused by packet gaps under the old 4.5-second HTTP and default short Stream timeout. The filtered JSON allocation also supports busy 16-game dates. Partial, invalid or mismatched responses **never replace** a previously valid game list. Failed fetches retry after 5 seconds (first three failures), then back off to 15/30 seconds, or the normal live-game cadence if faster. When the feed recovers, normal 10/20/30/60-second polling resumes.
-
-The local dashboard now displays retry count/HTTP status, last successful NHL update and effective retry interval. Serial logs include expected HTTP Content-Length, elapsed time and free heap. Slow requests are deferred before WLED restoration to preserve lighting recovery. No extra hardware or reset is required.
-
-## Pregame season and conference records (v0.2.7)
-
-Tap an upcoming game on the CYD to see **season W-L-OT, record against conference opponents, conference rank and standings points** for both teams. The league standings feed supplies season totals and conference rank; versus-conference W-L-OT is calculated from each team's completed regular-season schedule and cached. When the matchup switches to LIVE/CRIT, the detail view automatically changes to **live game stats**, and final games continue showing game stats. Pregame carousels now put each team's W-L-OT in separate bottom cells instead of a clipped combined string. Web Games → Preview mirrors the same information. See [Pregame records](docs/PREGAME_RECORDS.md).
-
-## Priority NHL event detection (v0.2.6)
-
-The ESP32 now polls the daily NHL scoreboard every **10 seconds** when an armed or CYD-LED-followed game is LIVE/CRIT. It polls every **20 seconds** if other NHL games are live, **30 seconds** while an armed game is still pregame, and **60 seconds** during idle periods. One date-scoped API request updates every game in the carousel, while armed/followed games determine priority. Arming a matchup queues an immediate score refresh and establishes a safe baseline, rather than replaying earlier goals.
-
-The CYD LED power-play fallback now refreshes missing or aging situation data at most once every **20 seconds** during followed live games, rather than relying on stale cached state. The dashboard displays its actual **NHL score check** interval. These intervals describe the CYD's requests, not guaranteed delays from an event on television; the NHL API itself may publish changes later.
-
-## Rear RGB LED NHL reactions (v0.2.5)
-
-The built-in active-low RGB LED (GPIO4 red, 16 green, 17 blue) can flash the scoring team's color during goals and pulse during power plays. The existing armed game is always followed for rear RGB events, plus up to four additional NHL games that can be selected in the new **CYD LED** web-dashboard tab. Configure brightness, goal duration, effects, and preview animations in a browser. No separate WLED or speaker is required. Settings persist across reboots. See [Rear RGB LED guide](docs/REAR_RGB_LED.md).
-
-## Self-hosted web dashboard
-
-- **Dashboard:** status, current game, mode and home/away light tests.
-- **Games:** arm the goal-alert matchup or inspect each game's team statistics from your phone.
-- **Display:** choose automatic rotation, interval (5–30 seconds) and local game time zone.
-- **Lights:** set up to four WLED IP addresses with individual enable switches.
-- **Setup:** scan Wi-Fi networks, enter Wi-Fi credentials, set brightness, duration, optional GPIO26 speaker horn and admin password.
-- **Update:** upload a compiled firmware BIN (OTA-capable partition layout).
-
-No separate Fire TV app, Raspberry Pi, PC server, CDN or cloud account is needed for normal operation. The NHL scoreboard API and your home Wi-Fi do require internet connectivity.
-
-## First-time flash (Windows)
-
-1. Install VS Code and the PlatformIO extension, or PlatformIO CLI.
-2. Clone this repo, open it in PlatformIO and connect the **ESP32-2432S028R** by a data-capable USB cable.
-3. In a PlatformIO terminal, run:
-
-   \`\`\`powershell
-   pio run -e cyd
-   pio run -e cyd -t upload --upload-port COM6
-   pio device monitor -p COM6 -b 115200
-   \`\`\`
-
-4. On the CYD, tap **SETUP**. Connect your phone to Wi-Fi **GlowDeck-XXXXXX** and enter the unique password on the CYD screen.
-5. In your phone browser open **http://192.168.4.1** (plain HTTP, not HTTPS). For web login use **admin** and the same password shown on the CYD, unless you changed the admin password previously.
-6. Under **Setup**, join your home Wi-Fi; under **Lights**, add your WLED controller IP(s), enable them and save. For a stable setup, reserve those IPs in your router.
-7. Under **Games**, select an NHL game; press **Test home color** and check that your WLED lights return to their previous state.
-
-The ESP32 keeps its setup hotspot active so you can regain access even if home Wi-Fi credentials change. Once connected to home Wi-Fi, the CYD's **SETUP** screen shows its LAN IP.
-
-## Goal celebration behavior
-
-The CYD checks the NHL scoreboard approximately every 20 seconds after a game is selected. It detects increases in the selected game's home/away score during a live game. When the mode matches the scoring team, it saves the JSON state of each enabled WLED controller, applies a team color to **segment 0**, and restores the saved state after the selected duration (2–30 seconds, default 8). If a controller's state cannot be read, the device will not change it.
-
-Public scoreboard reporting may lag behind broadcasts. This is not video or audio capture.
-
-## Implemented vs planned
-
-| Feature | Status |
+| Page | Use it for |
 | --- | --- |
-| Daily game carousel, official embedded logos, scores, live clock, scheduled times | Built, physical validation pending |
-| Touch-to-open team stats, game comparison, pregame records | Built, physical validation pending |
-| Configurable rotation (5–30 seconds), timezone ET/CT/MT/PT/AZ | Built, physical validation pending |
-| Touchscreen game choice, team mode, light test | Implemented |
-| Self-hosted mobile dashboard and Wi-Fi setup hotspot | Implemented |
-| NHL public API scores and goal detection | Implemented |
-| Four WLED IPv4 devices / snapshot and restore | Implemented |
-| Duration and brightness settings | Implemented |
-| Built-in speaker horn tone on GPIO26 | Implemented; optional attached speaker |
-| Saved Wi-Fi and settings | Implemented |
-| Browser firmware upload | Implemented; requires OTA partition |
-| WLED discovery and segment routing | Planned |
-| Per-team effect/palette settings | Planned |
-| Custom WAV audio via microSD | Planned |
-| Additional sports | Planned |
-| NHL HTTPS certificate verification | Planned |
+| **Overview** | Current game, connection/health, activity summary, shortcuts |
+| **Live games** | Daily games, favorites/follow stars, arm/team choices, game details |
+| **Customize** | Favorites, Screen, WLED, Philips Hue, Sound, board LEDs |
+| **Test Lab** | Isolated screen, audio, WLED, Hue, LEDs, and full-celebration tests |
+| **Device** | Wi-Fi, admin/security, firmware upload, restart, diagnostics |
+| **Activity** | Recent NHL/preview events, per-output results, audio and power-play diagnostics |
 
-## Project structure
+Some controls have **their own Save/Apply action** (for example, Hue, WLED scenes/zones, S3 WAV selection, volume, and case LEDs). Watch the unsaved-change message and confirm the relevant action before navigating away.
 
-- **platformio.ini** — one supported CYD board target and pin configuration.
-- **scripts/generate_logos.py** — generate compact 48x48 team-logo sprites from NHL SVG assets. Requires Pillow and CairoSVG when building locally. GitHub Actions runs this automatically.
-- **docs/CAROUSEL.md** — full daily carousel and team-stats guide, controls, time zones and validation steps.
-- **src/main.cpp** — firmware, NHL polling, WLED control, touch UI, web API and firmware update.
-- **include/WebUi.h** — built-in responsive browser dashboard.
-- **docs/HARDWARE.md** — board pins and architecture.
-- **docs/TROUBLESHOOTING.md** — boot loop, COM6, touch, Wi-Fi and WLED diagnosis.
-- **docs/SECURITY.md** — network security boundaries.
-- **.github/workflows/build-firmware.yml** — compile check and downloadable firmware.
+## 4. Choose games to display, follow, and celebrate
 
-For local builds, first run `python -m pip install Pillow==11.3.0 CairoSVG==2.8.2` and `python scripts/generate_logos.py` before `pio run -e cyd`.
+1. Go to **Live games**, or open **GAMES** on the touchscreen.
+2. Tap a game's **star** to **follow** it and prioritize its game information. You can follow multiple games; this does not itself authorize WLED/Hue celebrations.
+3. **Arm** the desired matchup for celebrations and choose **Home**, **Away**, or **Both** team eligibility as offered by the device/dashboard. Save the selection.
+4. In **Customize → Screen**, set the display rotation and time-zone preferences. The carousel prioritizes live games; game event overlays may show NHL events from across the league.
+5. In **Test Lab**, preview a display event without changing real game scores or follow/arm state. Once your audio and light devices are configured, use a combined celebration test to check each output.
 
-For firmware downloads, open **Actions → Build CYD firmware** in this repository, select a **successful** run and download the artifact named **glowdeck-gameday-cyd-firmware**. It contains the PlatformIO-generated firmware.bin; use USB for the initial flash.
+**Two different policies:** All-live **screen display** events can appear for unfollowed games; **external lighting and audio** remain governed by the separately saved arm/follow and event-output eligibility settings. The first score sample after arming establishes a baseline; it should not replay an earlier goal. Goal timing depends on when the NHL feed reports the event.
 
-Hardware information: [2.8-inch CYD pinout](https://randomnerdtutorials.com/esp32-cheap-yellow-display-cyd-pinout-esp32-2432s028r/). API references: [WLED JSON](https://kno.wled.ge/interfaces/json-api/) and [NHL scoreboard](https://api-web.nhle.com/v1/score/now).
+**Power-play Tracker 2.0** verifies penalty evidence by game ID, retains sessions through brief feed gaps and intermissions, and records distinct start/end transitions. A **PP start** names the team on the power play; **PP end** identifies the previously shorthanded team returning to full strength. See [power-play tracker details](docs/POWER_PLAY_TRACKER_2.md) and [live ticker behavior](docs/LIVE_GAME_TICKER.md).
+
+## 5. Connect WLED lights (optional)
+
+GameDay supports **up to eight** independent WLED controllers, each with its own enabled flag and NHL event permissions. WLED normally communicates through its local **JSON API**; optional DDP is described separately below.
+
+### Basic WLED setup
+
+1. Ensure the ESP32 and WLED devices are running on the same accessible LAN and that each WLED controller is online.
+2. Open **Customize → WLED → Discover & connect** and choose **Scan Wi-Fi for WLED**.
+3. Select a verified result and **Add to GameDay**. Discovered controllers are deliberately **staged disabled**. If discovery finds nothing, use **Manual IPv4 → Verify IP**, or check the WLED device's own web dashboard.
+4. For each saved controller, choose the **goal / power play / game start / final** permissions, turn on participation, and select **Save celebration settings**.
+5. Open **Test Lab → WLED**. Run home and away team-color tests, confirm colors and brightness, then use **Stop & restore**. Check the controller's previous WLED state returned after the preview.
+6. Repeat for additional WLED controllers. Reserve their LAN IPs so saved destinations remain valid.
+
+**Prefer leaving advanced options at their defaults until the basic native-JSON test works.** A successful HTTP command means GameDay sent/received a response, not that it can physically see the LEDs.
+
+### Optional: assign existing WLED segments
+
+Under **Customize → WLED → Saved controllers → Manage segments**, read the controller's existing segment names/IDs/ranges, use **Identify** to flash a single segment temporarily, and assign each to **Home**, **Away**, **Neutral**, or **Unassigned**. Enable segment-based routing and **Save zone assignments**. GameDay manages up to **16 existing segment IDs per controller**; it does **not** create or resize segments or change WLED's saved presets.
+
+- **Home:** responds to matching home-side events.
+- **Away:** responds to matching away-side events.
+- **Neutral:** responds to either team with the event/team color.
+- **Unassigned:** should remain untouched by mapped GameDay effects.
+
+The controller must already be **ON** for segment-scoped previews. After verifying zones, the **Celebration scene builder** supports independent event/zone effect, color, brightness, intensity, speed, and permitted duration overrides. Leave templates on **Inherit** to preserve the default behavior. Save scenes before previewing them.
+
+### Optional: DDP light streaming for dedicated RGB strips
+
+For a compatible dedicated controller, open **Set up light streaming** on its saved WLED card. The guided check verifies full RGB pixel coverage and existing zone roles. Choose **Both teams / entire strip** for a dedicated standalone strip, or keep existing zones; choose **10, 15, or 20 FPS**, confirm exclusive ownership, and enable with or without a **3-second** test. **10 FPS** is recommended for **1,000+ LEDs**.
+
+DDP is **OFF by default**. It can temporarily take over **all LEDs** on that controller, so avoid enabling it for a WLED device also serving TV ambient lighting or unrelated effects. Current firmware supports **up to 4,096 RGB LEDs per controller**, **480-pixel UDP chunks**, and **two simultaneous DDP streams**; it rejects or falls back when ownership or format is unsafe. **Verified power plays continue to use native JSON**, not DDP. Use **Test Lab → WLED** or **Advanced settings & safety** for emergency stop/restore.
+
+More detail: [discovery](docs/WLED_PHASE8A_DISCOVERY.md), [segment mapping](docs/WLED_PHASE8B_SEGMENT_ZONES.md), [scene builder](docs/WLED_PHASE8C_SCENE_BUILDER.md), [DDP safety](docs/WLED_PHASE8D_OPTIONAL_DDP.md), and [guided streaming setup](docs/WLED_PHASE8E_QUICK_SETUP.md).
+
+## 6. Connect Philips Hue (optional)
+
+This requires a **Philips Hue Bridge v2** and compatible light resources connected to the same trusted LAN as GameDay. Bluetooth-only Hue bulbs without a Bridge are not supported.
+
+1. Open **Customize → Philips Hue** and choose **Find bridges**, or enter the Hue Bridge's local IPv4 address manually.
+2. Press the **physical button** on the Hue Bridge and immediately select **Pair bridge**. GameDay stores its local application key on the ESP32.
+3. Select **Refresh lights** and choose up to **four** individual Hue light resources.
+4. Set each light's event permissions and brightness, **Enable Hue**, then choose **Save Hue lighting**.
+5. Open **Test Lab → Hue** and test team colors and the power-play pulse. Use **Stop & restore** and verify that the previous light settings return.
+
+Hue lighting is separate from WLED, remains opt-in, and uses local Hue Bridge HTTPS rather than a Hue account or cloud entertainment stream. Non-color Hue bulbs may provide brightness-only effects. If pairing fails with error **101**, press the Bridge button and retry immediately. See [Hue setup, scope, and troubleshooting](docs/PHILIPS_HUE.md).
+
+## 7. Set up onboard sound and case LEDs (optional)
+
+### Waveshare S3 speaker and custom WAV sounds
+
+The compatible Waveshare board uses its **ES8311 I2S audio codec and speaker**. In **Customize → Sound**, enable the onboard goal horn and choose the desired source; use the separate **Apply volume** action to set **30–80%** (default **70%**). In **Test Lab → Audio**, first run the **1 kHz speaker check**, then try the built-in horn and a full celebration.
+
+The S3 sound library supports **three persistent WAV slots**, with browser upload, individual preview, selection and deletion. Audio must be **uncompressed RIFF/WAVE PCM 16-bit**, mono or stereo, **8–48 kHz**, up to **768 KiB** and **10 seconds per slot**. Renaming MP3/AAC to `.wav` will not work. The S3 may separately assign saved clips to goal, verified power-play, game-start, and game-finish events as provided by the audio controls.
+
+If there is no audible sound, inspect **Activity** and serial output for the same event ID, chosen file, expected/sent audio frames, I2S error, amp state, and fallback result. Software reporting that playback completed does **not** prove the speaker produced audible sound.
+
+See [S3 onboard sound](docs/S3_PHASE7A_ONBOARD_AUDIO.md), [custom WAV library](docs/S3_PHASE7B_WAV_LIBRARY.md), and [live sound diagnostics](docs/S3_LIVE_AUDIO_RELIABILITY_AND_EVENT_AUDIT.md).
+
+### Waveshare S3 case LED strips — wiring required
+
+The optional left and right RGB strips are **not** plug-and-play board power outputs. The planned wiring uses **GPIO17 = LEFT/HOME** and **GPIO18 = RIGHT/AWAY**, a **74AHCT125 3.3 V-to-5 V level shifter**, series resistors, **an appropriately fused external regulated 5 V supply**, and **common ground**. Do **not** connect LED-strip 5 V to the S3 GPIO pins, USB power header, or battery connector.
+
+**Leave case-light outputs disabled until the actual enclosure and wiring are built and checked.** The firmware requires explicit wiring confirmation before enabling. Supported case strips are 1–16 RGB LEDs per side; firmware's brightness cap does not replace correctly rated power wiring. Read the [full BOM and wiring diagram](docs/S3_PHASE7C_CASE_LEDS.md) before connecting anything.
+
+### Original CYD rear RGB and optional speaker
+
+The original CYD uses its **onboard rear RGB LED** for team-color events; configure and test it under **Customize → On-device LEDs** and **Test Lab**. The optional CYD speaker uses **GPIO26** and is **not** the same ES8311/custom-WAV hardware as the Waveshare S3. Use [CYD hardware details](docs/HARDWARE.md) for pin-specific restrictions and touch calibration.
+
+## 8. Test the complete installation
+
+After setup, check each subsystem in this order:
+
+1. **Device:** reboot once; confirm screen orientation, working touch, correct local time and home Wi-Fi reconnection.
+2. **NHL:** open **Live games** and check the current day's schedule, standings and stats. If no games are scheduled, that is normal.
+3. **Following/arming:** select a game, tap its star, then separately arm the intended home/away side; reload and verify saved choices.
+4. **WLED:** run a single color preview on each enabled controller; verify individual segments and previous-state restoration before testing DDP.
+5. **Hue:** if configured, confirm a light changes and then returns to its previous setting.
+6. **Sound/LEDs:** preview onboard speaker and each physical output separately; enable S3 case strips only after wiring verification.
+7. **Full celebration:** run **Test Lab → Full celebration**, then inspect **Activity** for screen, audio, rear/case LED, WLED and Hue results. Compare it with serial output at **115200 baud**.
+8. **Live NHL event:** when an eligible armed game produces a goal/verified PP, verify actual hardware behavior separately from reported software commands.
+
+**Activity keeps the most recent 64 events in RAM**, so the session history clears on reboot. Look for matching `[EVENT AUDIT]` and `[PP2]` serial entries when investigating power-play or audio behavior.
+
+## 9. Update firmware later (OTA)
+
+1. Download a matching **`firmware.bin`** from a successful GitHub Actions run, or build your board's environment locally to obtain `.pio/build/<environment>/firmware.bin`.
+2. Keep the ESP32 powered and connected. Open its local web dashboard on the setup hotspot or authenticated home LAN.
+3. Go to **Device → Firmware & Maintenance** and use the firmware upload/OTA option.
+4. Select **only the firmware.bin for the exact hardware model**, start upload, and allow the board to reboot.
+5. Reopen the dashboard and re-check Wi-Fi, NHL data, sound, lighting selection, and the device's previous settings.
+
+Normal firmware-only OTA generally preserves NVS preferences and S3 LittleFS media (such as custom WAVs/GIF), **provided the partition layout is not changed**. Keep your own copies of uploaded media and a note of your saved settings. Full flash erase, filesystem formatting, or partition-table changes can remove data. **Never choose Erase as a routine OTA troubleshooting step.**
+
+If OTA fails or the board continually resets, reconnect by USB and use the appropriate PlatformIO upload. See [troubleshooting](docs/TROUBLESHOOTING.md) and [stack/boot recovery](docs/STACK_RECOVERY.md).
+
+## 10. Troubleshooting
+
+| Problem | First checks |
+| --- | --- |
+| No serial/COM port | Use a **data** cable, confirm USB drivers and actual port, check Windows Device Manager or `pio device list`, try S3 BOOT/RESET sequence |
+| Wrong colors, pink controls, bad CYD touch | Use **SETUP → INVERT** or the display inversion setting; calibrate CYD touch if needed; verify exact board variant |
+| No `GlowDeck-XXXXXX` network | Check stable USB power and 115200-baud serial startup; reboot once and look for crash/reset messages |
+| Dashboard won't load | Join the device's setup hotspot, use **http://192.168.4.1** (not HTTPS), or browse the displayed LAN IP from the same network |
+| Home dashboard asks for credentials | Login **admin**; initially use the setup-hotspot password, or your changed admin password |
+| Games or ticker look stale | Check home Wi-Fi/internet, date/time zone, NHL update status and feed retry errors; scoreboard/penalty summary refreshes are not instantaneous |
+| No external celebration | Confirm the game is **armed** with the intended team mode, output is enabled, correct event permissions are saved, and the NHL event is verified |
+| WLED not found / wrong segment | Verify `http://WLED-IP/json/info` and `/json/state` on the LAN; use manual IPv4 verification, **Identify**, and the assigned zone roles |
+| DDP can't enable or changes wrong LEDs | Use native JSON first; check exclusive RGB strip ownership, continuous segment coverage, current realtime use and the DDP readiness reason |
+| Hue not found or not changing | Use same-subnet Bridge IPv4, physical pairing button, **Refresh lights**, explicit enable/save, then Test Lab |
+| S3 screen works but no sound | Run **1 kHz** test, confirm speaker/volume, WAV format, saved event assignment, amplifier and I2S diagnostics; check whether it was merely a UI-only preview |
+| Firmware upload fails / reboot loop | Verify the correct board's image; retry through USB PlatformIO, capture the **first** serial error, and avoid a full erase unless necessary |
+
+For persistent boot issues, copy the first exception/backtrace from the serial monitor, not just repeating `SW_RESET` lines. The [diagnostics guide](docs/TROUBLESHOOTING.md) gives more recovery steps.
+
+## 11. Security and network boundaries
+
+- The built-in dashboard uses **local HTTP**, not HTTPS; **do not port-forward the ESP32's port 80** to the internet or expose it on an untrusted LAN.
+- The setup hotspot is WPA2 password-protected, but people with that password can access device configuration on the hotspot without a second login. Change the home-LAN **admin** password after first setup.
+- Wi-Fi/admin credentials and Hue application credentials are stored in on-device flash preferences, **not a dedicated encrypted secrets vault**. Do not publish serial logs containing secrets or share your setup password.
+- The NHL HTTPS client currently does not enforce CA identity verification; local Hue Bridge TLS certificates also are not independently pinned/validated. Use a **trusted home LAN** and review [security notes](docs/SECURITY.md) and [Hue security scope](docs/PHILIPS_HUE.md).
+- Never upload firmware from an untrusted source. Avoid placing WLED/Hue devices behind an inaccessible guest-network isolation boundary.
+
+## 12. Developer notes, builds, and version history
+
+**Repository layout:**
+
+| Path | Purpose |
+| --- | --- |
+| `src/main.cpp` | Shared NHL/event core, firmware loop, API endpoints and board-specific runtime |
+| `include/WebUi.h` | Embedded web dashboard |
+| `include/*.h` | Display, event eligibility, WLED, Hue, ticker, power-play, audio and device policies |
+| `platformio.ini` | Explicit `cyd` and `s3_waveshare_35` build environments and pin configuration |
+| `scripts/generate_logos.py` | Generate embedded NHL logo assets |
+| `scripts/generate_s3_arena.py` | Generate S3 arena background (runs at build time) |
+| `tests/` | Host-side C++/Python unit and contract checks |
+| `.github/workflows/build-firmware.yml` | Automated tests, both firmware builds, and downloadable OTA artifacts |
+| `docs/` | Detailed hardware, feature, acceptance and troubleshooting guides |
+| `docs/VERSION_HISTORY.md` | **Archived previous README**, preserving prior phase/version announcements verbatim |
+
+**Local verification:**
+
+~~~sh
+python tests/check_web_ui.py
+python tests/test_web_portal_ux.py
+python tests/test_power_play_tracker2_contract.py
+python tests/test_wled_phase8e_quick_setup_contract.py
+pio run -e cyd
+pio run -e s3_waveshare_35
+~~~
+
+The [GitHub Actions build workflow](.github/workflows/build-firmware.yml) runs many more C++/Python checks and produces both artifacts on successful runs. Passing CI proves **code/compile checks**, not speaker audibility, optical LED behavior, touch alignment, WLED restoration under packet loss, or real-game timing on physical hardware.
+
+**Documentation policy:** Keep this README focused on **current installation, configuration, updating, and troubleshooting**. The previous development-oriented README is preserved at [docs/VERSION_HISTORY.md](docs/VERSION_HISTORY.md); it contains historical information and may describe features as "planned" that are now implemented. Use the current README and linked feature guides for setup, and Git commits/Actions runs for the exact firmware revision. Add future release notes to a version-history/changelog document rather than turning this installation guide into a chronological patch log.
+
+---
+
+**Helpful references:** [WLED JSON API](https://kno.wled.ge/interfaces/json-api/) · [WLED DDP](https://kno.wled.ge/interfaces/ddp/) · [Official NHL score API](https://api-web.nhle.com/v1/score/now) · [GitHub firmware builds](https://github.com/ggrant111/glowdeck-gameday/actions/workflows/build-firmware.yml).
