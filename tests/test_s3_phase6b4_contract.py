@@ -36,8 +36,9 @@ assert "S3BroadcastFrame::changed(s3BroadcastLastFrame,next)" in partial
 assert "if(s3PartialMask)" in partial
 assert "drawS3ArenaReadout(g,s3PartialMask);" in partial
 assert "++s3PerfSkippedFrames;" in partial
-assert "if(s3PartialMask&S3BroadcastFrame::TOP)" in partial
-assert "if(s3PartialMask&S3BroadcastFrame::BOTTOM)" in partial
+assert "if(s3ScoreOnlyFrame && (s3PartialMask&S3BroadcastFrame::TOP))" in partial
+assert "if(s3ScoreOnlyFrame && (s3PartialMask&S3BroadcastFrame::BOTTOM))" in partial
+assert "if(s3TickerFrame)tft.presentRegion(0,269,480,20);" in partial
 assert "tft.present();" in partial
 assert "[S3 6B.4]" in partial
 assert "ESP.getFreePsram()" in partial
