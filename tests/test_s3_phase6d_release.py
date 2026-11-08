@@ -61,8 +61,8 @@ assert "tft.presentRegion(bottom.x,bottom.y,bottom.w,bottom.h);" in main
 assert "needsFullScene(s3BroadcastLastFrame,next)" in main
 assert "drawS3ArenaScoreboard(g);" in main
 assert "++s3PerfSkippedFrames;" in main
-assert "if(s3PartialMask&S3BroadcastFrame::TOP)" in main
-assert "if(s3PartialMask&S3BroadcastFrame::BOTTOM)" in main
+assert "if(s3ScoreOnlyFrame && (s3PartialMask&S3BroadcastFrame::TOP))" in main
+assert "if(s3ScoreOnlyFrame && (s3PartialMask&S3BroadcastFrame::BOTTOM))" in main
 assert "constexpr uint32_t kFullBytes=480UL*320UL*2UL;" in policy
 
 # Phase 6B.4 frame-rate / PSRAM diagnostics remain available for real soaks.
