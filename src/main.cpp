@@ -41,6 +41,7 @@
 #include "WledScenePolicy.h"
 #include "WledDdpPolicy.h"
 #include "WledRestoreFetchPolicy.h"
+#include "HueBridge.h"
 #include "TeamGradient.h"
 #include "GameEventLog.h"
 #include "PowerPlayLogPolicy.h"
@@ -148,6 +149,10 @@ struct Settings {
   int touchX0 = 300, touchX1 = 3800, touchY0 = 300, touchY1 = 3800;
 } cfg;
 
+HueBridge::Engine hue; // Independent Hue bridge, never a WLED slot.
+uint32_t hueSeenRevision=0;
+uint32_t hueTestUntil=0;
+MultiGameArming::Queue huePriorityQueue;
 Preferences prefs;
 #ifdef GLOWDECK_WAVESHARE_S3
 GameDayS3Display tft;
@@ -1789,6 +1794,15 @@ void loadSettings() {
   cfg.ssid = prefs.getString("ssid", "");
   cfg.wifiPassword = prefs.getString("wpass", "");
   cfg.adminPassword = prefs.getString("admin", apPassword);
+  hue.config.ip=prefs.getString("hueIp","");
+  hue.config.key=prefs.getString("hueKey","");
+  hue.config.enabled=prefs.getBool("hueOn",false);
+  hue.config.events=prefs.getUChar("hueMask",CelebrationEngine::ALL_EVENTS)&CelebrationEngine::ALL_EVENTS;
+  hue.config.brightness=constrain((int)prefs.getUChar("hueBri",75),5,100);
+  for(uint8_t i=0;i<HuePolicy::kMaxLights;++i){
+    String id=prefs.getString(("hueL"+String(i)).c_str(),"");
+    hue.config.lights[i]=HuePolicy::validResourceId(id.c_str())?id:"";
+  }
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     cfg.wled[i] = prefs.getString(("ip" + String(i)).c_str(), "");
     cfg.wledName[i] = prefs.getString(("wname" + String(i)).c_str(), "");
@@ -1900,6 +1914,13 @@ void saveSettings() {
   prefs.putString("ssid", cfg.ssid);
   prefs.putString("wpass", cfg.wifiPassword);
   prefs.putString("admin", cfg.adminPassword);
+  prefs.putString("hueIp",hue.config.ip);
+  prefs.putString("hueKey",hue.config.key);
+  prefs.putBool("hueOn",hue.config.enabled);
+  prefs.putUChar("hueMask",hue.config.events);
+  prefs.putUChar("hueBri",hue.config.brightness);
+  for(uint8_t i=0;i<HuePolicy::kMaxLights;++i)
+    prefs.putString(("hueL"+String(i)).c_str(),hue.config.lights[i]);
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     prefs.putString(("ip" + String(i)).c_str(), cfg.wled[i]);
     prefs.putString(("wname" + String(i)).c_str(), cfg.wledName[i]);
@@ -3042,13 +3063,39 @@ uint8_t currentWledPowerPlay(uint32_t &color,uint32_t &gameId,
   return 0;
 }
 
+
+void dispatchHueEvent(CelebrationEngine::Event event,uint32_t color,
+                      uint32_t sequence,uint32_t gameId){
+  if(gameId&&!isArmedGame(gameId))return;
+  if(!hue.ready()||
+     !HuePolicy::participates(hue.config.enabled,hue.config.events,event))return;
+  if(!hue.idle()&&CelebrationEngine::temporary(hue.event)&&
+     MultiGameArming::priority(event)<=MultiGameArming::priority(hue.event)){
+    // Match WLED's bounded multi-game goal queue: second simultaneous
+    // scored events cannot erase the first game's Hue celebration.
+    if(gameId){
+      MultiGameArming::Request item;
+      item.event=event;item.gameId=gameId;item.color=color;
+      item.sequence=sequence;
+      if(!huePriorityQueue.add(item,armedGames))return;
+      GameEventLog::Entry *queued=gameEventHistory.find(sequence);
+      if(queued)queued->hue=GameEventLog::Wled::PENDING;
+    }
+    return;
+  }
+  hue.begin(event,color,sequence,gameId);
+  GameEventLog::Entry *row=gameEventHistory.find(sequence);
+  if(row)row->hue=GameEventLog::Wled::PENDING;
+}
+
 // The shared physical WLED channel has one owner at a time. Requests are
 // bounded, ordered GOAL > FINAL > GAME_START > PP, then game rank (1..5).
 // The second simultaneous goal queues rather than destroying the first.
 bool queueArmedWledEvent(CelebrationEngine::Event event,uint32_t color,
                          uint32_t sequence,uint8_t side,uint32_t gameId){
-  if(!gameId || !isArmedGame(gameId) || !wledEligibleCount(event))
-    return false;
+  if(!gameId || !isArmedGame(gameId))return false;
+  dispatchHueEvent(event,color,sequence,gameId);
+  if(!wledEligibleCount(event))return false;
   MultiGameArming::Request item;
   item.event=event;item.gameId=gameId;item.color=color;
   item.sequence=sequence;item.side=side;
@@ -3818,6 +3865,8 @@ void pollNhl() {
             queueArmedWledEvent(event,teamRgb(representative),
                                 log.sequence,WledZonePolicy::kUnknownSide,
                                 observed.id);
+          else dispatchHueEvent(event,teamRgb(representative),
+                                log.sequence,observed.id);
         }
       }
     }
@@ -3877,6 +3926,7 @@ void pollNhl() {
       if(enabled)queueArmedWledEvent(transition,teamRgb(fav),
                                      logged.sequence,
                                      WledZonePolicy::kUnknownSide,g->id);
+      else dispatchHueEvent(transition,teamRgb(fav),logged.sequence,g->id);
     }
     previousHome = g->homeScore;
     previousAway = g->awayScore;
@@ -6413,6 +6463,8 @@ void registerRoutes() {
       row["audioAmpVerified"] = e->audioAmpVerified;
       row["audioFailure"] = GameEventLog::audioFailureLabel(e->audioFailure);
       row["speakerVerified"] = false;
+      row["hue"] = GameEventLog::wledLabel(e->hue);
+      row["hueAccepted"] = e->hueAcknowledged;
       JsonArray devices = row.createNestedArray("devices");
       for (uint8_t d = 0; d < MAX_WLED; ++d) {
         JsonObject device = devices.createNestedObject();
@@ -7607,6 +7659,154 @@ void registerRoutes() {
     response["hex"] = rgbHex(color);
     sendJson(response);
   });
+
+  // Philips Hue: all routes are authenticated; no key ever reaches the web UI.
+  server.on("/api/hue/config",HTTP_GET,[](){
+    if(!authorized())return;
+    StaticJsonDocument<950> doc;
+    doc["ip"]=hue.config.ip;
+    doc["paired"]=hue.config.key.length()>0;
+    doc["enabled"]=hue.config.enabled;
+    doc["events"]=hue.config.events;
+    doc["brightness"]=hue.config.brightness;
+    doc["status"]=HueBridge::label(hue.result);
+    doc["active"]=!hue.idle();
+    doc["error"]=hue.lastError;
+    JsonArray lights=doc.createNestedArray("lights");
+    for(const auto &id:hue.config.lights)if(id.length())lights.add(id);
+    sendJson(doc);
+  });
+  server.on("/api/hue/discover",HTTP_GET,[](){
+    if(!authorized())return;
+    StaticJsonDocument<950> doc;
+    JsonArray bridges=doc.createNestedArray("bridges");
+    if(WiFi.status()==WL_CONNECTED && mdnsStarted){
+      const int n=MDNS.queryService("hue","tcp");
+      for(int i=0;i<n && i<6;++i){
+        const String ip=MDNS.IP(i).toString();
+        if(!HueBridge::Engine::validIp(ip))continue;
+        JsonObject item=bridges.createNestedObject();
+        item["ip"]=ip;
+        item["name"]=MDNS.hostname(i);
+      }
+    }
+    doc["manualSupported"]=true;
+    sendJson(doc);
+  });
+  server.on("/api/hue/pair",HTTP_POST,[](){
+    if(!authorized())return;
+    if(server.arg("plain").length()>180)return errorResponse("Request too large");
+    StaticJsonDocument<192> input;
+    if(deserializeJson(input,server.arg("plain")))return errorResponse("Invalid JSON");
+    String ip=input["ip"]|String("");ip.trim();
+    if(!HueBridge::Engine::validIp(ip))
+      return errorResponse("Bridge must be on the same Wi-Fi subnet",400);
+    if(!hue.idle())return errorResponse("Stop Hue before re-pairing",409);
+    String token;
+    if(!hue.pair(ip,token)){
+      StaticJsonDocument<260> response;
+      response["ok"]=false;
+      response["error"]=hue.lastError;
+      return sendJson(response,409);
+    }
+    if(ip!=hue.config.ip){
+      for(auto &id:hue.config.lights)id="";
+      hue.config.enabled=false;
+    }
+    hue.config.ip=ip;hue.config.key=token;
+    saveSettings();
+    StaticJsonDocument<120> result;result["ok"]=true;result["paired"]=true;
+    sendJson(result);
+  });
+  server.on("/api/hue/lights",HTTP_GET,[](){
+    if(!authorized())return;
+    if(hue.config.key.isEmpty())return errorResponse("Pair Hue Bridge first",409);
+    String raw;
+    if(!hue.list(raw))return errorResponse(hue.lastError.c_str(),502);
+    DynamicJsonDocument parsed(20000);
+    if(deserializeJson(parsed,raw))return errorResponse("Invalid Hue light response",502);
+    DynamicJsonDocument result(5300);
+    JsonArray list=result.createNestedArray("lights");
+    JsonArray data=parsed["data"].as<JsonArray>();
+    if(data.isNull())return errorResponse("Hue response contains no lights",502);
+    for(JsonObject light:data){
+      if(list.size()>=32)break;
+      String id=light["id"]|String("");
+      if(!HuePolicy::validResourceId(id.c_str()))continue;
+      JsonObject entry=list.createNestedObject();
+      entry["id"]=id;
+      entry["name"]=light["metadata"]["name"]|String("Hue light");
+      entry["color"]=!light["color"].isNull();
+      entry["dimmable"]=!light["dimming"].isNull();
+    }
+    if(result.overflowed())return errorResponse("Too many Hue lights",503);
+    sendJson(result);
+  });
+  server.on("/api/hue/config",HTTP_POST,[](){
+    if(!authorized())return;
+    if(!hue.idle())return errorResponse("Stop Hue before editing light settings",409);
+    if(server.arg("plain").length()>950)return errorResponse("Hue config too large");
+    StaticJsonDocument<1050> input;
+    if(deserializeJson(input,server.arg("plain")))return errorResponse("Invalid JSON");
+    JsonArray arr=input["lights"].as<JsonArray>();
+    if(arr.isNull()||arr.size()>HuePolicy::kMaxLights)
+      return errorResponse("Select no more than four lights");
+    String ids[HuePolicy::kMaxLights];
+    for(uint8_t i=0;i<arr.size();++i){
+      ids[i]=arr[i].as<String>();
+      if(!HuePolicy::validResourceId(ids[i].c_str()))
+        return errorResponse("Invalid Hue light ID");
+      for(uint8_t j=0;j<i;++j)
+        if(ids[i]==ids[j])return errorResponse("Duplicate Hue light ID");
+    }
+    const bool enabled=input["enabled"]|false;
+    if(enabled&&(!hue.config.key.length()||arr.size()==0))
+      return errorResponse("Pair Hue and choose a light before enabling");
+    hue.config.enabled=enabled;
+    hue.config.events=constrain((int)(input["events"]|15),0,15);
+    hue.config.brightness=constrain((int)(input["brightness"]|75),5,100);
+    for(uint8_t i=0;i<HuePolicy::kMaxLights;++i)
+      hue.config.lights[i]=ids[i];
+    saveSettings();
+    StaticJsonDocument<80> response;response["ok"]=true;sendJson(response);
+  });
+  server.on("/api/hue/test",HTTP_POST,[](){
+    if(!authorized())return;
+    if(server.arg("plain").length()>150)return errorResponse("Request too large");
+    StaticJsonDocument<180> input;
+    if(deserializeJson(input,server.arg("plain")))return errorResponse("Invalid JSON");
+    const String requested=input["event"]|String("goal");
+    if(requested=="stop"){
+      hueTestUntil=0;
+      hue.stop();
+      StaticJsonDocument<80> ok;ok["ok"]=true;sendJson(ok);return;
+    }
+    CelebrationEngine::Event event=requested=="goal"?CelebrationEngine::Event::GOAL:
+      requested=="pp"?CelebrationEngine::Event::POWER_PLAY:
+      requested=="start"?CelebrationEngine::Event::GAME_START:
+      requested=="win"?CelebrationEngine::Event::FINAL_WIN:
+      requested=="loss"?CelebrationEngine::Event::FINAL_LOSS:
+      CelebrationEngine::Event::NONE;
+    if(event==CelebrationEngine::Event::NONE)
+      return errorResponse("Unknown Hue test event");
+    if(!hue.ready())return errorResponse("Enable and pair selected Hue lights",409);
+    const String side=input["side"]|String("home");
+    Game *g=testMatchup();
+    String team=g?(side=="away"?g->away:g->home):String("UTA");
+    GameEventLog::Type type=event==CelebrationEngine::Event::GOAL?
+      GameEventLog::Type::PREVIEW_GOAL:event==CelebrationEngine::Event::POWER_PLAY?
+      GameEventLog::Type::PREVIEW_POWER_PLAY:event==CelebrationEngine::Event::GAME_START?
+      GameEventLog::Type::PREVIEW_START:event==CelebrationEngine::Event::FINAL_WIN?
+      GameEventLog::Type::PREVIEW_WIN:GameEventLog::Type::PREVIEW_LOSS;
+    GameEventLog::Entry &row=addPreviewEvent(g,type,team);
+    hue.begin(event,teamRgb(team),row.sequence,0);
+    hueTestUntil=event==CelebrationEngine::Event::POWER_PLAY?
+      millis()+9000UL:0;
+    row.hue=GameEventLog::Wled::PENDING;
+    StaticJsonDocument<100> response;
+    response["ok"]=true;response["queued"]=true;
+    sendJson(response);
+  });
   server.on("/api/wled/discovery", HTTP_GET, []() {
     if(!authorized())return;
     DynamicJsonDocument doc(2900);
@@ -8717,6 +8917,7 @@ void tickEventAudit(){
     mix(e->audioAmpVerified);mix(uint8_t(e->audioFailure));
     mix(e->wledAcknowledgedMask);
     for(uint8_t i=0;i<MAX_WLED;++i)mix(uint8_t(e->wled[i]));
+    mix(uint8_t(e->hue));mix(e->hueAcknowledged);
     if(fingerprint==e->serialFingerprint)continue;
     e->serialFingerprint=fingerprint;
     Serial.printf("[EVENT AUDIT] #%lu type=%s game=%lu %s@%s team=%s"
@@ -8738,6 +8939,10 @@ void tickEventAudit(){
       (unsigned long)e->audioReadOffset,unsigned(e->audioVolume),
       unsigned(e->audioAmpVerified),
       GameEventLog::audioFailureLabel(e->audioFailure));
+    if(e->hue!=GameEventLog::Wled::NA)
+      Serial.printf("[EVENT AUDIT] #%lu HUE=%s commandAccepted=%u\n",
+        (unsigned long)e->sequence,GameEventLog::wledLabel(e->hue),
+        unsigned(e->hueAcknowledged));
     for(uint8_t i=0;i<MAX_WLED;++i){
       if(e->wled[i]==GameEventLog::Wled::NA &&
          !(e->wledAcknowledgedMask&(1U<<i)))continue;
@@ -8745,6 +8950,78 @@ void tickEventAudit(){
         (unsigned long)e->sequence,unsigned(i+1),
         GameEventLog::wledLabel(e->wled[i]),
         unsigned((e->wledAcknowledgedMask&(1U<<i))!=0));
+    }
+  }
+}
+
+
+void tickHueCelebrations(){
+  // Verified, armed NHL PP evidence, independent of WLED participation.
+  const uint32_t now=millis();
+  uint32_t ppId=0,ppSeq=0,ppColor=0;
+  if(hue.config.enabled && (hue.config.events&CelebrationEngine::PP_FLAG)){
+    for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i){
+      const Game *g=gameById(armedGames.ids[i]);
+      if(!g||!CelebrationEngine::isLive(g->state.c_str())||
+         g->intermission||!g->ppDataKnown||!g->ppSide||
+         uint32_t(now-g->ppUpdatedAt)>=80000UL||
+         wledPpSuppressed(g->id))continue;
+      ppId=g->id;
+      ppColor=teamRgb(g->ppSide==1?g->home:g->away);
+      ppSeq=(g->id==selectedGameId)?armedPpLogSeq:0;
+      if(!ppSeq)for(uint8_t row=0;row<gameEventHistory.size();++row){
+        const GameEventLog::Entry *e=gameEventHistory.newest(row);
+        if(e && e->gameId==g->id &&
+           e->type==GameEventLog::Type::POWER_PLAY_START){
+          ppSeq=e->sequence;break;
+        }
+      }
+      break;
+    }
+  }
+  if(hue.event==CelebrationEngine::Event::POWER_PLAY){
+    if(hue.gameId && (!ppId||hue.gameId!=ppId||hue.color!=ppColor))
+      hue.stop();
+    else if(!hue.gameId && hueTestUntil &&
+            int32_t(now-hueTestUntil)>=0){
+      hueTestUntil=0;hue.stop();
+    }
+  }
+  if(hue.idle()&&huePriorityQueue.count){
+    MultiGameArming::Request next;
+    if(huePriorityQueue.pop(next,armedGames))
+      dispatchHueEvent(next.event,next.color,next.sequence,next.gameId);
+  }
+  static uint32_t lastPpAttempt=0;
+  if(ppId&&hue.idle()&&!huePriorityQueue.count&&
+     uint32_t(now-lastPpAttempt)>=8000UL){
+    lastPpAttempt=now;
+    dispatchHueEvent(CelebrationEngine::Event::POWER_PLAY,ppColor,ppSeq,ppId);
+  }
+  // WAV streaming runs in loopTask; even a local TLS handshake can starve
+  // its audio feeder. Defer Hue I/O until playback is no longer active.
+  // This does not delay NHL polling, rear LEDs or existing WLED effects.
+#ifdef GLOWDECK_WAVESHARE_S3
+  if(!s3Audio.playing())
+#endif
+    hue.tick();
+  if(hueSeenRevision!=hue.revision){
+    hueSeenRevision=hue.revision;
+    GameEventLog::Entry *row=gameEventHistory.find(hue.auditSequence);
+    if(row){
+      switch(hue.result){
+        case HueBridge::Result::PENDING:row->hue=GameEventLog::Wled::PENDING;break;
+        case HueBridge::Result::ACCEPTED:row->hue=GameEventLog::Wled::ACCEPTED;break;
+        case HueBridge::Result::SNAPSHOT_FAILED:
+          row->hue=GameEventLog::Wled::SNAPSHOT_FAILED;break;
+        case HueBridge::Result::COMMAND_FAILED:
+          row->hue=GameEventLog::Wled::COMMAND_FAILED;break;
+        case HueBridge::Result::RESTORED:row->hue=GameEventLog::Wled::RESTORED;break;
+        case HueBridge::Result::RESTORE_FAILED:
+          row->hue=GameEventLog::Wled::RESTORE_FAILED;break;
+        default:break;
+      }
+      row->hueAcknowledged=row->hueAcknowledged||hue.accepted;
     }
   }
 }
@@ -8763,6 +9040,7 @@ void loop() {
   tickWledCelebrations();
   tickWledDdpStreams(); // <=20 FPS/stream, no HTTP in frame path
   tickWledDiscovery();
+  tickHueCelebrations();
 
   const uint32_t now = millis();
   const bool connected = WiFi.status() == WL_CONNECTED;

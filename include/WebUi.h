@@ -742,12 +742,30 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <button type="button" data-jump="zone-favorites">Favorites</button>
 <button type="button" data-jump="zone-screen">Screen</button>
 <button type="button" data-jump="zone-wled">WLED</button>
+<button type="button" data-jump="zone-hue">Philips Hue</button>
 <button type="button" data-jump="zone-audio">Sound</button>
 <button type="button" data-jump="zone-hardware">On-device LEDs</button>
 </div>
 <div id="zone-favorites" class="portal-zone"><div class="zone-heading"><span class="zone-number">01</span><div><h3>Favorites &amp; following</h3><p>Choose priority teams and games without changing the armed WLED matchup.</p></div></div><div id="mount-favorites"></div></div>
 <div id="zone-screen" class="portal-zone"><div class="zone-heading"><span class="zone-number">02</span><div><h3>Scoreboard &amp; alerts</h3><p>Rotation, team logos, goal screen and game-day display preferences.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-screen">Screen tests</button></div><div id="mount-screen"></div></div>
 <div id="zone-wled" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>WLED lights &amp; celebrations</h3><p>Find and add controllers, set their effects, and enable optional real-time streaming.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-wled">Test WLED</button></div><div id="mount-wled"></div></div>
+
+<div id="zone-hue" class="portal-zone"><div class="zone-heading"><span class="zone-number">04</span><div><h3>Philips Hue lighting</h3><p>Pair a local Hue Bridge and include selected bulbs in NHL celebrations alongside WLED.</p></div><button class="ghost compact-link" type="button" data-tab="lab" data-anchor="lab-hue">Test Hue</button></div>
+<div class="card"><h2>Connect your Hue Bridge</h2>
+<p>GameDay connects directly over your local network. Select <strong>Find bridges</strong>, or enter the Bridge IP manually. Press the physical button on your Hue Bridge, then select <strong>Pair bridge</strong>.</p>
+<div class="row"><div><label for="hueIp">Bridge IPv4 address</label><input id="hueIp" placeholder="192.168.1.80" inputmode="decimal" autocomplete="off"></div></div>
+<div class="actions"><button id="hueDiscover" type="button">Find bridges</button><button id="huePair" type="button" class="primary">Pair bridge</button><button id="hueReload" type="button">Refresh lights</button></div>
+<div id="hueBridgeList" class="actions"></div><p class="small muted" id="huePairStatus" role="status">Not connected. Existing WLED devices are unchanged.</p>
+</div>
+<div class="card"><h2>Choose Hue lights</h2>
+<p>Choose up to four color-capable or dimmable bulbs. Hue effects only run for armed games and enabled event types. Bulbs return to their prior state afterward.</p>
+<div id="hueLightList"><p class="small muted">Pair a Bridge and select Refresh lights.</p></div>
+<div class="toggle"><input id="hueEnabled" type="checkbox"><label for="hueEnabled">Enable Philips Hue celebrations</label></div>
+<div class="row"><div><label for="hueBrightness">Hue brightness limit (5–100%)</label><input id="hueBrightness" type="range" min="5" max="100" value="75"><span id="hueBrightnessLabel" class="small muted">75%</span></div></div>
+<div class="row"><div class="toggle"><input id="hueGoal" type="checkbox" checked><label for="hueGoal">Goals</label></div><div class="toggle"><input id="huePP" type="checkbox" checked><label for="huePP">Verified power plays</label></div><div class="toggle"><input id="hueStart" type="checkbox" checked><label for="hueStart">Game start</label></div><div class="toggle"><input id="hueFinal" type="checkbox" checked><label for="hueFinal">Final results</label></div></div>
+<div class="actions"><button class="primary" id="hueSave" type="button">Save Hue lighting</button></div>
+<p class="small muted">Hue v2 commands use local HTTPS. GameDay stores the Bridge pairing key on this device and never sends it to the dashboard. Hue does not use WLED segments or DDP streaming.</p></div>
+</div>
 <div id="zone-audio" class="portal-zone"><div class="zone-heading"><span class="zone-number">04</span><div><h3>Sound &amp; horns</h3><p>Enable the onboard horn, manage custom WAV sounds and adjust output level.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-audio">Audio tests</button></div><div id="mount-audio"></div></div>
 <div id="zone-hardware" class="portal-zone"><div class="zone-heading"><span class="zone-number">05</span><div><h3>On-device LED hardware</h3><p>CYD rear RGB or Waveshare S3 left/home and right/away case lighting.</p></div><button type="button" class="ghost compact-link" data-tab="lab" data-anchor="lab-hardware">LED tests</button></div><div id="mount-hardware"></div></div>
 <div class="save-dock" role="region" aria-label="Save shared settings"><span class="save-indicator" id="customizeSaveState">Display, WLED, horn and CYD options save together. Volume, WAV library, favorites and case LEDs have their own Apply controls.</span><button type="button" class="primary" id="portalSave">Save settings</button></div>
@@ -761,6 +779,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <button type="button" data-jump="lab-screen">Screen</button>
 <button type="button" data-jump="lab-audio">Audio</button>
 <button type="button" data-jump="lab-wled">WLED</button>
+<button type="button" data-jump="lab-hue">Hue</button>
 <button type="button" data-jump="lab-hardware">LED hardware</button>
 <button type="button" data-jump="lab-full">Full celebration</button>
 </div>
@@ -779,6 +798,11 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 </div>
 <p id="wledDdpLabStatus" class="small muted" role="status">DDP is OFF by default. Enable exclusive streaming per controller in Customize → WLED.</p>
 </div></div>
+
+<div id="lab-hue" class="portal-zone"><div class="zone-heading"><span class="zone-number">04</span><div><h3>Philips Hue tests</h3><p>Preview selected bulbs independently of WLED, the screen and speaker.</p></div></div>
+<div class="card"><h2>Hue lighting rehearsal</h2><p>These controls send real light commands to the paired Bridge; each test restores its original bulb settings.</p>
+<div class="actions"><button type="button" id="hueTestHome">Home goal</button><button type="button" id="hueTestAway">Away goal</button><button type="button" id="hueTestPP">Power play</button><button type="button" id="hueTestStart">Puck drop</button><button type="button" id="hueTestFinal">Final win</button><button type="button" id="hueTestStop">Stop &amp; restore</button></div>
+<p id="hueTestStatus" class="small muted" role="status">Pair and enable Hue in Customize before testing.</p></div></div>
 <div id="lab-hardware" class="portal-zone"><div class="zone-heading"><span class="zone-number">04</span><div><h3>LED hardware channels</h3><p>Confirm individual outputs and team colors before live events.</p></div></div><div id="mount-lab-hardware"></div><div id="mount-lab-case" data-platform="s3"></div></div>
 <div id="lab-full" class="portal-zone"><div class="zone-heading"><span class="zone-number">05</span><div><h3>Full celebration rehearsal</h3><p>Check the combined celebration, then restore devices to their prior state.</p></div></div><div id="mount-lab-full"></div></div>
 </section>
@@ -1137,6 +1161,14 @@ function createEventElement(row){
     ).join("  |  ")
     :"WLED: No controllers enabled for celebrations";
   card.append(devices);
+  if(row.hue && row.hue!=="Not triggered"){
+    const lighting=document.createElement("div");
+    lighting.className="small muted";
+    lighting.textContent="Philips Hue: "+row.hue+
+      (row.hueAccepted&&row.hue!=="Command accepted"?
+        " · command accepted earlier":"");
+    card.append(lighting);
+  }
   return card;
 }
 function renderEventRows(targetId, rows){
@@ -2350,6 +2382,96 @@ $("saveFavorites").onclick=()=>perform(async()=>{
   await refresh();
   message(popcount(data.favoriteTeams)+" favorite teams saved");
 });
+
+let hueConfig=null,hueLightChoices=[];
+function renderHueLightChoices(){
+  const host=$("hueLightList");host.replaceChildren();
+  if(!hueLightChoices.length){
+    const p=document.createElement("p");p.className="small muted";
+    p.textContent="No lights listed yet. Pair Bridge, then Refresh lights.";
+    host.append(p);return;
+  }
+  hueLightChoices.forEach(light=>{
+    const item=document.createElement("div");item.className="item toggle";
+    const cb=document.createElement("input");
+    cb.type="checkbox";cb.className="hue-choice";cb.value=light.id;
+    cb.checked=(hueConfig?.lights||[]).includes(light.id);
+    const label=document.createElement("label");label.textContent=
+      (light.name||"Hue light")+" · "+(light.color?"Color":"Dim only");
+    label.htmlFor="hueChoice"+light.id;cb.id=label.htmlFor;
+    item.append(cb,label);host.append(item);
+  });
+}
+async function loadHueConfig(){
+  hueConfig=await api("/api/hue/config");
+  $("hueIp").value=hueConfig.ip||"";
+  $("hueEnabled").checked=!!hueConfig.enabled;
+  $("hueBrightness").value=String(hueConfig.brightness||75);
+  $("hueBrightnessLabel").textContent=$("hueBrightness").value+"%";
+  [["hueGoal",1],["huePP",2],["hueStart",4],["hueFinal",8]].forEach(
+    ([id,bit])=>$(id).checked=!!((hueConfig.events??15)&bit));
+  $("huePairStatus").textContent=hueConfig.paired?
+    "Bridge paired · "+(hueConfig.enabled?"Hue enabled":"Hue not yet enabled"):
+    "Bridge not paired. Press its button, then select Pair bridge.";
+  $("hueTestStatus").textContent=(hueConfig.status||"Ready")+
+    (hueConfig.error?" · "+hueConfig.error:"");
+  renderHueLightChoices();
+}
+async function loadHueLights(){
+  const response=await api("/api/hue/lights");
+  hueLightChoices=response.lights||[];
+  renderHueLightChoices();
+  message(hueLightChoices.length+" Hue lights found");
+}
+$("hueBrightness").oninput=()=>
+  $("hueBrightnessLabel").textContent=$("hueBrightness").value+"%";
+$("hueDiscover").onclick=()=>perform(async()=>{
+  const data=await api("/api/hue/discover");
+  const list=$("hueBridgeList");list.replaceChildren();
+  if(!data.bridges.length){
+    list.textContent="No Hue mDNS advertisements found. Enter Bridge IP manually.";
+    return;
+  }
+  data.bridges.forEach(bridge=>{
+    const button=document.createElement("button");button.type="button";
+    button.textContent=(bridge.name||"Hue Bridge")+" · "+bridge.ip;
+    button.onclick=()=>{$("hueIp").value=bridge.ip;};
+    list.append(button);
+  });
+});
+$("huePair").onclick=()=>perform(async()=>{
+  const result=await post("/api/hue/pair",{ip:$("hueIp").value.trim()});
+  if(!result.ok)throw Error(result.error||"Pair failed; press the Bridge button first");
+  await loadHueConfig();
+  await loadHueLights();
+  message("Hue Bridge paired. Choose up to four bulbs and save.");
+});
+$("hueReload").onclick=()=>perform(loadHueLights);
+$("hueSave").onclick=()=>perform(async()=>{
+  const lights=Array.from(document.querySelectorAll(".hue-choice:checked"))
+    .map(el=>el.value);
+  if(lights.length>4)throw Error("Choose no more than four Hue bulbs");
+  const events=[["hueGoal",1],["huePP",2],["hueStart",4],["hueFinal",8]]
+    .reduce((v,[id,bit])=>v+($(id).checked?bit:0),0);
+  await post("/api/hue/config",{lights,events,
+    brightness:Number($("hueBrightness").value),enabled:$("hueEnabled").checked});
+  await loadHueConfig();
+  message("Hue light selections saved");
+});
+function testHue(event,side="home"){
+  perform(async()=>{
+    await post("/api/hue/test",{event,side});
+    await loadHueConfig();
+    message(event==="stop"?"Hue restore requested":
+      "Hue "+event+" test queued for selected bulbs");
+  });
+}
+$("hueTestHome").onclick=()=>testHue("goal","home");
+$("hueTestAway").onclick=()=>testHue("goal","away");
+$("hueTestPP").onclick=()=>testHue("pp");
+$("hueTestStart").onclick=()=>testHue("start");
+$("hueTestFinal").onclick=()=>testHue("win");
+$("hueTestStop").onclick=()=>testHue("stop");
 function deviceSettings(){
   return Array.from({length:(currentConfig?.wled?.length||8)},(_,i)=>{
     const choices=[["goal",1],["pp",2],["start",4],["final",8]];
@@ -2872,6 +2994,7 @@ $("reboot").onclick=()=>perform(async()=>{
     trackPortalChanges();
     ["zone-favorites","lab-screen","zone-network"].forEach(jumpToZone);
     await loadConfig();
+    await loadHueConfig().catch(err=>{$("huePairStatus").textContent=err.message});
     await refresh();
     await loadGoalGif();
     await loadSoundLibrary();
