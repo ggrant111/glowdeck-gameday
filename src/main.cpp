@@ -190,7 +190,9 @@ NhlLiveTicker::Feed liveTickerFeed, liveTickerWork;
 String liveTickerText;
 uint32_t liveTickerTextGameId=0, liveTickerRefreshAt=0, liveTickerScrollAt=0;
 uint8_t liveTickerShownGoalCount=0;
-uint16_t liveTickerScroll=0;
+uint16_t liveTickerScroll=0; // UTF-8 starting byte (not a glyph frame step)
+uint8_t liveTickerPixelOffset=0; // fractional glyph scroll, in LCD pixels
+uint16_t liveTickerTextWidthPx=0;
 bool liveTickerDirty=false;
 enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY, DIAGNOSTIC };
 RearEvent rearEvent = RearEvent::IDLE;
@@ -1158,6 +1160,8 @@ void prepareNewScoreboardDate(const String &today) {
     liveTickerText = "";
     liveTickerTextGameId = 0;
     liveTickerScroll = 0;
+    liveTickerPixelOffset=0;
+    liveTickerTextWidthPx=0;
     liveTickerDirty = false;
     liveTickerRefreshAt = 0;
     liveTickerShownGoalCount = 0;
@@ -3156,9 +3160,10 @@ void fetchFollowedPowerPlays() {
   penalty["duration"]=true;
   penalty["descKey"]=true;
   penalty["teamAbbrev"]["default"]=true;
-  penalty["committedByPlayer"]["firstName"]["default"]=true;
-  penalty["committedByPlayer"]["lastName"]["default"]=true;
-  penalty["servedBy"]["default"]=true;
+  // Accept either an NHL player object (firstName/lastName/name), a
+  // localized default string, or the optional servedBy name for bench minors.
+  penalty["committedByPlayer"]=true;
+  penalty["servedBy"]=true;
   JsonObject scorePeriod = summary["scoring"][0].to<JsonObject>();
   scorePeriod["periodDescriptor"]["number"]=true;
   JsonObject goal=scorePeriod["goals"][0].to<JsonObject>();
@@ -3200,17 +3205,31 @@ void fetchFollowedPowerPlays() {
       if(tickerTargetVisible) {
         uint16_t elapsed=0;
         if(NhlPenaltyLedger::Book::parseTime(when,elapsed)) {
-          // The actual box occupant is servedBy for a bench minor;
-          // otherwise the player who committed the infraction.
-          String player=call["servedBy"]["default"].as<String>();
-          if(player.isEmpty())player=call["servedBy"].as<String>();
-          if(player.isEmpty()){
-            player=call["committedByPlayer"]["firstName"]["default"].as<String>();
-            const String last=
-                call["committedByPlayer"]["lastName"]["default"].as<String>();
-            if(player.length() && last.length())player+=" ";
-            player+=last;
-          }
+          // ArduinoJson can stringify absent optional servedBy as "null".
+          // Only accept a JSON string with a meaningful value; prefer the
+          // official offending player, using servedBy for bench penalties.
+          const auto safeName=[](JsonVariantConst value)->String {
+            if(!value.is<const char*>())return String();
+            const char *valueText=value.as<const char*>();
+            return NhlLiveTicker::validPlayerName(valueText)?
+                String(valueText):String();
+          };
+          const JsonVariantConst committed=call["committedByPlayer"];
+          const JsonVariantConst served=call["servedBy"];
+          const auto fullName=[&safeName](JsonVariantConst candidate)->String {
+            String first=safeName(candidate["firstName"]["default"]);
+            String last=safeName(candidate["lastName"]["default"]);
+            if(first.length() && last.length())first+=" ";
+            first+=last;
+            if(first.isEmpty())first=safeName(candidate["name"]["default"]);
+            if(first.isEmpty())first=safeName(candidate["default"]);
+            if(first.isEmpty())first=safeName(candidate);
+            return first;
+          };
+          String player=(!strcmp(type,"BEN"))?
+              fullName(served):fullName(committed);
+          if(player.isEmpty())player=fullName(served);
+          if(player.isEmpty())player=fullName(committed);
           liveTickerWork.addPenalty(p,elapsed,penalized,team.c_str(),
               player.c_str(),call["descKey"]|"",type,minutes);
         }
@@ -4069,7 +4088,8 @@ String buildLiveTickerText(const Game &g) {
       if(active++)text+=", ";
       text+=p.team;
       text+=" ";
-      text+=p.player[0]?p.player:"PLAYER TBD";
+      text+=NhlLiveTicker::validPlayerName(p.player)?
+          p.player:"PLAYER TBD";
       text+=" (";
       text+=String(p.minutes);
       text+="m";
@@ -4078,8 +4098,11 @@ String buildLiveTickerText(const Game &g) {
       if(active==4)break; // four names is enough for a 480px marquee
     }
   }
-  if(!boxesFresh)text+="UPDATING";
-  else if(!active)text+="CLEAR";
+  // "UPDATING" when nobody is penalized was misleading. Only say EMPTY
+  // after a fresh official penalty snapshot proves there are no box occupants;
+  // "--" means no trustworthy player/clock snapshot currently exists.
+  if(boxesFresh && !active)text+="EMPTY";
+  else if(!boxesFresh)text+=g.intermission?"INTERMISSION":"--";
   text+="   |   GOALS: ";
   if(haveFeed){
     if(!liveTickerFeed.goalCount)text+="NONE YET";
@@ -4090,7 +4113,8 @@ String buildLiveTickerText(const Game &g) {
         if(shown++)text+="; ";
         text+=goal.team;
         text+=" ";
-        text+=goal.player[0]?goal.player:"GOAL SCORER TBD";
+        text+=NhlLiveTicker::validPlayerName(goal.player)?
+            goal.player:"GOAL SCORER TBD";
         text+=" (P";
         text+=String(goal.period);
         text+=" ";
@@ -4129,43 +4153,67 @@ void refreshLiveTickerText(const Game &g) {
   const uint8_t goals=liveTickerFeed.gameId==g.id?liveTickerFeed.goalCount:0;
   const bool newGame=liveTickerTextGameId!=g.id;
   const bool newGoals=goals!=liveTickerShownGoalCount;
-  if(newGame || newGoals)liveTickerScroll=0;
-  if(newGame || updated!=liveTickerText)liveTickerDirty=true;
+  const bool changed=newGame || updated!=liveTickerText;
+  if(newGame || newGoals || changed) {
+    liveTickerScroll=0;
+    liveTickerPixelOffset=0;
+  }
+  if(changed) {
+    liveTickerDirty=true;
+    liveTickerTextWidthPx=uint16_t(tft.textWidth(updated,2));
+  }
   liveTickerText=updated;
   liveTickerTextGameId=g.id;
   liveTickerShownGoalCount=goals;
-  if(liveTickerText.length())
-    liveTickerScroll%=liveTickerText.length();
 }
-// Display only complete characters within the physical ticker width, avoiding
-// clipped glyphs and dirty pixels outside the separate ticker region.
+// Advance on UTF-8 code-point boundaries; never start rendering in the
+// middle of an accented NHL player's name.
+uint16_t liveTickerNextByte(uint16_t index) {
+  const uint16_t len=uint16_t(liveTickerText.length());
+  const uint16_t cycle=len+NhlLiveTicker::kSeparatorChars;
+  if(index>=cycle-1)return 0;
+  if(index>=len)return index+1;
+  const uint8_t lead=uint8_t(liveTickerText[index]);
+  const uint8_t bytes=(lead&0xF8)==0xF0?4:
+                      (lead&0xF0)==0xE0?3:(lead&0xE0)==0xC0?2:1;
+  const uint16_t next=index+bytes;
+  return next<len?next:len;
+}
+String liveTickerGlyph(uint16_t index) {
+  const uint16_t len=uint16_t(liveTickerText.length());
+  if(index>=len)return String(" ");
+  const uint16_t next=liveTickerNextByte(index);
+  return liveTickerText.substring(index,next);
+}
+// Draw only enough UTF-8 glyphs for the physical strip. The first glyph is
+// shifted by liveTickerPixelOffset, giving smooth sub-character movement.
 String liveTickerWindow(uint16_t maxWidth,uint8_t font) {
   if(!liveTickerText.length())return String("NHL LIVE");
-  if(tft.textWidth(liveTickerText,font)<=maxWidth)return liveTickerText;
-  const uint16_t len=liveTickerText.length();
+  if(liveTickerTextWidthPx<=maxWidth)return liveTickerText;
   String visible;
-  visible.reserve(90);
-  uint16_t width=0;
-  for(uint16_t n=0;n<len+NhlLiveTicker::kSeparatorChars;++n){
-    const uint16_t index=uint16_t((uint32_t(liveTickerScroll)+n)%
-                                   (len+NhlLiveTicker::kSeparatorChars));
-    const char c=index<len?liveTickerText[index]:' ';
-    const String one(c);
-    const uint16_t cw=tft.textWidth(one,font);
-    if(width+cw>maxWidth)break;
-    visible+=c;
-    width+=cw;
+  visible.reserve(110);
+  uint16_t at=liveTickerScroll;
+  int16_t width=-int16_t(liveTickerPixelOffset);
+  for(uint8_t n=0;n<90 && width<int16_t(maxWidth+16);++n) {
+    const String glyph=liveTickerGlyph(at);
+    visible+=glyph;
+    width+=tft.textWidth(glyph,font);
+    at=liveTickerNextByte(at);
   }
   return visible;
 }
 void drawLiveTickerCYD(const Game &g) {
   if(!gameIsLive(g))return;
   tft.fillRect(10,206,300,25,ARENA_PLATE);
-  tft.fillRect(10,207,2,23,to565(teamRgb(g.away)));
-  tft.fillRect(308,207,2,23,to565(teamRgb(g.home)));
   tft.setTextDatum(ML_DATUM);
   tft.setTextColor(WHITE,ARENA_PLATE);
-  tft.drawString(liveTickerWindow(286,2),16,219,2);
+  tft.drawString(liveTickerWindow(264,2),
+                 26-int16_t(liveTickerPixelOffset),219,2);
+  // The first/last partially visible glyphs remain inside the lower plate.
+  tft.fillRect(10,206,16,25,ARENA_PLATE);
+  tft.fillRect(294,206,16,25,ARENA_PLATE);
+  tft.fillRect(10,207,2,23,to565(teamRgb(g.away)));
+  tft.fillRect(308,207,2,23,to565(teamRgb(g.home)));
   tft.setTextDatum(TL_DATUM);
 }
 
@@ -4817,11 +4865,15 @@ void drawS3ArenaTicker(const Game &g) {
   // Y=269..288 remains above the lowest icon pixels (starts at ~291).
   tft.fillRect(0,269,480,20,0x1083);
   tft.drawFastHLine(0,269,480,0x2987);
-  tft.fillRect(0,270,3,18,to565(teamRgb(g.away)));
-  tft.fillRect(477,270,3,18,to565(teamRgb(g.home)));
   tft.setTextDatum(ML_DATUM);
   tft.setTextColor(WHITE);
-  tft.drawString(liveTickerWindow(458,2),11,279,2);
+  tft.drawString(liveTickerWindow(425,2),
+                 28-int16_t(liveTickerPixelOffset),279,2);
+  // Clip only the sides of this 20px strip; never touch score or logos.
+  tft.fillRect(0,270,28,19,0x1083);
+  tft.fillRect(465,270,15,19,0x1083);
+  tft.fillRect(0,270,3,18,to565(teamRgb(g.away)));
+  tft.fillRect(477,270,3,18,to565(teamRgb(g.home)));
   tft.setTextDatum(TL_DATUM);
 }
 
@@ -8577,17 +8629,23 @@ void loop() {
         refreshLiveTickerText(g);
       }
       if(uint32_t(now-liveTickerScrollAt)>=NhlLiveTicker::kStepMs &&
-         tft.textWidth(liveTickerText,2)>
+         liveTickerTextWidthPx>
 #ifdef GLOWDECK_WAVESHARE_S3
-            458
+            425
 #else
-            286
+            264
 #endif
          ) {
+        // One pixel/30ms, not a whole character/180ms. Keep I/O bounded:
+        // no extra NHL fetch, full-frame transfer, or UI allocations.
         liveTickerScrollAt=now;
-        liveTickerScroll=NhlLiveTicker::scrollNext(
-            liveTickerScroll,uint16_t(liveTickerText.length()+
-                                    NhlLiveTicker::kSeparatorChars));
+        ++liveTickerPixelOffset;
+        const String first=liveTickerGlyph(liveTickerScroll);
+        const uint16_t glyphWidth=tft.textWidth(first,2);
+        if(liveTickerPixelOffset>=glyphWidth) {
+          liveTickerPixelOffset=0;
+          liveTickerScroll=liveTickerNextByte(liveTickerScroll);
+        }
         liveTickerDirty=true;
       }
     } else liveTickerDirty=false;
