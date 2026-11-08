@@ -3156,9 +3156,9 @@ void fetchFollowedPowerPlays() {
   penalty["duration"]=true;
   penalty["descKey"]=true;
   penalty["teamAbbrev"]["default"]=true;
-  penalty["committedByPlayer"]=true;
-  penalty["servedByPlayer"]=true;
-  penalty["playerName"]=true;
+  penalty["committedByPlayer"]["firstName"]["default"]=true;
+  penalty["committedByPlayer"]["lastName"]["default"]=true;
+  penalty["servedBy"]["default"]=true;
   JsonObject scorePeriod = summary["scoring"][0].to<JsonObject>();
   scorePeriod["periodDescriptor"]["number"]=true;
   JsonObject goal=scorePeriod["goals"][0].to<JsonObject>();
@@ -3200,12 +3200,17 @@ void fetchFollowedPowerPlays() {
       if(tickerTargetVisible) {
         uint16_t elapsed=0;
         if(NhlPenaltyLedger::Book::parseTime(when,elapsed)) {
-          String player=call["committedByPlayer"].as<String>();
-          if(player.isEmpty())
-            player=call["committedByPlayer"]["default"].as<String>();
-          if(player.isEmpty())player=call["servedByPlayer"].as<String>();
-          if(player.isEmpty())player=call["playerName"].as<String>();
-          if(player.isEmpty())player=call["playerName"]["default"].as<String>();
+          // The actual box occupant is servedBy for a bench minor;
+          // otherwise the player who committed the infraction.
+          String player=call["servedBy"]["default"].as<String>();
+          if(player.isEmpty())player=call["servedBy"].as<String>();
+          if(player.isEmpty()){
+            player=call["committedByPlayer"]["firstName"]["default"].as<String>();
+            const String last=
+                call["committedByPlayer"]["lastName"]["default"].as<String>();
+            if(player.length() && last.length())player+=" ";
+            player+=last;
+          }
           liveTickerWork.addPenalty(p,elapsed,penalized,team.c_str(),
               player.c_str(),call["descKey"]|"",type,minutes);
         }
