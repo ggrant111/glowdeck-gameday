@@ -22,7 +22,27 @@ assert 'validPlayerName' in header
 assert 'liveTickerWork.applyPowerPlayGoals()' in s
 assert 'tickerTargetVisible' in s
 assert 'liveTickerWork.addPenalty' in s and 'liveTickerWork.addGoal' in s
-assert 'BOX: ' in s and 'GOALS: ' in s and 'SOG: ' in s
+# Main scoreboard already displays SOG and the team on a live PP.
+# The ticker carries complementary facts only. A goal's PP strength is
+# historical context and remains on the scorer entry.
+ticker=s.split('String buildLiveTickerText(const Game &g) {',1)[1].split(
+    'void refreshLiveTickerText(const Game &g) {',1)[0]
+assert 'BOX: ' in ticker and 'GOALS: ' in ticker
+assert 'HITS: ' in ticker and 'BLOCKS: ' in ticker
+assert 'PIM: ' in ticker and 'FACEOFF: ' in ticker
+assert 'SOG: ' not in ticker
+assert 'POWER PLAY: ' not in ticker
+assert '   |   PP: ' not in ticker
+assert 'if(goal.powerPlay)text+=" PP";' in ticker
+assert 'cached.hitsAway=row["awayValue"].as<String>();' in s
+assert 'cached.hitsHome=row["homeValue"].as<String>();' in s
+assert 'cached.blocksAway=row["awayValue"].as<String>();' in s
+assert 'cached.blocksHome=row["homeValue"].as<String>();' in s
+assert 'category.equalsIgnoreCase("blockedShotAttempts")' in s
+assert 'category.equalsIgnoreCase("hits")' in s
+assert 'String hitsAway, hitsHome, blocksAway, blocksHome;' in s
+assert '" / "+g.home+" "+stats.faceHome;' in ticker
+assert '"% / "+g.home+" "+stats.faceHome+"%"' not in ticker
 assert 'drawLiveTickerCYD(g);' in s and 'drawS3ArenaTicker(g);' in s
 assert 'tft.presentRegion(0,269,480,20)' in s
 assert 'bool s3TickerFrame=false;' in s
