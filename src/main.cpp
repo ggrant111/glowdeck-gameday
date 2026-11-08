@@ -3061,13 +3061,28 @@ uint8_t currentWledPowerPlay(uint32_t &color,uint32_t &gameId,
   return 0;
 }
 
+
+void dispatchHueEvent(CelebrationEngine::Event event,uint32_t color,
+                      uint32_t sequence,uint32_t gameId){
+  if(gameId&&!isArmedGame(gameId))return;
+  if(!hue.ready()||
+     !HuePolicy::participates(hue.config.enabled,hue.config.events,event))return;
+  if(!hue.idle()&&CelebrationEngine::temporary(hue.event)&&
+     MultiGameArming::priority(event)<=MultiGameArming::priority(hue.event))
+    return; // Never interrupt a high-priority goal with a PP.
+  hue.begin(event,color,sequence,gameId);
+  GameEventLog::Entry *row=gameEventHistory.find(sequence);
+  if(row)row->hue=GameEventLog::Wled::PENDING;
+}
+
 // The shared physical WLED channel has one owner at a time. Requests are
 // bounded, ordered GOAL > FINAL > GAME_START > PP, then game rank (1..5).
 // The second simultaneous goal queues rather than destroying the first.
 bool queueArmedWledEvent(CelebrationEngine::Event event,uint32_t color,
                          uint32_t sequence,uint8_t side,uint32_t gameId){
-  if(!gameId || !isArmedGame(gameId) || !wledEligibleCount(event))
-    return false;
+  if(!gameId || !isArmedGame(gameId))return false;
+  dispatchHueEvent(event,color,sequence,gameId);
+  if(!wledEligibleCount(event))return false;
   MultiGameArming::Request item;
   item.event=event;item.gameId=gameId;item.color=color;
   item.sequence=sequence;item.side=side;
@@ -3837,6 +3852,8 @@ void pollNhl() {
             queueArmedWledEvent(event,teamRgb(representative),
                                 log.sequence,WledZonePolicy::kUnknownSide,
                                 observed.id);
+          else dispatchHueEvent(event,teamRgb(representative),
+                                log.sequence,observed.id);
         }
       }
     }
@@ -3896,6 +3913,7 @@ void pollNhl() {
       if(enabled)queueArmedWledEvent(transition,teamRgb(fav),
                                      logged.sequence,
                                      WledZonePolicy::kUnknownSide,g->id);
+      else dispatchHueEvent(transition,teamRgb(fav),logged.sequence,g->id);
     }
     previousHome = g->homeScore;
     previousAway = g->awayScore;
@@ -8775,6 +8793,53 @@ void tickEventAudit(){
   }
 }
 
+
+void tickHueCelebrations(){
+  // Verified, armed NHL PP evidence, independent of WLED participation.
+  const uint32_t now=millis();
+  uint32_t ppId=0,ppSeq=0,ppColor=0;
+  if(hue.config.enabled && (hue.config.events&CelebrationEngine::PP_FLAG)){
+    for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i){
+      const Game *g=gameById(armedGames.ids[i]);
+      if(!g||!CelebrationEngine::isLive(g->state.c_str())||
+         g->intermission||!g->ppDataKnown||!g->ppSide||
+         uint32_t(now-g->ppUpdatedAt)>=80000UL||
+         wledPpSuppressed(g->id))continue;
+      ppId=g->id;
+      ppColor=teamRgb(g->ppSide==1?g->home:g->away);
+      ppSeq=(g->id==selectedGameId)?armedPpLogSeq:0;
+      break;
+    }
+  }
+  if(hue.event==CelebrationEngine::Event::POWER_PLAY &&
+     (!ppId||hue.gameId!=ppId||hue.color!=ppColor))hue.stop();
+  static uint32_t lastPpAttempt=0;
+  if(ppId&&hue.idle()&&uint32_t(now-lastPpAttempt)>=8000UL){
+    lastPpAttempt=now;
+    dispatchHueEvent(CelebrationEngine::Event::POWER_PLAY,ppColor,ppSeq,ppId);
+  }
+  hue.tick();
+  if(hueSeenRevision!=hue.revision){
+    hueSeenRevision=hue.revision;
+    GameEventLog::Entry *row=gameEventHistory.find(hue.auditSequence);
+    if(row){
+      switch(hue.result){
+        case HueBridge::Result::PENDING:row->hue=GameEventLog::Wled::PENDING;break;
+        case HueBridge::Result::ACCEPTED:row->hue=GameEventLog::Wled::ACCEPTED;break;
+        case HueBridge::Result::SNAPSHOT_FAILED:
+          row->hue=GameEventLog::Wled::SNAPSHOT_FAILED;break;
+        case HueBridge::Result::COMMAND_FAILED:
+          row->hue=GameEventLog::Wled::COMMAND_FAILED;break;
+        case HueBridge::Result::RESTORED:row->hue=GameEventLog::Wled::RESTORED;break;
+        case HueBridge::Result::RESTORE_FAILED:
+          row->hue=GameEventLog::Wled::RESTORE_FAILED;break;
+        default:break;
+      }
+      row->hueAcknowledged=row->hueAcknowledged||hue.accepted;
+    }
+  }
+}
+
 void loop() {
   server.handleClient();
   handleTouch();
@@ -8789,6 +8854,7 @@ void loop() {
   tickWledCelebrations();
   tickWledDdpStreams(); // <=20 FPS/stream, no HTTP in frame path
   tickWledDiscovery();
+  tickHueCelebrations();
 
   const uint32_t now = millis();
   const bool connected = WiFi.status() == WL_CONNECTED;
