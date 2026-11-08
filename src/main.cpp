@@ -41,6 +41,7 @@
 #include "WledScenePolicy.h"
 #include "WledDdpPolicy.h"
 #include "WledRestoreFetchPolicy.h"
+#include "HueBridge.h"
 #include "TeamGradient.h"
 #include "GameEventLog.h"
 #include "PowerPlayLogPolicy.h"
@@ -148,6 +149,8 @@ struct Settings {
   int touchX0 = 300, touchX1 = 3800, touchY0 = 300, touchY1 = 3800;
 } cfg;
 
+HueBridge::Engine hue; // Independent Hue bridge, never a WLED slot.
+uint32_t hueSeenRevision=0;
 Preferences prefs;
 #ifdef GLOWDECK_WAVESHARE_S3
 GameDayS3Display tft;
@@ -1789,6 +1792,15 @@ void loadSettings() {
   cfg.ssid = prefs.getString("ssid", "");
   cfg.wifiPassword = prefs.getString("wpass", "");
   cfg.adminPassword = prefs.getString("admin", apPassword);
+  hue.config.ip=prefs.getString("hueIp","");
+  hue.config.key=prefs.getString("hueKey","");
+  hue.config.enabled=prefs.getBool("hueOn",false);
+  hue.config.events=prefs.getUChar("hueMask",CelebrationEngine::ALL_EVENTS)&CelebrationEngine::ALL_EVENTS;
+  hue.config.brightness=constrain((int)prefs.getUChar("hueBri",75),5,100);
+  for(uint8_t i=0;i<HuePolicy::kMaxLights;++i){
+    String id=prefs.getString(("hueL"+String(i)).c_str(),"");
+    hue.config.lights[i]=HuePolicy::validResourceId(id.c_str())?id:"";
+  }
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     cfg.wled[i] = prefs.getString(("ip" + String(i)).c_str(), "");
     cfg.wledName[i] = prefs.getString(("wname" + String(i)).c_str(), "");
@@ -1900,6 +1912,13 @@ void saveSettings() {
   prefs.putString("ssid", cfg.ssid);
   prefs.putString("wpass", cfg.wifiPassword);
   prefs.putString("admin", cfg.adminPassword);
+  prefs.putString("hueIp",hue.config.ip);
+  prefs.putString("hueKey",hue.config.key);
+  prefs.putBool("hueOn",hue.config.enabled);
+  prefs.putUChar("hueMask",hue.config.events);
+  prefs.putUChar("hueBri",hue.config.brightness);
+  for(uint8_t i=0;i<HuePolicy::kMaxLights;++i)
+    prefs.putString(("hueL"+String(i)).c_str(),hue.config.lights[i]);
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
     prefs.putString(("ip" + String(i)).c_str(), cfg.wled[i]);
     prefs.putString(("wname" + String(i)).c_str(), cfg.wledName[i]);
@@ -6413,6 +6432,8 @@ void registerRoutes() {
       row["audioAmpVerified"] = e->audioAmpVerified;
       row["audioFailure"] = GameEventLog::audioFailureLabel(e->audioFailure);
       row["speakerVerified"] = false;
+      row["hue"] = GameEventLog::wledLabel(e->hue);
+      row["hueAccepted"] = e->hueAcknowledged;
       JsonArray devices = row.createNestedArray("devices");
       for (uint8_t d = 0; d < MAX_WLED; ++d) {
         JsonObject device = devices.createNestedObject();
@@ -8717,6 +8738,7 @@ void tickEventAudit(){
     mix(e->audioAmpVerified);mix(uint8_t(e->audioFailure));
     mix(e->wledAcknowledgedMask);
     for(uint8_t i=0;i<MAX_WLED;++i)mix(uint8_t(e->wled[i]));
+    mix(uint8_t(e->hue));mix(e->hueAcknowledged);
     if(fingerprint==e->serialFingerprint)continue;
     e->serialFingerprint=fingerprint;
     Serial.printf("[EVENT AUDIT] #%lu type=%s game=%lu %s@%s team=%s"
@@ -8738,6 +8760,10 @@ void tickEventAudit(){
       (unsigned long)e->audioReadOffset,unsigned(e->audioVolume),
       unsigned(e->audioAmpVerified),
       GameEventLog::audioFailureLabel(e->audioFailure));
+    if(e->hue!=GameEventLog::Wled::NA)
+      Serial.printf("[EVENT AUDIT] #%lu HUE=%s commandAccepted=%u\n",
+        (unsigned long)e->sequence,GameEventLog::wledLabel(e->hue),
+        unsigned(e->hueAcknowledged));
     for(uint8_t i=0;i<MAX_WLED;++i){
       if(e->wled[i]==GameEventLog::Wled::NA &&
          !(e->wledAcknowledgedMask&(1U<<i)))continue;
