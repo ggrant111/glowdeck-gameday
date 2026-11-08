@@ -145,6 +145,8 @@ struct Entry {
   uint32_t serialFingerprint = 0; // last serial audit revision, not exposed in JSON
   Wled wled[kDevices] = {}; // Eight controller slots; NA is zero
   uint8_t wledAcknowledgedMask = 0; // Retained even after restore/failure
+  Wled hue = Wled::NA; // Independent Hue Bridge delivery status.
+  bool hueAcknowledged = false; // HTTP success, not a visual confirmation.
 };
 class Buffer {
  public:
