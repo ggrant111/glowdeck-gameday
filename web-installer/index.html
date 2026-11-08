@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#071323">
+  <title>GlowDeck GameDay — USB Firmware Installer</title>
+  <meta name="description" content="Install GlowDeck GameDay onto the compatible ESP32 CYD or Waveshare ESP32-S3 via USB with ESP Web Tools.">
+  <style>
+    :root {color-scheme:dark; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:#071323; color:#ecf6ff}
+    * {box-sizing:border-box}
+    body {margin:0; min-height:100vh; background:radial-gradient(ellipse at 85% 0%, #173b50 0%,transparent 48%),#071323; line-height:1.55}
+    main {width:min(890px,calc(100% - 32px)); margin:0 auto; padding:32px 0 64px}
+    .brand {display:flex;align-items:center;gap:10px;letter-spacing:.06em;color:#9ad6df;font-weight:750;font-size:.85rem}
+    .brand span {font-size:1.5rem}
+    h1 {font-size:clamp(2rem,7vw,3.7rem);line-height:1.08;letter-spacing:-.04em;margin:22px 0 10px}
+    .lead {font-size:1.13rem;color:#b7cbdc;max-width:670px}
+    .pill {display:inline-block;border:1px solid #27546a;border-radius:30px;color:#a6e3dd;padding:4px 10px;font-size:.75rem;letter-spacing:.06em;font-weight:700}
+    .card {background:rgba(14,31,48,.9);border:1px solid #274254;border-radius:16px;padding:24px;margin-top:22px}
+    .grid {display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .board {border:1px solid #315068;border-radius:12px;padding:18px;background:#0e253b}
+    h2 {font-size:1.3rem;margin:0 0 12px}
+    h3 {font-size:1.05rem;margin:0 0 6px}
+    p {margin:8px 0}
+    .muted,li {color:#b7cbdc}
+    strong {color:#fff}
+    .warning {border-left:4px solid #f4b74b;padding:12px 15px;background:#322619;border-radius:0 9px 9px 0;color:#ffe4af}
+    code {padding:2px 5px;background:#203446;border-radius:4px;word-break:break-word}
+    a {color:#8de5dd}
+    ol {padding-left:24px}
+    li {margin:8px 0}
+    esp-web-install-button {display:block;margin:22px 0 10px;--esp-tools-button-color:#4da99f;--esp-tools-button-text-color:#071323;--esp-tools-button-border-radius:10px}
+    .action {appearance:none;border:0;background:#5ec9bc;color:#031d26;border-radius:10px;min-height:52px;font-size:1.1rem;font-weight:750;padding:12px 24px;cursor:pointer}
+    .action:hover {background:#8be2d8}
+    .action:focus-visible, a:focus-visible {outline:3px solid #ffe098;outline-offset:4px}
+    .caption {font-size:.9rem;color:#9bb3c5}
+    footer {border-top:1px solid #304455;margin-top:32px;padding-top:16px;color:#9db4c5;font-size:.9rem}
+    @media(max-width:650px){.grid{grid-template-columns:1fr} .card{padding:18px} main{padding-top:20px}}
+  </style>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+</head>
+<body>
+  <main>
+    <div class="brand"><span aria-hidden="true">🏒</span> GLOWDECK GAMEDAY</div>
+    <h1>Install GameDay<br>directly from your browser.</h1>
+    <p class="lead">Connect your compatible ESP32 touchscreen to a computer via USB, choose its serial port, and install the matching NHL GameDay firmware. No PlatformIO setup required for a <strong>new installation</strong>.</p>
+    <span class="pill">ESP WEB TOOLS · BETA</span>
+    <span class="pill" id="version">Version: loading…</span>
+
+    <section class="card" aria-labelledby="hardware-title">
+      <h2 id="hardware-title">Check your device before installing</h2>
+      <div class="grid">
+        <div class="board">
+          <h3>Waveshare ESP32-S3-Touch-LCD-3.5</h3>
+          <p class="muted">ST7796 SPI display · 3.5-inch · 480×320 landscape · 16 MB flash</p>
+          <strong>ESP32-S3</strong>
+          <p class="caption">NOT the similarly named Waveshare 3.5B QSPI model.</p>
+        </div>
+        <div class="board">
+          <h3>ESP32-2432S028R CYD</h3>
+          <p class="muted">ILI9341 display · XPT2046 touch · 2.8-inch · 320×240 landscape</p>
+          <strong>ESP32 (original)</strong>
+          <p class="caption">Other CYD screen/controller variants are not supported.</p>
+        </div>
+      </div>
+      <p class="caption">ESP Web Tools automatically chooses the ESP32 or ESP32-S3 image based on the detected chip. It cannot identify a different, incompatible display board with the same chip.</p>
+    </section>
+
+    <section class="card" aria-labelledby="install-title">
+      <h2 id="install-title">USB factory installation</h2>
+      <div class="warning">
+        <strong>Factory flashing may erase your settings.</strong> The combined image includes the partition table and writes blank padding across saved NVS settings. This installer is meant for a new or intentionally reset device. If GameDay is already working, use <strong>Device → Firmware &amp; Maintenance</strong> on its local dashboard with the board's <code>-ota.bin</code> release asset instead.
+      </div>
+      <ol>
+        <li>Use a desktop computer with <strong>Chrome or Edge</strong> and an actual USB <strong>data</strong> cable. Safari/iPhone/iPad and mobile browsers cannot use USB Web Serial for this installer.</li>
+        <li>Close any serial monitor, PlatformIO upload, or other app already using the device's port.</li>
+        <li>Click <strong>Connect &amp; install</strong>, choose the connected ESP serial port, and approve the browser permission prompt.</li>
+        <li>Confirm the board choice and installation/erase prompts in the ESP Web Tools dialog. Wait for flashing and reboot to finish; do not disconnect USB while writing.</li>
+        <li>On the GameDay touchscreen, open <strong>SETUP</strong>. Join its <code>GlowDeck-XXXXXX</code> Wi-Fi network using the password shown on the board and browse to <a href="http://192.168.4.1" target="_blank" rel="noopener">http://192.168.4.1</a> to configure home Wi-Fi.</li>
+      </ol>
+      <esp-web-install-button manifest="./manifest.json">
+        <button slot="activate" class="action">Connect &amp; install GameDay</button>
+        <p slot="unsupported" class="warning">This browser does not support Web Serial. Open this page in desktop Chrome or Edge with the ESP32 plugged in via USB. iOS browsers cannot flash it.</p>
+        <p slot="not-allowed" class="warning">Browser serial access requires HTTPS and a secure context. Open the published GitHub Pages installer URL.</p>
+      </esp-web-install-button>
+      <p class="caption">Installing requires a physical USB connection to the ESP32 on this computer. It cannot flash a remote ESP32 or directly flash through an iPhone.</p>
+    </section>
+
+    <section class="card">
+      <h2>Already running GameDay?</h2>
+      <p class="muted">Use the board's authenticated local web dashboard for an OTA update to preserve its NVS settings and S3 LittleFS sound files, provided you are not changing its partition layout. Get the <code>-ota.bin</code> matching your exact model from the GitHub release.</p>
+      <p><a href="https://github.com/ggrant111/glowdeck-gameday/releases">Download release files</a> · <a href="https://github.com/ggrant111/glowdeck-gameday/blob/main/README.md">Complete setup guide</a> · <a href="https://github.com/ggrant111/glowdeck-gameday/blob/main/docs/TROUBLESHOOTING.md">Troubleshooting</a></p>
+    </section>
+    <footer>GlowDeck GameDay is an independent project. It uses the public NHL feed; software installation and successful CI tests cannot guarantee physical speaker, LED, touch, or live-event behavior on every device.</footer>
+  </main>
+  <script>
+    fetch('./manifest.json', {cache:'no-store'})
+      .then(r => { if (!r.ok) throw new Error('Missing manifest'); return r.json(); })
+      .then(data => { document.getElementById('version').textContent = 'Version: ' + (data.version || 'unknown'); })
+      .catch(() => { document.getElementById('version').textContent = 'Installer files unavailable'; });
+  </script>
+</body>
+</html>
