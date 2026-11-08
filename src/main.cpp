@@ -1091,60 +1091,49 @@ void detectRearGoalChanges() {
   }
 }
 
-// Track PP changes only when fresh situation data is known. Missing NHL
-// situation data is not interpreted as PP ending.
-// Power-play logging is keyed by NHL game ID, not by array index, because the
-// NHL's daily score feed can reorder matches between 10-second polls.
-PowerPlayLogPolicy::Watch *getPowerPlayLogWatch(uint32_t id) {
-  if (!id) return nullptr;
-  for (auto &watch : ppEventWatch)
-    if (watch.gameId == id) return &watch;
-  for (auto &watch : ppEventWatch)
-    if (!watch.gameId) {
-      watch = PowerPlayLogPolicy::Watch();
-      watch.gameId = id;
-      return &watch;
-    }
-  return nullptr; // Full (normally one slot per game on the date).
-}
-
-void scheduleWledRestoreAll(); // Verified PP end must stop WLED too.
-void startPowerPlaySound(uint32_t eventSequence); // Independent S3 WAV, never GOAL horn
+// The PP2 session tracker is the SINGLE event authority. Starting/ending
+// does not depend on a separate side-only debouncer or LED polling interval.
+// Each session emits one start and one end despite TV breaks, intermissions,
+// fetch reordering and a WLED preview interrupt.
+void scheduleWledRestoreAll();
+void startPowerPlaySound(uint32_t eventSequence);
 void observePowerPlayEvents() {
-  for (uint8_t i = 0; i < gameCount; ++i) {
-    const Game &g = games[i];
-    const bool followed = rearFollows(g.id);
-    if (!followed && !cfg.displayAllLiveEvents) continue;
-    if (g.state != "LIVE" && g.state != "CRIT") continue;
-    PowerPlayLogPolicy::Watch *watch = getPowerPlayLogWatch(g.id);
-    if (!watch) continue;
-    const bool reliable = g.ppDataKnown &&
-       uint32_t(millis() - g.ppUpdatedAt) < 80000UL;
-    const PowerPlayLogPolicy::Change change = PowerPlayLogPolicy::observe(
-        *watch, g.id, reliable, g.ppSide, millis());
-    if (change.ended) {
-      const String &team = change.ended == 1 ? g.home : g.away;
-      const uint32_t seq = addGameEvent(
-          g, GameEventLog::Type::POWER_PLAY_END, team, 0).sequence;
-      queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_END, team, seq, true);
+  for (uint8_t i=0;i<gameCount;++i) {
+    const Game &g=games[i];
+    NhlPowerPlayTracker2::Watch *session=powerPlaySession(g.id,false);
+    if(!session)continue;
+    const NhlPowerPlayTracker2::Delta change=session->takePending();
+    const bool followed=rearFollows(g.id);
+    if((!followed&&!cfg.displayAllLiveEvents) ||
+       (g.state!="LIVE"&&g.state!="CRIT"))continue;
+    if(change.ended){
+      const String &team=change.ended==1?g.home:g.away;
+      const uint32_t seq=addGameEvent(
+          g,GameEventLog::Type::POWER_PLAY_END,team,0).sequence;
+      queueGameOverlay(&g,EventOverlay::Kind::POWER_PLAY_END,team,seq,true);
       if(g.id==selectedGameId)armedPpLogSeq=0;
-      // Scheduler hands off to another armed PP without stopping its lights.
+      Serial.printf("[PP2 EVENT] game=%lu session=%lu END %s\\n",
+          (unsigned long)g.id,(unsigned long)session->session,team.c_str());
     }
-    if (change.started) {
-      const String &team = change.started == 1 ? g.home : g.away;
-      GameEventLog::Entry &entry = addGameEvent(
-          g, GameEventLog::Type::POWER_PLAY_START, team, 0);
-      entry.rear = !followed ? GameEventLog::Rear::NOT_SELECTED
-          : (!cfg.rearLedEnabled || !cfg.rearPowerPlay)
-            ? GameEventLog::Rear::NOT_ENABLED
-            : GameEventLog::Rear::SCHEDULED;
-      if (g.id == selectedGameId) armedPpLogSeq = entry.sequence;
-      queueGameOverlay(&g, EventOverlay::Kind::POWER_PLAY_START,
-                       team, entry.sequence, true);
-      // Only qualifying followed games have physical celebrations. League-wide
-      // display-only PP events never play audio. Debouncer emits starts once.
-      if(followed) startPowerPlaySound(entry.sequence);
+    if(change.started){
+      const String &team=change.started==1?g.home:g.away;
+      GameEventLog::Entry &entry=addGameEvent(
+          g,GameEventLog::Type::POWER_PLAY_START,team,0);
+      entry.rear=!followed?GameEventLog::Rear::NOT_SELECTED:
+          (!cfg.rearLedEnabled||!cfg.rearPowerPlay)?
+          GameEventLog::Rear::NOT_ENABLED:GameEventLog::Rear::SCHEDULED;
+      if(g.id==selectedGameId)armedPpLogSeq=entry.sequence;
+      queueGameOverlay(&g,EventOverlay::Kind::POWER_PLAY_START,
+                       team,entry.sequence,true);
+      if(followed)startPowerPlaySound(entry.sequence);
       else entry.audio=GameEventLog::Audio::NOT_ARMED;
+      Serial.printf("[PP2 EVENT] game=%lu session=%lu START %s\\n",
+          (unsigned long)g.id,(unsigned long)session->session,team.c_str());
+    }
+    if(change.resumed) {
+      // Resume is not a second NHL start: no horn, overlay, or log duplication.
+      Serial.printf("[PP2 EVENT] game=%lu session=%lu RESUMED\\n",
+          (unsigned long)g.id,(unsigned long)session->session);
     }
   }
 }
@@ -6493,6 +6482,9 @@ void registerRoutes() {
       g["intermission"] = games[i].intermission;
       g["powerPlaySide"] = games[i].ppSide;
       g["powerPlayVerified"] = games[i].ppDataKnown;
+      g["powerPlaySession"] = games[i].ppSession;
+      g["powerPlayPhase"] =
+          NhlPowerPlayTracker2::phaseName(games[i].ppPhase);
       g["emptyNetSide"] = games[i].emptyNetSide;
       g["emptyNetKnown"] = games[i].emptyNetKnown;
       g["followed"] = rearFollows(games[i].id);
@@ -8611,6 +8603,7 @@ void loop() {
   tickHorn();
   tickEventAudit();
   tickRestores();
+  tickPowerPlaySessions(millis());
   tickRearLed();
 #ifdef GLOWDECK_WAVESHARE_S3
   tickCaseLeds();
