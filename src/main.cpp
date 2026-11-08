@@ -45,6 +45,7 @@
 #include "PowerPlayLogPolicy.h"
 #include "NhlPowerPlayEvidence.h"
 #include "NhlPenaltyLedger.h"
+#include "NhlPowerPlayTracker2.h"
 #include "NhlLiveTicker.h"
 #include "NhlOnIce.h"
 #include "EventOverlay.h"
@@ -88,6 +89,8 @@ struct Game {
   uint8_t ppCandidate = 0; // Unverified NHL situation-description label
   bool ppDataKnown = false, ppSituationKnown = false;
   uint32_t ppUpdatedAt = 0;
+  uint32_t ppSession = 0; // Stable within game across feed gaps/intermission.
+  NhlPowerPlayTracker2::Phase ppPhase=NhlPowerPlayTracker2::Phase::IDLE;
   uint8_t emptyNetSide = 0; // 0 none, 1 home goalie pulled, 2 away, 3 both
   bool emptyNetKnown = false;
   uint32_t emptyNetUpdatedAt = 0;
@@ -175,7 +178,7 @@ GameEventLog::Buffer gameEventHistory;
 uint32_t wledEventOwner[MAX_WLED] = {0, 0, 0, 0};
 uint32_t armedPpLogSeq = 0, queuedWledLogSeq = 0;
 // NHL game ID is the stable key: game positions can reorder every poll.
-PowerPlayLogPolicy::Watch ppEventWatch[MAX_GAMES];
+NhlPowerPlayTracker2::Watch ppSessions[MAX_GAMES];
 struct PowerPlaySnapshot {
   uint32_t id = 0, updatedAt = 0;
   uint8_t side = 0;
@@ -223,6 +226,7 @@ uint32_t wledActiveGameId=0;
 uint32_t wledDispatchGameId=0; // Event-specific WLED home/away colors.
 uint32_t wledDeviceGameOwner[MAX_WLED]={};
 uint32_t wledPpStoppedIds[MultiGameArming::kMaxArmed]={};
+uint32_t wledPpStoppedSessions[MultiGameArming::kMaxArmed]={};
 uint32_t wledQueuedDrops=0;
 int previousHome = 0, previousAway = 0;
 bool haveBaseline = false, mdnsStarted = false, mdnsAttempted = false, needsDraw = true;
@@ -693,31 +697,107 @@ NhlPenaltyLedger::Book *penaltyLedger(uint32_t id) {
     }
   return nullptr;
 }
-// Both a documented NHL "PP" label and an active, applicable official minor
-// or major are required. A missing/expired penalty ledger is UNKNOWN, not PP.
-void validatePowerPlay(Game &g) {
-  g.ppSide = 0;
-  g.ppDataKnown = false;
-  if (g.state != "LIVE" && g.state != "CRIT") return;
-  if (g.intermission) return;
-  NhlPenaltyLedger::Book *ledger = penaltyLedger(g.id);
-  if (!ledger || !ledger->loaded ||
-      uint32_t(millis()-ledger->checkedAt) > 65000UL) return;
-  uint16_t seconds=0;
-  if (!NhlPenaltyLedger::Book::fromRemaining(
-          g.period,g.clock.c_str(),seconds))return;
-  const uint8_t penaltySide=ledger->sideAt(seconds);
-  // A verified active penalty alone is insufficient if it is offsetting,
-  // delayed, or not yet reflected by the NHL manpower situation.
-  if (penaltySide && g.ppSituationKnown && g.ppCandidate==penaltySide) {
-    g.ppSide=penaltySide;
-    g.ppDataKnown=true;
-  } else if (!penaltySide) {
-    // Official penalties (including PP-goal termination) show normal play.
-    g.ppSide=0;
-    g.ppDataKnown=true;
+// All PP outputs now consume the same per-game tracker, keyed by NHL game ID.
+// Fresh official penalties can sustain an already-verified PP when the NHL
+// situation label temporarily disappears during a stoppage/TV timeout.
+// A NEW PP still requires two independent corroborating sources.
+NhlPowerPlayTracker2::Watch *powerPlaySession(uint32_t id,bool create=true) {
+  if(!id)return nullptr;
+  for(auto &session:ppSessions)if(session.gameId==id)return &session;
+  if(!create)return nullptr;
+  for(auto &session:ppSessions)if(!session.gameId){
+    session.reset(id);return &session;
   }
-  if (g.ppDataKnown) g.ppUpdatedAt=millis();
+  return nullptr;
+}
+void syncPowerPlayOutput(Game &g,uint32_t now) {
+  NhlPowerPlayTracker2::Watch *session=powerPlaySession(g.id,false);
+  const uint8_t previous=g.ppSide;
+  const uint8_t resolved=session?
+      session->outputSide(now,g.intermission):0;
+  g.ppSide=resolved;
+  g.ppPhase=session?session->phase:NhlPowerPlayTracker2::Phase::IDLE;
+  g.ppSession=session?session->session:0;
+  // Other outputs already check ppDataKnown/ppUpdatedAt; keep their existing
+  // safety checks while all LEDs and display share one resolved session.
+  g.ppDataKnown=resolved!=0 ||
+      (session && session->phase==NhlPowerPlayTracker2::Phase::IDLE &&
+       session->reason==NhlPowerPlayTracker2::Reason::VERIFIED);
+  if(g.ppDataKnown)g.ppUpdatedAt=now;
+  else g.ppUpdatedAt=0;
+  if(previous!=resolved && screen==Screen::LIVE &&
+     currentCarouselPage().kind==LiveCarousel::Kind::GAME &&
+     currentCarouselPage().index<gameCount &&
+     games[currentCarouselPage().index].id==g.id &&
+     !overlayController.active())partialLiveUpdate=true;
+}
+void validatePowerPlay(Game &g) {
+  const uint32_t now=millis();
+  NhlPowerPlayTracker2::Watch *session=powerPlaySession(g.id);
+  if(!session){g.ppSide=0;g.ppDataKnown=false;return;}
+  NhlPowerPlayTracker2::Sample input;
+  input.gameId=g.id;
+  input.nowMs=now;
+  input.live=g.state=="LIVE"||g.state=="CRIT";
+  input.final=CelebrationEngine::isFinal(g.state.c_str());
+  input.intermission=g.intermission;
+  input.labelKnown=g.ppSituationKnown;
+  input.labelSide=g.ppCandidate;
+  NhlPenaltyLedger::Book *ledger=penaltyLedger(g.id);
+  input.ledgerFresh=ledger && ledger->loaded &&
+      uint32_t(now-ledger->checkedAt)<=75000UL;
+  input.clockKnown=NhlPenaltyLedger::Book::fromRemaining(
+      g.period,g.clock.c_str(),input.gameAt,
+      g.period==4 && g.periodType=="OT" &&
+      ((g.id/10000UL)%100UL)==2UL);
+  if(input.ledgerFresh && input.clockKnown){
+    const NhlPenaltyLedger::Book::Evidence evidence=
+        ledger->evidenceAt(input.gameAt);
+    input.ledgerSide=evidence.side;
+    input.penaltyKey=evidence.key;
+    input.penaltyAt=evidence.penaltyAt;
+    input.penaltyEndAt=evidence.endAt;
+    if(session->side && input.ledgerSide==0 &&
+       session->anchorPenaltyAt){
+      input.verifiedPpGoalEnd=ledger->hasPpGoalSince(
+          session->side,session->anchorPenaltyAt,input.gameAt);
+    }
+  }
+  const NhlPowerPlayTracker2::Phase oldPhase=session->phase;
+  const NhlPowerPlayTracker2::Reason oldReason=session->reason;
+  const uint8_t oldSide=session->side;
+  const NhlPowerPlayTracker2::Delta change=session->observe(input);
+  syncPowerPlayOutput(g,now);
+  if(change.stateChanged || oldReason!=session->reason ||
+     oldSide!=session->side){
+    Serial.printf("[PP2] id=%lu session=%lu state=%s reason=%s side=%u "
+                  "label=%u ledger=%u fresh=%u clock=%u at=%u ends=%u "
+                  "out=%u start=%u end=%u resume=%u\\n",
+        (unsigned long)g.id,(unsigned long)session->session,
+        NhlPowerPlayTracker2::phaseName(session->phase),
+        NhlPowerPlayTracker2::reasonName(session->reason),
+        unsigned(session->side),unsigned(input.labelSide),
+        unsigned(input.ledgerSide),unsigned(input.ledgerFresh),
+        unsigned(input.clockKnown),unsigned(input.gameAt),
+        unsigned(session->expectedEndAt),unsigned(g.ppSide),
+        unsigned(change.started),unsigned(change.ended),
+        unsigned(change.resumed));
+  }
+}
+void tickPowerPlaySessions(uint32_t now) {
+  static uint32_t lastTick=0;
+  if(uint32_t(now-lastTick)<1000UL)return;
+  lastTick=now;
+  for(uint8_t i=0;i<gameCount;++i){
+    Game &g=games[i];
+    NhlPowerPlayTracker2::Watch *session=powerPlaySession(g.id,false);
+    if(session && session->tick(now,g.intermission)){
+      Serial.printf("[PP2] id=%lu session=%lu state=UNKNOWN "
+                    "reason=trusted-evidence-timeout\\n",
+          (unsigned long)g.id,(unsigned long)session->session);
+    }
+    syncPowerPlayOutput(g,now);
+  }
 }
 
 uint8_t activePowerPlaySide(uint32_t now, uint32_t &color) {
@@ -1151,7 +1231,7 @@ void prepareNewScoreboardDate(const String &today) {
     for (auto &entry : goalWatch) entry = GoalWatch();
     for (auto &entry : stateWatch) entry = StateWatch();
     hasBackgroundOverlay = false;
-    for (auto &entry : ppEventWatch) entry = PowerPlayLogPolicy::Watch();
+    for (auto &entry : ppSessions) entry.reset();
     armedPpLogSeq = 0;
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
     for (auto &entry : penaltyLedgers) entry.reset();
