@@ -199,9 +199,10 @@ struct Watch {
        !evidenceInGrace(s.nowMs)){
       phase=Phase::UNKNOWN;reason=Reason::TIMEOUT;
     }
+    if(d.resumed)pendingResume=true;
     d.started=pendingStart;
     d.ended=pendingEnd;
-    d.resumed=d.resumed||pendingResume;
+    d.resumed=pendingResume;
     d.stateChanged=(before!=phase)||d.started||d.ended;
     // Caller uses takePending() after all involved games were refreshed.
     return d;
