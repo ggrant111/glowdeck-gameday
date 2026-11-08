@@ -7646,6 +7646,151 @@ void registerRoutes() {
     response["hex"] = rgbHex(color);
     sendJson(response);
   });
+
+  // Philips Hue: all routes are authenticated; no key ever reaches the web UI.
+  server.on("/api/hue/config",HTTP_GET,[](){
+    if(!authorized())return;
+    StaticJsonDocument<950> doc;
+    doc["ip"]=hue.config.ip;
+    doc["paired"]=hue.config.key.length()>0;
+    doc["enabled"]=hue.config.enabled;
+    doc["events"]=hue.config.events;
+    doc["brightness"]=hue.config.brightness;
+    doc["status"]=HueBridge::label(hue.result);
+    doc["active"]=!hue.idle();
+    doc["error"]=hue.lastError;
+    JsonArray lights=doc.createNestedArray("lights");
+    for(const auto &id:hue.config.lights)if(id.length())lights.add(id);
+    sendJson(doc);
+  });
+  server.on("/api/hue/discover",HTTP_GET,[](){
+    if(!authorized())return;
+    StaticJsonDocument<950> doc;
+    JsonArray bridges=doc.createNestedArray("bridges");
+    if(WiFi.status()==WL_CONNECTED && mdnsStarted){
+      const int n=MDNS.queryService("hue","tcp");
+      for(int i=0;i<n && i<6;++i){
+        const String ip=MDNS.IP(i).toString();
+        if(!HueBridge::Engine::validIp(ip))continue;
+        JsonObject item=bridges.createNestedObject();
+        item["ip"]=ip;
+        item["name"]=MDNS.hostname(i);
+      }
+    }
+    doc["manualSupported"]=true;
+    sendJson(doc);
+  });
+  server.on("/api/hue/pair",HTTP_POST,[](){
+    if(!authorized())return;
+    if(server.arg("plain").length()>180)return errorResponse("Request too large");
+    StaticJsonDocument<192> input;
+    if(deserializeJson(input,server.arg("plain")))return errorResponse("Invalid JSON");
+    String ip=input["ip"]|String("");ip.trim();
+    if(!HueBridge::Engine::validIp(ip))
+      return errorResponse("Bridge must be on the same Wi-Fi subnet",400);
+    if(!hue.idle())return errorResponse("Stop Hue before re-pairing",409);
+    String token;
+    if(!hue.pair(ip,token)){
+      StaticJsonDocument<260> response;
+      response["ok"]=false;
+      response["error"]=hue.lastError;
+      return sendJson(response,409);
+    }
+    if(ip!=hue.config.ip){
+      for(auto &id:hue.config.lights)id="";
+      hue.config.enabled=false;
+    }
+    hue.config.ip=ip;hue.config.key=token;
+    saveSettings();
+    StaticJsonDocument<120> result;result["ok"]=true;result["paired"]=true;
+    sendJson(result);
+  });
+  server.on("/api/hue/lights",HTTP_GET,[](){
+    if(!authorized())return;
+    if(hue.config.key.isEmpty())return errorResponse("Pair Hue Bridge first",409);
+    String raw;
+    if(!hue.list(raw))return errorResponse(hue.lastError.c_str(),502);
+    DynamicJsonDocument parsed(20000);
+    if(deserializeJson(parsed,raw))return errorResponse("Invalid Hue light response",502);
+    DynamicJsonDocument result(5300);
+    JsonArray list=result.createNestedArray("lights");
+    JsonArray data=parsed["data"].as<JsonArray>();
+    if(data.isNull())return errorResponse("Hue response contains no lights",502);
+    for(JsonObject light:data){
+      if(list.size()>=32)break;
+      String id=light["id"]|String("");
+      if(!HuePolicy::validResourceId(id.c_str()))continue;
+      JsonObject entry=list.createNestedObject();
+      entry["id"]=id;
+      entry["name"]=light["metadata"]["name"]|String("Hue light");
+      entry["color"]=!light["color"].isNull();
+      entry["dimmable"]=!light["dimming"].isNull();
+    }
+    if(result.overflowed())return errorResponse("Too many Hue lights",503);
+    sendJson(result);
+  });
+  server.on("/api/hue/config",HTTP_POST,[](){
+    if(!authorized())return;
+    if(!hue.idle())return errorResponse("Stop Hue before editing light settings",409);
+    if(server.arg("plain").length()>950)return errorResponse("Hue config too large");
+    StaticJsonDocument<1050> input;
+    if(deserializeJson(input,server.arg("plain")))return errorResponse("Invalid JSON");
+    JsonArray arr=input["lights"].as<JsonArray>();
+    if(arr.isNull()||arr.size()>HuePolicy::kMaxLights)
+      return errorResponse("Select no more than four lights");
+    String ids[HuePolicy::kMaxLights];
+    for(uint8_t i=0;i<arr.size();++i){
+      ids[i]=arr[i].as<String>();
+      if(!HuePolicy::validResourceId(ids[i].c_str()))
+        return errorResponse("Invalid Hue light ID");
+      for(uint8_t j=0;j<i;++j)
+        if(ids[i]==ids[j])return errorResponse("Duplicate Hue light ID");
+    }
+    const bool enabled=input["enabled"]|false;
+    if(enabled&&(!hue.config.key.length()||arr.size()==0))
+      return errorResponse("Pair Hue and choose a light before enabling");
+    hue.config.enabled=enabled;
+    hue.config.events=constrain((int)(input["events"]|15),0,15);
+    hue.config.brightness=constrain((int)(input["brightness"]|75),5,100);
+    for(uint8_t i=0;i<HuePolicy::kMaxLights;++i)
+      hue.config.lights[i]=ids[i];
+    saveSettings();
+    StaticJsonDocument<80> response;response["ok"]=true;sendJson(response);
+  });
+  server.on("/api/hue/test",HTTP_POST,[](){
+    if(!authorized())return;
+    if(server.arg("plain").length()>150)return errorResponse("Request too large");
+    StaticJsonDocument<180> input;
+    if(deserializeJson(input,server.arg("plain")))return errorResponse("Invalid JSON");
+    const String requested=input["event"]|String("goal");
+    if(requested=="stop"){
+      hue.stop();
+      StaticJsonDocument<80> ok;ok["ok"]=true;sendJson(ok);return;
+    }
+    CelebrationEngine::Event event=requested=="goal"?CelebrationEngine::Event::GOAL:
+      requested=="pp"?CelebrationEngine::Event::POWER_PLAY:
+      requested=="start"?CelebrationEngine::Event::GAME_START:
+      requested=="win"?CelebrationEngine::Event::FINAL_WIN:
+      requested=="loss"?CelebrationEngine::Event::FINAL_LOSS:
+      CelebrationEngine::Event::NONE;
+    if(event==CelebrationEngine::Event::NONE)
+      return errorResponse("Unknown Hue test event");
+    if(!hue.ready())return errorResponse("Enable and pair selected Hue lights",409);
+    const String side=input["side"]|String("home");
+    Game *g=testMatchup();
+    String team=g?(side=="away"?g->away:g->home):String("UTA");
+    GameEventLog::Type type=event==CelebrationEngine::Event::GOAL?
+      GameEventLog::Type::PREVIEW_GOAL:event==CelebrationEngine::Event::POWER_PLAY?
+      GameEventLog::Type::PREVIEW_POWER_PLAY:event==CelebrationEngine::Event::GAME_START?
+      GameEventLog::Type::PREVIEW_START:event==CelebrationEngine::Event::FINAL_WIN?
+      GameEventLog::Type::PREVIEW_WIN:GameEventLog::Type::PREVIEW_LOSS;
+    GameEventLog::Entry &row=addPreviewEvent(g,type,team);
+    hue.begin(event,teamRgb(team),row.sequence,0);
+    row.hue=GameEventLog::Wled::PENDING;
+    StaticJsonDocument<100> response;
+    response["ok"]=true;response["queued"]=true;
+    sendJson(response);
+  });
   server.on("/api/wled/discovery", HTTP_GET, []() {
     if(!authorized())return;
     DynamicJsonDocument doc(2900);
