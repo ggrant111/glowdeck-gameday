@@ -80,6 +80,10 @@ jobs:
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_celebration_engine.cpp -o /tmp/glowdeck-celebration-test
           /tmp/glowdeck-celebration-test
+      - name: Test Hue v2 light color conversion and event eligibility
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_hue_color_policy.cpp -o /tmp/glowdeck-hue
+          /tmp/glowdeck-hue
       - name: Validate embedded web dashboard JavaScript
         run: python tests/check_web_ui.py
       - name: Test arena web portal navigation, controls and centralized Test Lab
