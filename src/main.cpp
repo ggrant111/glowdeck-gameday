@@ -40,6 +40,7 @@
 #include "WledZonePolicy.h"
 #include "WledScenePolicy.h"
 #include "WledDdpPolicy.h"
+#include "WledRestoreFetchPolicy.h"
 #include "TeamGradient.h"
 #include "GameEventLog.h"
 #include "PowerPlayLogPolicy.h"
@@ -2721,6 +2722,16 @@ void scheduleWledRestoreAll() {
   queuedWledLogSeq = 0;
 }
 
+// WLED has two different lease states: an ongoing effect that deliberately
+// keeps its original snapshot (restoreAt==UINT32_MAX), and an actual pending
+// restore with a finite due time. An ongoing PP must never block NHL polls.
+bool wledRestoreWouldConflict(uint32_t now,uint32_t fetchBudgetMs) {
+  for(uint8_t i=0;i<MAX_WLED;++i) {
+    if(WledRestoreFetchPolicy::dueSoon(
+        restoring[i],restoreAt[i],now,fetchBudgetMs))return true;
+  }
+  return false;
+}
 void tickRestores() {
   const uint32_t now = millis();
   for (uint8_t i = 0; i < MAX_WLED; ++i) {
@@ -8782,12 +8793,8 @@ void loop() {
     // An interrupted HTTPS stream can block until its timeout. Never start
     // one so close to a WLED snapshot restoration that the lights remain in
     // celebration mode while the ESP32 waits for NHL bytes.
-    bool restoreSoon = false;
-    for (uint8_t i = 0; i < MAX_WLED; ++i)
-      if (restoring[i] &&
-          int32_t(restoreAt[i] - now) <=
-             int32_t(NhlFetchPolicy::kResponseTimeoutMs + 500UL))
-        restoreSoon = true;
+    const bool restoreSoon=wledRestoreWouldConflict(
+        now,NhlFetchPolicy::kResponseTimeoutMs+500UL);
     if (!restoreSoon && uint32_t(now - lastPoll) >= interval) {
       lastPoll = now;
       pollNhl();
@@ -8800,11 +8807,12 @@ void loop() {
   // Validate on-ice PP from official penalty and PP-goal gamecenter data,
   // never from scoreboard strength alone. At most one filtered request every
   // 20 seconds, including games visible on the CYD even if not armed.
+  // Active WLED PP effects MUST NOT starve this request: otherwise the
+  // tracker never sees a verified penalty expiry and PP_END won't be logged.
   if (connected && uint32_t(now - lastPenaltyLedgerAttempt) >= 20000UL &&
       rearEvent != RearEvent::GOAL) {
-    bool restoringLights = false;
-    for (uint8_t i = 0; i < MAX_WLED; ++i)
-      if (restoring[i]) restoringLights = true;
+    const bool restoringLights=wledRestoreWouldConflict(
+        millis(),NhlFetchPolicy::kResponseTimeoutMs+500UL);
     if (!restoringLights) {
       lastPenaltyLedgerAttempt = millis();
       fetchFollowedPowerPlays();
@@ -8885,9 +8893,8 @@ void loop() {
   if (!overlayController.active() && connected &&
       screen == Screen::LIVE && showingStandingsPage() &&
       uint32_t(millis() - lastSlideStandingsCheck) > 5000UL) {
-    bool restoringLights = false;
-    for (uint8_t i = 0; i < MAX_WLED; ++i)
-      if (restoring[i]) restoringLights = true;
+    const bool restoringLights=wledRestoreWouldConflict(
+        millis(),NhlFetchPolicy::kResponseTimeoutMs+500UL);
     if (!restoringLights && rearEvent != RearEvent::GOAL) {
       lastSlideStandingsCheck = millis();
       loadSeasonStandings();
@@ -8899,9 +8906,8 @@ void loop() {
   if (!overlayController.active() && screen == Screen::LIVE &&
       showingGamePage() && gameCount && connected &&
       uint32_t(now - lastCarouselStatsCheck) >= 2500UL) {
-    bool lightRestorePending = false;
-    for (uint8_t i = 0; i < MAX_WLED; ++i)
-      if (restoring[i]) lightRestorePending = true;
+    const bool lightRestorePending=wledRestoreWouldConflict(
+        millis(),NhlFetchPolicy::kResponseTimeoutMs+500UL);
     const uint8_t currentIndex = featuredIndex % gameCount;
     if (!lightRestorePending &&
         !statsAreFresh(games[currentIndex], statsFor(currentIndex))) {
