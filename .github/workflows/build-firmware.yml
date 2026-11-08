@@ -22,6 +22,11 @@ jobs:
           /tmp/glowdeck-penalty-ledger
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_nhl_on_ice.cpp -o /tmp/glowdeck-on-ice
           /tmp/glowdeck-on-ice
+      - name: Test PP_END full-strength club attribution on CYD and S3
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_powerplay_end_team.cpp -o /tmp/glowdeck-pp-end-team
+          /tmp/glowdeck-pp-end-team
+          python tests/test_powerplay_end_team_contract.py
       - name: Test PP2 session tracking, TV breaks, intermission, NHL goals and multi-device parity
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_nhl_powerplay_tracker2.cpp -o /tmp/glowdeck-pp2
