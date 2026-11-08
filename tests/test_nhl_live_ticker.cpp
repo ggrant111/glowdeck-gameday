@@ -3,6 +3,15 @@
 #include "NhlLiveTicker.h"
 int main() {
   using namespace NhlLiveTicker;
+  assert(!validPlayerName(nullptr));
+  assert(!validPlayerName(""));
+  assert(!validPlayerName("null"));
+  assert(!validPlayerName("NULL"));
+  assert(!validPlayerName("  null"));
+  assert(!validPlayerName("n/a"));
+  assert(validPlayerName("Sam Bennett"));
+  assert(validPlayerName("Nico Hischier"));
+  assert(kStepMs<=40); // smoother than the old 180ms character stepping
   assert(isPowerPlayGoal("pp"));
   assert(isPowerPlayGoal("PPG"));
   assert(!isPowerPlayGoal("EV"));
@@ -35,6 +44,15 @@ int main() {
   assert(f.addGoal(1,200,2,"NYR","Another Player","03:20","EV"));
   f.applyPowerPlayGoals();
   assert(f.penalties[1].end==250); // even-strength goal cannot release
+  // A missing/null offender must not leak the literal "null" into a
+  // rendered player name, nor discard the penalty type and duration.
+  Feed missingName;
+  missingName.reset(2026020125UL);
+  assert(missingName.addPenalty(1,100,1,"BOS","null","interference","MIN",2));
+  assert(missingName.penaltyCount==1);
+  assert(!missingName.penalties[0].player[0]);
+  assert(missingName.penalties[0].minutes==2);
+  assert(!strcmp(missingName.penalties[0].reason,"interference"));
   assert(!strcmp(f.goals[0].player,"Goal Scorer"));
   assert(!strcmp(f.goals[0].time,"02:55"));
   Feed doubleMinor;
