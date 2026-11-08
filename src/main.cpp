@@ -4067,7 +4067,7 @@ void drawScoreboardStatic(const Game &g) {
 // already fetched for live PP verification plus the cached team-stat rail.
 String buildLiveTickerText(const Game &g) {
   String text;
-  text.reserve(860);
+  text.reserve(650);
   const bool haveFeed=liveTickerFeed.gameId==g.id &&
                       liveTickerFeed.fetchedAt!=0;
   uint16_t remaining=0;
@@ -4125,20 +4125,10 @@ String buildLiveTickerText(const Game &g) {
       }
     }
   } else text+="UPDATING";
-  text+="   |   SOG: ";
-  text+=g.away+" "+(g.awayShots>=0?String(g.awayShots):String("--"));
-  text+=" - "+g.home+" "+(g.homeShots>=0?String(g.homeShots):String("--"));
-  if(g.ppDataKnown && g.ppSide && uint32_t(millis()-g.ppUpdatedAt)<45000UL){
-    text+="   |   POWER PLAY: ";
-    text+=g.ppSide==1?g.home:g.away;
-  }
   for(uint8_t i=0;i<gameCount;++i){
     if(games[i].id!=g.id || !carouselStats[i].loaded ||
        carouselStats[i].id!=g.id)continue;
     const CarouselStats &stats=carouselStats[i];
-    if(stats.ppAway.length() && stats.ppHome.length())
-      text+="   |   PP: "+g.away+" "+stats.ppAway+" / "+
-            g.home+" "+stats.ppHome;
     if(stats.pimAway.length() && stats.pimHome.length())
       text+="   |   PIM: "+stats.pimAway+"-"+stats.pimHome;
     if(stats.faceAway.length() && stats.faceHome.length())
