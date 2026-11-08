@@ -539,7 +539,10 @@ bool editArmedGame(uint32_t id,bool enable){
       scheduleWledRestoreAll();
       wledPriorityQueue.removeGame(id);
     }
-    for(auto &stopped:wledPpStoppedIds)if(stopped==id)stopped=0;
+    for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i)
+      if(wledPpStoppedIds[i]==id){
+        wledPpStoppedIds[i]=0;wledPpStoppedSessions[i]=0;
+      }
   }
   persistArmedGames();
   return true;
@@ -887,17 +890,22 @@ void tickCaseLeds() {
   }
   if(!caseLedDriver.enabled())caseLedDriver.enable(true);
   const uint32_t now=millis();
-  // The case identifies HOME (left) and AWAY (right). A single PP
-  // from an armed or followed live game is eligible; league-wide
-  // display-only events are NEVER physical celebrations.
+  // Pick an ACTUAL active PP from followed/armed games. A non-PP game
+  // appearing first in the scoreboard cannot silence a different PP.
   const Game *candidate=nullptr;
-  for(uint8_t i=0;i<gameCount;++i){
-    const Game &g=games[i];
-    if(!rearFollows(g.id) ||
-       (g.state!="LIVE" && g.state!="CRIT"))continue;
-    if(!candidate || (isArmedGame(g.id) &&
-       (!isArmedGame(candidate->id) ||
-         armPriority(g.id)<armPriority(candidate->id))))candidate=&g;
+  for(uint8_t pass=0;pass<2;++pass){
+    for(uint8_t i=0;i<gameCount;++i){
+      const Game &g=games[i];
+      if(!rearFollows(g.id) ||
+         (g.state!="LIVE"&&g.state!="CRIT") ||
+         g.intermission || !g.ppDataKnown || !g.ppSide ||
+         uint32_t(now-g.ppUpdatedAt)>80000UL)continue;
+      if(pass==0 && !isArmedGame(g.id))continue;
+      if(pass==1 && isArmedGame(g.id))continue;
+      if(!candidate || (isArmedGame(g.id) &&
+           armPriority(g.id)<armPriority(candidate->id)))candidate=&g;
+    }
+    if(candidate)break;
   }
   uint8_t pp=0;
   if(cfg.casePp && candidate && !candidate->intermission &&
@@ -1229,6 +1237,8 @@ void prepareNewScoreboardDate(const String &today) {
     for (auto &entry : stateWatch) entry = StateWatch();
     hasBackgroundOverlay = false;
     for (auto &entry : ppSessions) entry.reset();
+    for(auto &id:wledPpStoppedIds)id=0;
+    for(auto &key:wledPpStoppedSessions)key=0;
     armedPpLogSeq = 0;
     for (auto &entry : ppCache) entry = PowerPlaySnapshot();
     for (auto &entry : penaltyLedgers) entry.reset();
@@ -2961,12 +2971,18 @@ bool startWledEvent(CelebrationEngine::Event event,uint32_t color,
 bool wledPpSuppressed(uint32_t gameId){
   for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i){
     if(wledPpStoppedIds[i]!=gameId)continue;
-    PowerPlayLogPolicy::Watch *watch=getPowerPlayLogWatch(gameId);
+    const NhlPowerPlayTracker2::Watch *session=
+        powerPlaySession(gameId,false);
     const Game *g=gameById(gameId);
+    // Manual stop is bound to this PP opportunity, not the whole game.
+    // A label gap leaves suppression intact; a new PP clears it.
     if(!isArmedGame(gameId)||!g ||
        !CelebrationEngine::isLive(g->state.c_str()) ||
-       (watch&&watch->initialized&&watch->side==0)){
-      wledPpStoppedIds[i]=0;return false;
+       !session || !session->side ||
+       session->session!=wledPpStoppedSessions[i]){
+      wledPpStoppedIds[i]=0;
+      wledPpStoppedSessions[i]=0;
+      return false;
     }
     return true;
   }
@@ -2976,10 +2992,15 @@ void suppressArmedPowerPlays(){
   for(uint8_t i=0;i<MultiGameArming::kMaxArmed;++i){
     const uint32_t id=armedGames.ids[i];
     const Game *g=gameById(id);
-    if(id && ((g && CelebrationEngine::isLive(g->state.c_str()) &&
+    const NhlPowerPlayTracker2::Watch *session=
+        powerPlaySession(id,false);
+    if(id && session && session->side &&
+       ((g && CelebrationEngine::isLive(g->state.c_str()) &&
          g->ppDataKnown && g->ppSide) || id==wledActiveGameId &&
-         wledActiveEvent==CelebrationEngine::Event::POWER_PLAY))
+         wledActiveEvent==CelebrationEngine::Event::POWER_PLAY)){
       wledPpStoppedIds[i]=id;
+      wledPpStoppedSessions[i]=session->session;
+    }
   }
 }
 uint8_t currentWledPowerPlay(uint32_t &color,uint32_t &gameId,
