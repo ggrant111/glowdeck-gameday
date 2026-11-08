@@ -151,6 +151,7 @@ struct Settings {
 
 HueBridge::Engine hue; // Independent Hue bridge, never a WLED slot.
 uint32_t hueSeenRevision=0;
+uint32_t hueTestUntil=0;
 Preferences prefs;
 #ifdef GLOWDECK_WAVESHARE_S3
 GameDayS3Display tft;
@@ -7764,6 +7765,7 @@ void registerRoutes() {
     if(deserializeJson(input,server.arg("plain")))return errorResponse("Invalid JSON");
     const String requested=input["event"]|String("goal");
     if(requested=="stop"){
+      hueTestUntil=0;
       hue.stop();
       StaticJsonDocument<80> ok;ok["ok"]=true;sendJson(ok);return;
     }
@@ -7786,6 +7788,8 @@ void registerRoutes() {
       GameEventLog::Type::PREVIEW_WIN:GameEventLog::Type::PREVIEW_LOSS;
     GameEventLog::Entry &row=addPreviewEvent(g,type,team);
     hue.begin(event,teamRgb(team),row.sequence,0);
+    hueTestUntil=event==CelebrationEngine::Event::POWER_PLAY?
+      millis()+9000UL:0;
     row.hue=GameEventLog::Wled::PENDING;
     StaticJsonDocument<100> response;
     response["ok"]=true;response["queued"]=true;
@@ -8953,11 +8957,24 @@ void tickHueCelebrations(){
       ppId=g->id;
       ppColor=teamRgb(g->ppSide==1?g->home:g->away);
       ppSeq=(g->id==selectedGameId)?armedPpLogSeq:0;
+      if(!ppSeq)for(uint8_t row=0;row<gameEventHistory.size();++row){
+        const GameEventLog::Entry *e=gameEventHistory.newest(row);
+        if(e && e->gameId==g->id &&
+           e->type==GameEventLog::Type::POWER_PLAY_START){
+          ppSeq=e->sequence;break;
+        }
+      }
       break;
     }
   }
-  if(hue.event==CelebrationEngine::Event::POWER_PLAY &&
-     (!ppId||hue.gameId!=ppId||hue.color!=ppColor))hue.stop();
+  if(hue.event==CelebrationEngine::Event::POWER_PLAY){
+    if(hue.gameId && (!ppId||hue.gameId!=ppId||hue.color!=ppColor))
+      hue.stop();
+    else if(!hue.gameId && hueTestUntil &&
+            int32_t(now-hueTestUntil)>=0){
+      hueTestUntil=0;hue.stop();
+    }
+  }
   static uint32_t lastPpAttempt=0;
   if(ppId&&hue.idle()&&uint32_t(now-lastPpAttempt)>=8000UL){
     lastPpAttempt=now;
