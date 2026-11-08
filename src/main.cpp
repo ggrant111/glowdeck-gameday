@@ -47,6 +47,7 @@
 #include "NhlPowerPlayEvidence.h"
 #include "NhlPenaltyLedger.h"
 #include "NhlPowerPlayTracker2.h"
+#include "NhlPowerPlayPresentation.h"
 #include "NhlLiveTicker.h"
 #include "NhlOnIce.h"
 #include "EventOverlay.h"
@@ -1124,13 +1125,22 @@ void observePowerPlayEvents() {
     if((!followed&&!cfg.displayAllLiveEvents) ||
        (g.state!="LIVE"&&g.state!="CRIT"))continue;
     if(change.ended){
-      const String &team=change.ended==1?g.home:g.away;
+      // change.ended is the team that HAD the power play. The opponent
+      // served the penalty and is the one BACK AT FULL STRENGTH.
+      // Use that club consistently for the official logo, team colors,
+      // display overlay, Activity history and serial diagnostic.
+      const uint8_t shortSide=
+          NhlPowerPlayPresentation::shortHandedSide(change.ended);
+      const String &team=shortSide==1?g.home:g.away;
+      const String &ppTeam=change.ended==1?g.home:g.away;
       const uint32_t seq=addGameEvent(
           g,GameEventLog::Type::POWER_PLAY_END,team,0).sequence;
       queueGameOverlay(&g,EventOverlay::Kind::POWER_PLAY_END,team,seq,true);
       if(g.id==selectedGameId)armedPpLogSeq=0;
-      Serial.printf("[PP2 EVENT] game=%lu session=%lu END %s\n",
-          (unsigned long)g.id,(unsigned long)session->session,team.c_str());
+      Serial.printf("[PP2 EVENT] game=%lu session=%lu END "
+                    "backAtFullStrength=%s previousPP=%s\n",
+          (unsigned long)g.id,(unsigned long)session->session,
+          team.c_str(),ppTeam.c_str());
     }
     if(change.started){
       const String &team=change.started==1?g.home:g.away;
@@ -4532,7 +4542,7 @@ void drawOverlayStatic() {
     case EventOverlay::Kind::POWER_PLAY_START:
       description = String(e.team) + " MAN ADVANTAGE"; break;
     case EventOverlay::Kind::POWER_PLAY_END:
-      description = "BACK AT FULL STRENGTH"; break;
+      description = String(e.team) + " BACK AT FULL STRENGTH"; break;
     case EventOverlay::Kind::GAME_START:
       description = String(e.away) + " VS " + String(e.home); break;
     case EventOverlay::Kind::FINAL_WIN:
@@ -5377,7 +5387,7 @@ String s3OverlaySubtitle(const EventOverlay::Item &e) {
     case EventOverlay::Kind::POWER_PLAY_START:
       return String(e.team)+" HAS THE ADVANTAGE";
     case EventOverlay::Kind::POWER_PLAY_END:
-      return "BACK TO EVEN STRENGTH";
+      return String(e.team)+" BACK AT FULL STRENGTH";
     case EventOverlay::Kind::GAME_START:
       return "THE PUCK HAS DROPPED";
     case EventOverlay::Kind::FINAL_WIN:
