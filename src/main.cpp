@@ -666,7 +666,15 @@ uint8_t detectPowerPlay(JsonVariantConst situation) {
     }
     return false;
   };
-  return NhlPowerPlayEvidence::confirmedSide(hasPP(home), hasPP(away));
+  const uint8_t explicitLabel=NhlPowerPlayEvidence::confirmedSide(
+      hasPP(home),hasPP(away));
+  if(explicitLabel)return explicitLabel;
+  // NHL sometimes omits PP text while still reporting 5v4/4v3. This is
+  // ONLY a candidate: the independent official penalty ledger must agree.
+  // Never interpret six attackers or a pulled goalie as a power play.
+  return NhlPowerPlayEvidence::manpowerCandidate(
+      away["strength"]|-1,home["strength"]|-1,
+      away["goaliePulled"]|false,home["goaliePulled"]|false);
 }
 
 // Never confuse a pulled goalie with a penalized side. The NHL score feed's
@@ -3199,25 +3207,31 @@ void fetchFollowedPowerPlays() {
   NhlPenaltyLedger::Book *book=nullptr;
   uint8_t best=0;
   const LiveCarousel::Page visible=currentCarouselPage();
+  uint32_t winningUrgency=0;
   for(uint8_t i=0;i<gameCount;++i) {
     Game &g=games[i];
-    if (g.state!="LIVE" && g.state!="CRIT")continue;
+    if(g.state!="LIVE" && g.state!="CRIT")continue;
     if(g.intermission)continue;
     const bool shown=screen==Screen::LIVE &&
         visible.kind==LiveCarousel::Kind::GAME && visible.index==i;
-    if(!rearFollows(g.id) && !shown && !cfg.displayAllLiveEvents)continue;
+    if(!rearFollows(g.id)&&!shown&&!cfg.displayAllLiveEvents)continue;
     NhlPenaltyLedger::Book *candidate=penaltyLedger(g.id);
     if(!candidate)continue;
-    if(candidate->loaded &&
-       uint32_t(millis()-candidate->checkedAt)<30000UL)continue;
-    // The game visible on the CYD is highest priority for timely PP badges,
-    // followed by the armed game and any additional followed games.
-    const uint8_t priority=shown ? 6 :
-        DisplayEventPolicy::favoriteMatch(
-          cfg.favoriteTeams,g.away.c_str(),g.home.c_str()) ? 5
-        : g.id==selectedGameId ? 3 : rearFollows(g.id) ? 2 : 1;
-    if(priority>best) {
-      best=priority;target=&g;book=candidate;
+    const uint32_t age=candidate->loaded?
+        uint32_t(millis()-candidate->checkedAt):3600000UL;
+    if(candidate->loaded&&age<30000UL)continue;
+    const NhlPowerPlayTracker2::Watch *session=
+        powerPlaySession(g.id,false);
+    // Fair scheduling: a continuously visible carousel cannot starve an
+    // armed PP of official penalty verification for many minutes. Age is
+    // dominant; armed/current-PP sessions break ties and non-followed
+    // league-wide games remain last. No additional HTTPS requests.
+    const uint32_t urgency=age/1000UL*10UL+
+        (isArmedGame(g.id)?45UL:0UL)+
+        (session&&session->side?35UL:0UL)+
+        (shown?20UL:rearFollows(g.id)?10UL:0UL);
+    if(!target||urgency>winningUrgency){
+      winningUrgency=urgency;target=&g;book=candidate;
     }
   }
   if(!target||!book)return;
@@ -3255,6 +3269,13 @@ void fetchFollowedPowerPlays() {
   // localized default string, or the optional servedBy name for bench minors.
   penalty["committedByPlayer"]=true;
   penalty["servedBy"]=true;
+  JsonObject status=filter["situation"].to<JsonObject>();
+  status["homeTeam"]["strength"]=true;
+  status["awayTeam"]["strength"]=true;
+  status["homeTeam"]["goaliePulled"]=true;
+  status["awayTeam"]["goaliePulled"]=true;
+  status["homeTeam"]["situationDescriptions"][0]=true;
+  status["awayTeam"]["situationDescriptions"][0]=true;
   JsonObject scorePeriod = summary["scoring"][0].to<JsonObject>();
   scorePeriod["periodDescriptor"]["number"]=true;
   JsonObject goal=scorePeriod["goals"][0].to<JsonObject>();
@@ -3279,6 +3300,13 @@ void fetchFollowedPowerPlays() {
   }
   const JsonArrayConst penalties=doc["summary"]["penalties"].as<JsonArrayConst>();
   const JsonArrayConst scoring=doc["summary"]["scoring"].as<JsonArrayConst>();
+  const JsonVariantConst landingSituation=doc["situation"];
+  if(!landingSituation.isNull() &&
+     (target->state=="LIVE"||target->state=="CRIT") &&
+     !target->intermission){
+    target->ppCandidate=detectPowerPlay(landingSituation);
+    target->ppSituationKnown=true;
+  }
   if(penalties.isNull() && scoring.isNull())return;
   NhlPenaltyLedger::Book next;
   next.reset(target->id);
@@ -3336,7 +3364,7 @@ void fetchFollowedPowerPlays() {
           team==target->away ? 2 : 0;
       const char *when=goal["timeInPeriod"]|"";
       // Keep verified PP event eligibility exactly as it was before ticker.
-      if(!strcmp(strength,"pp") || !strcmp(strength,"PP"))
+      if(NhlLiveTicker::isPowerPlayGoal(strength))
         next.addPpGoal(p,when,scoringSide);
       if(tickerTargetVisible) {
         uint16_t elapsed=0;
@@ -3544,13 +3572,15 @@ void pollNhl() {
     g.period = item["periodDescriptor"]["number"] | 0;
     g.clock = item["clock"]["timeRemaining"].as<String>();
     g.intermission = item["clock"]["inIntermission"] | false;
-    // Reset PP state every NHL poll before applying the fresh situation or
-    // a bounded fallback snapshot. Never reuse stale values from Game[] RAM.
-    g.ppSide = 0;
-    g.ppCandidate = 0;
-    g.ppSituationKnown = false;
-    g.ppDataKnown = false;
-    g.ppUpdatedAt = 0;
+    // Reset only RAW situation input, never the verified PP session/output.
+    // Array positions can reorder; tracker state is independently game-ID
+    // keyed. Any stale cached output is replaced by syncPowerPlayOutput().
+    if(priorId!=g.id){
+      g.ppSide=0;g.ppDataKnown=false;g.ppUpdatedAt=0;
+      g.ppSession=0;g.ppPhase=NhlPowerPlayTracker2::Phase::IDLE;
+    }
+    g.ppCandidate=0;
+    g.ppSituationKnown=false;
     g.emptyNetSide = 0;
     g.emptyNetKnown = false;
     g.emptyNetUpdatedAt = 0;
