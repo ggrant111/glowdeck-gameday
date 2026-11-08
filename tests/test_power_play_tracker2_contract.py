@@ -33,6 +33,8 @@ assert 'session->session!=wledPpStoppedSessions[i]' in s
 assert 'if(!target||urgency>winningUrgency)' in s
 assert 'const uint32_t age=candidate->loaded?' in s
 assert 'session->side?35UL' in s
+assert 'uint32_t(millis()-nhlLastSuccessAt)<=90000UL' in s
+assert 'withholding stale-clock PP confirmation' in s
 assert 'drawS3ArenaFitted("PP NEXT: "' in s
 assert 'tft.drawString("PP NEXT",x+31,152,1);' in s
 assert 'server.on("/api/pp-tracker",HTTP_GET,[](){' in s
