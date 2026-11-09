@@ -24,7 +24,7 @@ The deployment job uses **GitHub Pages** so the installer HTML, manifest and fac
 
 **If Pages has not yet been configured**, open repository **Settings → Pages → Build and deployment** and select **GitHub Actions** as the source. This is a **one-time owner setting**. The release workflow's `deploy-installer` job will fail until Pages is enabled. Do not assume the installer URL is live just because the release step passed.
 
-After Pages is enabled, use **Actions → Release GameDay firmware and ESP Web installer → Run workflow** and supply the **same version from `release/VERSION`** only if that version does **not** already have a published release. For an already published version whose release succeeded but Pages failed, re-running the full workflow deliberately rejects an existing tag/release to preserve immutable assets; publish a **new version** or deploy a previously saved `glowdeck-web-installer-site` workflow artifact using a dedicated Pages deployment. Do not silently overwrite release binaries.
+After enabling Pages, open the **failed run** in **Actions → Release GameDay firmware and ESP Web installer** and select **Re-run failed jobs**. This reruns **only** the failed `deploy-installer` job with the already validated `glowdeck-web-installer-site` artifact; it does **not** rebuild or replace the published release. **Do not use Re-run all jobs** for an already published tag—the release job deliberately refuses to overwrite immutable published binaries. For a future release, update `release/VERSION` with a new version.
 
 ## Creating the next release
 
