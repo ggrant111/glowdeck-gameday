@@ -10,7 +10,7 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <WiFiClientSecure.h>
-#include <ImprovWiFiLibrary.h>
+#include "GameDayImprovSerial.h"
 #include <qrcode.h>
 #ifdef GLOWDECK_WAVESHARE_S3
 #include "GameDayS3Hardware.h"
@@ -158,7 +158,7 @@ MultiGameArming::Queue huePriorityQueue;
 Preferences prefs;
 // USB Improv Serial: ESP Web Tools provisions home Wi-Fi without joining the setup AP.
 // BLE is not enabled: the same USB serial protocol serves CYD and S3.
-ImprovWiFi improvSerial(&Serial);
+GameDayImprovSerial improvSerial(Serial);
 uint32_t wifiOfflineSince=0;
 bool hotspotSetupShown=false;
 #ifdef GLOWDECK_WAVESHARE_S3
@@ -2058,10 +2058,10 @@ bool connectImprovWifi(const char *ssid,const char *password){
     if(WiFi.status()==WL_CONNECTED && WiFi.SSID()==String(ssid)){
       // The URL placeholder must be reset for each successful reconnect.
 #ifdef GLOWDECK_WAVESHARE_S3
-      improvSerial.setDeviceInfo(ImprovTypes::CF_ESP32_S3,
+      improvSerial.setDeviceInfo(GameDayImprovSerial::ESP32_S3,
         "GlowDeck GameDay","setup-1","GlowDeck GameDay","http://{LOCAL_IPV4}/");
 #else
-      improvSerial.setDeviceInfo(ImprovTypes::CF_ESP32,
+      improvSerial.setDeviceInfo(GameDayImprovSerial::ESP32,
         "GlowDeck GameDay","setup-1","GlowDeck GameDay","http://{LOCAL_IPV4}/");
 #endif
       return true;
@@ -2085,19 +2085,22 @@ void savedImprovWifi(const char *ssid,const char *password){
   // Request the normal connected transition and refresh the setup display.
   wifiWasConnected=false;
   mdnsAttempted=false;
+  // Normal first-run behavior: leave QR setup when USB provisioning succeeds.
+  if(screen==Screen::SETUP)screen=Screen::LIVE;
+  hotspotSetupShown=false;
   needsDraw=true;
 }
 void setupImprovSerial(){
 #ifdef GLOWDECK_WAVESHARE_S3
-  const auto family=ImprovTypes::CF_ESP32_S3;
+  const auto family=GameDayImprovSerial::ESP32_S3;
 #else
-  const auto family=ImprovTypes::CF_ESP32;
+  const auto family=GameDayImprovSerial::ESP32;
 #endif
   improvSerial.setDeviceInfo(family,"GlowDeck GameDay","setup-1",
                             "GlowDeck GameDay","http://{LOCAL_IPV4}/");
   improvSerial.setCustomConnectWiFi(connectImprovWifi);
   improvSerial.onImprovConnected(savedImprovWifi);
-  improvSerial.onImprovError([](ImprovTypes::Error err){
+  improvSerial.onImprovError([](uint8_t err){
     Serial.printf("[Improv] Provisioning error: %u\n",unsigned(err));
   });
 }
@@ -9000,7 +9003,11 @@ void setup() {
   setupImprovSerial();
   // On a new factory install show the QR instantly instead of an empty
   // scoreboard. Users who already have credentials keep their normal screen.
-  if(cfg.ssid.isEmpty()){screen=Screen::SETUP;hotspotSetupShown=true;}
+  if(WiFi.status()!=WL_CONNECTED){screen=Screen::SETUP;hotspotSetupShown=true;}
+  Serial.printf("[Setup] Wi-Fi: %s, initial screen: %s, QR fallback: %s\n",
+                cfg.ssid.isEmpty()?"not configured":"saved credentials",
+                screen==Screen::SETUP?"SETUP":"LIVE",
+                screen==Screen::SETUP?"visible":"not needed");
   draw();
 #ifdef GLOWDECK_WAVESHARE_S3
   tft.present();
@@ -9165,16 +9172,26 @@ void loop() {
 
   const uint32_t now = millis();
   const bool connected = WiFi.status() == WL_CONNECTED;
-  if(connected){wifiOfflineSince=0;hotspotSetupShown=false;}
-  else {
+  if(connected){
+    wifiOfflineSince=0;
+    // A previously offline controller returns to the regular scoreboard.
+    if(hotspotSetupShown && screen==Screen::SETUP){
+      screen=Screen::LIVE;
+      needsDraw=true;
+    }
+    hotspotSetupShown=false;
+  } else {
     if(!wifiOfflineSince)wifiOfflineSince=now;
-    // One-time recovery screen on a lost network; avoid interrupting a
-    // transient Wi-Fi dropout or active NHL event overlay.
-    if(!hotspotSetupShown && !overlayController.active() &&
-       uint32_t(now-wifiOfflineSince)>=20000UL){
+    // If an SSID was saved but unreachable, stay on the setup QR instead of
+    // continuing to cycle empty daily games/standings. Keep the 20s grace for
+    // an in-progress disconnect and never obscure an active NHL overlay.
+    if(!overlayController.active() && screen!=Screen::SETUP &&
+       screen!=Screen::CALIBRATE &&
+       (cfg.ssid.isEmpty() || uint32_t(now-wifiOfflineSince)>=20000UL)){
       hotspotSetupShown=true;
       screen=Screen::SETUP;
       needsDraw=true;
+      Serial.println("[Setup] Offline - presenting hotspot QR recovery");
     }
   }
   if (connected && !wifiWasConnected) {
