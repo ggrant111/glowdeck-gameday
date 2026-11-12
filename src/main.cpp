@@ -2071,7 +2071,7 @@ bool connectImprovWifi(const char *ssid,const char *password){
       improvSerial.setDeviceInfo(ImprovTypes::CF_ESP32_S3,
         "GlowDeck GameDay","setup-1","GlowDeck GameDay","http://{LOCAL_IPV4}/");
 #else
-      improvSerial.setDeviceInfo(GameDayImprovSerial::ESP32,
+      improvSerial.setDeviceInfo(GameDayImprovSerial::CHIP_ESP32,
         "GlowDeck GameDay","setup-1","GlowDeck GameDay","http://{LOCAL_IPV4}/");
 #endif
       return true;
@@ -2104,7 +2104,7 @@ void setupImprovSerial(){
 #ifdef GLOWDECK_WAVESHARE_S3
   const auto family=ImprovTypes::CF_ESP32_S3;
 #else
-  const auto family=GameDayImprovSerial::ESP32;
+  const auto family=GameDayImprovSerial::CHIP_ESP32;
 #endif
   improvSerial.setDeviceInfo(family,"GlowDeck GameDay","setup-1",
                             "GlowDeck GameDay","http://{LOCAL_IPV4}/");
