@@ -65,6 +65,7 @@ jobs:
           python tests/test_wled_phase8d_contract.py
           python tests/test_wled_phase8e_quick_setup_contract.py
           python tests/test_improv_qr_onboarding_contract.py
+          python tests/test_s3_offline_qr_contract.py
           g++ -std=c++11 -Wall -Wextra -Werror -Itests/improv_stubs -Iinclude tests/test_gameday_improv_serial.cpp -o /tmp/gameday-improv-serial
           /tmp/gameday-improv-serial
           python tests/test_s3_live_audio_reliability_contract.py
