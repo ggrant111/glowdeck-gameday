@@ -7,6 +7,7 @@
 #include <TFT_eSPI.h>
 #include <Update.h>
 #include <WebServer.h>
+#include <DNSServer.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <WiFiClientSecure.h>
@@ -184,6 +185,10 @@ SPIClass touchSPI(VSPI);
 XPT2046_Touchscreen touch(PIN_TOUCH_CS, PIN_TOUCH_IRQ);
 #endif
 WebServer server(80);
+// Captive portal replies run on the password-protected setup hotspot only.
+// No new Wi-Fi credential store, background task or listening HTTP port.
+DNSServer captiveDns;
+bool captiveDnsReady=false;
 Game games[MAX_GAMES];
 struct GoalWatch {
   uint32_t id = 0;
@@ -2008,6 +2013,22 @@ bool authorized() {
   server.requestAuthentication(BASIC_AUTH, "GlowDeck",
       "Sign in as admin on home Wi-Fi, or connect to the GlowDeck setup hotspot for password-free dashboard access.");
   return false;
+}
+
+// iOS/Android/Windows request a known HTTP page to detect captive Wi-Fi.
+// Only AP-interface visitors get a redirect, NEVER LAN/admin clients.
+// 302 plus a nonempty response body prompts the OS's captive sign-in window.
+// The OS decides whether/when to open it: QR itself cannot launch a browser.
+void sendCaptiveSetupRedirect() {
+  if (!requestFromSetupAp()) {
+    if (!authorized()) return;
+    server.send(404, "text/plain", "Not found");
+    return;
+  }
+  server.sendHeader("Location", "http://192.168.4.1/");
+  server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  server.send(302, "text/plain",
+              "GlowDeck GameDay setup: open http://192.168.4.1/");
 }
 void sendJson(const JsonDocument &doc, int status = 200) {
   String body;
@@ -6548,6 +6569,16 @@ void handleTouch() {
 }
 
 void registerRoutes() {
+  // Captive-portal detector requests. These redirect to the existing web
+  // dashboard only for verified clients on the GlowDeck setup AP.
+  // Secure/WPA2 join QR, existing home-Wi-Fi Basic auth and routes are intact.
+  static const char *const probePaths[] = {
+    "/generate_204", "/gen_204", "/hotspot-detect.html",
+    "/canonical.html", "/ncsi.txt", "/connecttest.txt",
+    "/redirect", "/fwlink", "/success.txt"
+  };
+  for (const char *path : probePaths)
+    server.on(path, HTTP_GET, sendCaptiveSetupRedirect);
   server.on("/", HTTP_GET, []() {
     if (!authorized()) return;
     server.send_P(200, "text/html; charset=utf-8", WEB_UI);
@@ -8922,6 +8953,13 @@ void registerRoutes() {
     rebootAt = millis() + 900;
   });
   server.onNotFound([]() {
+    // An OS may use alternate/versioned captive detector paths.
+    // Do NOT hijack unknown API endpoints or any home-LAN requests.
+    if(requestFromSetupAp() && server.method()==HTTP_GET &&
+       !server.uri().startsWith("/api/")){
+      sendCaptiveSetupRedirect();
+      return;
+    }
     if (!authorized()) return;
     errorResponse("Not found", 404);
   });
@@ -9024,7 +9062,17 @@ void setup() {
   WiFi.persistent(false);
   WiFi.setSleep(false);
   WiFi.mode(WIFI_AP_STA);
-  if (!WiFi.softAP(apSsid.c_str(), apPassword.c_str())) Serial.println("AP start failed");
+  if (!WiFi.softAP(apSsid.c_str(), apPassword.c_str())) {
+    Serial.println("AP start failed");
+  } else {
+    // Catch-all DNS resolves OS connectivity probes to the setup AP; the
+    // HTTP handlers above then present GameDay instead of a dead Internet
+    // check. If DNS cannot start the normal manual QR flow still works.
+    captiveDns.setErrorReplyCode(DNSReplyCode::NoError);
+    captiveDnsReady=captiveDns.start(53, "*", WiFi.softAPIP());
+    Serial.printf("[Setup Portal] DNS %s | AP %s | http://192.168.4.1/\n",
+                  captiveDnsReady?"ready":"unavailable",apSsid.c_str());
+  }
   registerRoutes();
   beginStation();
   setupImprovSerial();
@@ -9178,6 +9226,9 @@ void tickHueCelebrations(){
 }
 
 void loop() {
+  // Process one DNS packet per iteration without a blocking captive task.
+  // Ignore STA/LAN HTTP requests outside the existing authenticated routes.
+  if(captiveDnsReady)captiveDns.processNextRequest();
   // Handle Improv frames from ESP Web Tools in the normal loop. It shares
   // Serial with diagnostics; never echo supplied Wi-Fi passwords.
   for(uint8_t i=0;i<32 && Serial.available();++i)
