@@ -13,13 +13,13 @@ def validate(root: Path):
     assert manifest["name"] == "GlowDeck GameDay"
     assert manifest["version"].startswith("v")
     assert manifest["new_install_prompt_erase"] is True
-    assert manifest["new_install_improv_wait_time"] == 0
+    assert 10 <= manifest["new_install_improv_wait_time"] <= 30
     builds = {b["chipFamily"]: b for b in manifest["builds"]}
     assert set(builds) == {"ESP32", "ESP32-S3"}, builds
     for family, boot_addr, size in (("ESP32", 0x1000, 4 * 1024**2),
                                    ("ESP32-S3", 0, 16 * 1024**2)):
         build = builds[family]
-        assert build["improv"] is False
+        assert build["improv"] is True
         assert len(build["parts"]) == 1
         part = build["parts"][0]
         assert part["offset"] == 0
