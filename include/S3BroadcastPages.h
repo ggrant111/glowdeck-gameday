@@ -289,7 +289,7 @@ void drawS3CSetup(){
   drawS3CHeader(nullptr,"DEVICE SETUP");
   tft.fillRect(12,56,456,145,S3C_SURFACE);
   tft.setTextDatum(ML_DATUM);
-  if(WiFi.status()!=WL_CONNECTED){
+  if(!setupWifiOnline()){
     // Phase 6C is the default Waveshare S3 renderer. Unlike the old Phase 5
     // drawS3Setup(), this screen was missing its offline hotspot QR entirely.
     // Keep the same 3px modules, four-module quiet zone, SSID and password
