@@ -11,8 +11,8 @@
 
 class GameDayImprovSerial {
  public:
-  enum ChipFamily : uint8_t { ESP32 = 0, ESP32_C3 = 1, ESP32_S2 = 2,
-                              ESP32_S3 = 3, ESP8266 = 4 };
+  enum ChipFamily : uint8_t { CHIP_ESP32 = 0, CHIP_ESP32_C3 = 1, CHIP_ESP32_S2 = 2,
+                              CHIP_ESP32_S3 = 3, CHIP_ESP8266 = 4 };
   using ConnectCallback = bool (*)(const char *,const char *);
   using ConnectedCallback = void (*)(const char *,const char *);
   using ErrorCallback = void (*)(uint8_t);
@@ -65,7 +65,7 @@ class GameDayImprovSerial {
   Stream &io_;
   uint8_t buffer_[10+kMaxRpcBytes]={};
   size_t position_=0;
-  ChipFamily family_=ESP32;
+  ChipFamily family_=CHIP_ESP32;
   const char *firmware_="GlowDeck GameDay",*version_="unknown",
              *name_="GlowDeck GameDay",*url_="http://{LOCAL_IPV4}/";
   ConnectCallback connect_=nullptr;
