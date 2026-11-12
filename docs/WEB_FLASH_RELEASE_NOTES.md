@@ -2,6 +2,12 @@
 
 This release makes it possible to install the GameDay firmware on an **original ESP32-2432S028R (CYD)** or **Waveshare ESP32-S3-Touch-LCD-3.5 (ST7796)** using a USB cable and a desktop browser with ESP Web Tools.
 
+## QR-to-dashboard captive portal
+
+This release adds an optional **captive portal** for both CYD and Waveshare S3 hotspot joins. The on-device Wi-Fi QR codes remain unchanged and continue to prompt the phone's network join confirmation. After the phone joins the WPA2 GlowDeck setup AP, the firmware answers DNS connectivity probes from the AP with the setup IP and redirects known Android/iOS/Windows/Firefox HTTP captive-detection paths to the existing dashboard at `http://192.168.4.1/`. The OS *may* open a compact sign-in browser automatically. This is not a guaranteed browser launch; some systems suppress captive detection and still require entering the URL manually.
+
+Only clients confirmed to be on the setup AP interface receive a captive redirect. Home-LAN Basic authentication, API paths, Wi-Fi settings storage, existing WLED/Hue/NHL services, and Improv USB setup are unchanged. A failed DNS listener still leaves the hotspot QR and manual URL available. The active S3 Phase 6C QR and original CYD QR remain untouched. Physical iOS/Android behavior must be verified before considering captive onboarding complete.
+
 ## S3 router-reboot hotspot QR correction
 
 **Observed on physical devices:** after restarting the home router and rebooting both controllers, the original CYD displayed a working hotspot join QR code, while the Waveshare S3 did not. The root cause was a renderer mismatch: S3's active **Phase 6C** setup screen (`drawS3CSetup`) omitted the QR branch, although the unused Phase 5 `drawS3Setup` already had it. The S3 Phase 6C renderer now draws the same WPA2 hotspot QR and setup instructions as the CYD whenever home Wi-Fi is disconnected, preserving the 480×320 layout and touch controls. A dedicated test verifies the actual active renderer, not merely that some other QR helper exists. The tested S3 USB Improv provisioning library is unchanged. Router-reboot QR scanning still requires a new physical hardware test.
