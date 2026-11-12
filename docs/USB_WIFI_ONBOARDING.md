@@ -43,7 +43,8 @@ The camera **cannot silently force a network connection**; confirming the join p
 
 ## Implementation and compatibility
 
-- Uses [Improv Wi-Fi Serial](https://www.improv-wifi.com/serial/) with `jnthas/Improv WiFi Library@0.0.4`. No BLE or secondary UART required.
+- Uses [Improv Wi-Fi Serial](https://www.improv-wifi.com/serial/). **Waveshare S3** retains the original `jnthas/Improv WiFi Library@0.0.4` over native USB CDC, as confirmed working on physical hardware. **Original CYD** uses `GameDayImprovSerial.h`, a small, checked serial-frame handler over the CYD USB-UART bridge. The separate CYD implementation resets its parser before acting on each RPC, avoiding loss of the first byte in the next installer command. No BLE or secondary UART required.
+- A regression test passes consecutive **state → info → networks → Wi-Fi settings** serial frames and checks checksum recovery, while the CYD display's offline redraw path forces the QR setup screen instead of the empty NHL carousel. The **S3 working path is intentionally unchanged**.
 - Calls `improvSerial.handleSerial()` regularly from the main loop, bounded to up to 32 bytes per iteration. No new background service and no new user-facing HTTP API.
 - A Wi-Fi attempt is bounded to 12 seconds; during active WLED celebrations, DDP streams, or pending restores, re-provisioning is rejected rather than interrupting lighting restoration.
 - A failed connection attempts to restore previously saved Wi-Fi; only success updates `cfg.ssid`, `cfg.wifiPassword` and their two existing NVS keys. All other preferences remain unchanged.
