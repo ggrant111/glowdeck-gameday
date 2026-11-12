@@ -18,6 +18,12 @@ Supported chip/board pairs are original **ESP32-2432S028R / ESP32** and **Wavesh
 
 [Upstream ESP Web Tools](https://esphome.github.io/esp-web-tools/) explains required HTTPS/Web Serial, manifests and merged ESP32 images.
 
+## Guided Wi-Fi setup with Improv Serial
+
+Newer releases embed the Improv Wi-Fi serial protocol in both supported firmware variants and set `improv: true` for both builds in the ESP Web Tools manifest. After a successful factory flash, keep USB connected: ESP Web Tools offers **Configure Wi-Fi**, transfers the 2.4 GHz network credentials locally over USB, and then presents **Visit device** with GameDay's LAN address. No switch to the ESP32 hotspot is needed in this preferred route. The installer waits up to 20 seconds for the device to start and advertise Improv.
+
+When Wi-Fi is not working, GameDay displays a **WPA2 hotspot QR code** on its own touchscreen. Scanning prompts the phone to join `GlowDeck-XXXXXX`; open `http://192.168.4.1` afterward to configure home Wi-Fi. The hotspot remains a recovery option, not the primary first-install path. Read [full USB and QR guide](USB_WIFI_ONBOARDING.md).
+
 ## First-time GitHub Pages enablement (repository owner)
 
 The deployment job uses **GitHub Pages** so the installer HTML, manifest and factory firmware are served from **one HTTPS origin**, avoiding cross-origin binary-download problems. GitHub **Releases** independently holds downloadable factory/OTA assets.
