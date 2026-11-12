@@ -25,7 +25,7 @@ assert "jnthas/Improv WiFi Library@0.0.4" not in cyd_section
 # second RPC when ESP Web Tools asks state, info, networks, then Wi-Fi.
 assert '#include "GameDayImprovSerial.h"' in source
 assert "GameDayImprovSerial improvSerial(Serial);" in source
-assert "GameDayImprovSerial::ESP32" in source
+assert "GameDayImprovSerial::CHIP_ESP32" in source
 assert "position_=0;" in host and "handleRpc(&buffer_[9],buffer_[8]);" in host
 assert "void handleSerial()" in host
 assert "case 2:" in host and "case 3:" in host and "case 4:" in host
