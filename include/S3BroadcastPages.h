@@ -289,14 +289,29 @@ void drawS3CSetup(){
   drawS3CHeader(nullptr,"DEVICE SETUP");
   tft.fillRect(12,56,456,145,S3C_SURFACE);
   tft.setTextDatum(ML_DATUM);
-  drawS3CText("NETWORK",25,74,200,2,S3C_ACCENT);
-  const String ssid=cfg.ssid.isEmpty()?String("Not configured"):cfg.ssid;
-  drawS3CText("Wi-Fi: "+ssid,25,102,410,2,WHITE);
-  drawS3CText("IP: "+localAddress(),25,124,420,2,WHITE);
-  drawS3CText("GLOWDECK HOTSPOT",25,151,300,2,S3C_ACCENT);
-  drawS3CText("AP: "+apSsid,25,175,235,2,WHITE);
-  tft.setTextDatum(MR_DATUM);
-  drawS3CText("KEY: "+apPassword,456,175,200,2,S3C_MUTED);
+  if(WiFi.status()!=WL_CONNECTED){
+    // Phase 6C is the default Waveshare S3 renderer. Unlike the old Phase 5
+    // drawS3Setup(), this screen was missing its offline hotspot QR entirely.
+    // Keep the same 3px modules, four-module quiet zone, SSID and password
+    // used by the now hardware-verified CYD recovery screen.
+    drawS3CText("HOME WI-FI OFFLINE",25,76,285,2,S3C_ACCENT);
+    drawS3CText("Scan QR with your phone",25,105,295,2,WHITE);
+    drawS3CText("AP: "+apSsid,25,132,295,2,WHITE);
+    drawS3CText("Open 192.168.4.1",25,158,295,2,S3C_ACCENT);
+    drawS3CText("KEY: "+apPassword,25,184,295,2,S3C_MUTED);
+    // x=337 + (29 QR modules + eight-module quiet-zone) * 3 = 448.
+    // The entire white 111x111 panel fits inside the 456x145 setup card.
+    drawHotspotJoinQr(337,73,3);
+  }else{
+    drawS3CText("NETWORK",25,74,200,2,S3C_ACCENT);
+    const String ssid=cfg.ssid.isEmpty()?String("Not configured"):cfg.ssid;
+    drawS3CText("Wi-Fi: "+ssid,25,102,410,2,WHITE);
+    drawS3CText("IP: "+localAddress(),25,124,420,2,WHITE);
+    drawS3CText("GLOWDECK HOTSPOT",25,151,300,2,S3C_ACCENT);
+    drawS3CText("AP: "+apSsid,25,175,235,2,WHITE);
+    tft.setTextDatum(MR_DATUM);
+    drawS3CText("KEY: "+apPassword,456,175,200,2,S3C_MUTED);
+  }
   const S3NativeLayout::Rect b[3]={
     S3NativeLayout::kSetupTest,
     S3NativeLayout::kSetupTouchCheck,
