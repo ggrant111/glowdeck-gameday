@@ -43,7 +43,7 @@
   <main>
     <div class="brand"><span aria-hidden="true">🏒</span> GLOWDECK GAMEDAY</div>
     <h1>Install GameDay<br>directly from your browser.</h1>
-    <p class="lead">Connect your compatible ESP32 touchscreen to a computer via USB, choose its serial port, and install the matching NHL GameDay firmware. No PlatformIO setup required for a <strong>new installation</strong>.</p>
+    <p class="lead">Connect your ESP32 to your computer, install the firmware, then enter your home Wi-Fi <strong>in the same installer</strong>. Once connected, open GameDay directly—no hotspot switch required for normal setup.</p>
     <span class="pill">ESP WEB TOOLS · BETA</span>
     <span class="pill" id="version">Version: loading…</span>
 
@@ -67,25 +67,29 @@
     </section>
 
     <section class="card" aria-labelledby="install-title">
-      <h2 id="install-title">USB factory installation</h2>
+      <h2 id="install-title">3-step guided setup</h2>
       <div class="warning">
         <strong>Factory flashing may erase your settings.</strong> The combined image includes the partition table and writes blank padding across saved NVS settings. This installer is meant for a new or intentionally reset device. If GameDay is already working, use <strong>Device → Firmware &amp; Maintenance</strong> on its local dashboard with the board's <code>-ota.bin</code> release asset instead.
       </div>
       <ol>
-        <li>Use a desktop computer with <strong>Chrome or Edge</strong> and an actual USB <strong>data</strong> cable. Safari/iPhone/iPad and mobile browsers cannot use USB Web Serial for this installer.</li>
-        <li>Close any serial monitor, PlatformIO upload, or other app already using the device's port.</li>
-        <li>Click <strong>Connect &amp; install</strong>, choose the connected ESP serial port, and approve the browser permission prompt.</li>
-        <li>Confirm the board choice and installation/erase prompts in the ESP Web Tools dialog. Wait for flashing and reboot to finish; do not disconnect USB while writing.</li>
-        <li>On the GameDay touchscreen, open <strong>SETUP</strong>. Join its <code>GlowDeck-XXXXXX</code> Wi-Fi network using the password shown on the board and browse to <a href="http://192.168.4.1" target="_blank" rel="noopener">http://192.168.4.1</a> to configure home Wi-Fi.</li>
+        <li><strong>Install firmware:</strong> Connect your original CYD or Waveshare S3 3.5 via a USB data cable to desktop Chrome/Edge. Click <strong>Connect &amp; install</strong>, select its serial port and confirm the factory-flash prompt.</li>
+        <li><strong>Connect home Wi-Fi:</strong> Leave the USB cable plugged in after the board reboots. ESP Web Tools should automatically display its <strong>Configure Wi-Fi</strong> step. Select or enter the <strong>2.4 GHz Wi-Fi</strong> name and password, then connect. The device saves the credentials only after successfully joining your network.</li>
+        <li><strong>Open GameDay:</strong> On successful Wi-Fi connection, use the <strong>Visit device</strong> link in ESP Web Tools to finish configuration and choose your NHL games, lighting and audio settings.</li>
       </ol>
-      <esp-web-install-button manifest="./manifest.json">
-        <button slot="activate" class="action">Connect &amp; install GameDay</button>
+      <p class="caption">Wi-Fi setup uses the open Improv Serial protocol over USB. Neither your Wi-Fi password nor setup data is sent to the GitHub Pages website; the browser transfers it directly to your connected ESP32. This requires the latest GameDay firmware with Improv enabled.</p>
+     <esp-web-install-button manifest="./manifest.json">
+        <button slot="activate" class="action">Install &amp; set up GameDay</button>
         <p slot="unsupported" class="warning">This browser does not support Web Serial. Open this page in desktop Chrome or Edge with the ESP32 plugged in via USB. iOS browsers cannot flash it.</p>
         <p slot="not-allowed" class="warning">Browser serial access requires HTTPS and a secure context. Open the published GitHub Pages installer URL.</p>
       </esp-web-install-button>
       <p class="caption">Installing requires a physical USB connection to the ESP32 on this computer. It cannot flash a remote ESP32 or directly flash through an iPhone.</p>
     </section>
 
+    <section class="card" aria-labelledby="recovery-title">
+      <h2 id="recovery-title">No USB Wi-Fi prompt? Use the on-screen QR code.</h2>
+      <p class="muted">Whenever GameDay has no working home Wi-Fi connection, its <strong>SETUP</strong> screen displays a QR code for the password-protected <code>GlowDeck-XXXXXX</code> hotspot. Scan it with your phone camera, accept the phone's <strong>Join Wi-Fi</strong> prompt, then browse to <a href="http://192.168.4.1">http://192.168.4.1</a> to enter your home Wi-Fi credentials.</p>
+      <p class="caption">The QR code joins the ESP32's hotspot, not your home router. Phones require confirmation before joining a network; they cannot be forced to connect silently. This recovery path also works later if the home Wi-Fi password changes.</p>
+    </section>
     <section class="card">
       <h2>Already running GameDay?</h2>
       <p class="muted">Use the board's authenticated local web dashboard for an OTA update to preserve its NVS settings and S3 LittleFS sound files, provided you are not changing its partition layout. Get the <code>-ota.bin</code> matching your exact model from the GitHub release.</p>
