@@ -2,6 +2,12 @@
 
 This release makes it possible to install the GameDay firmware on an **original ESP32-2432S028R (CYD)** or **Waveshare ESP32-S3-Touch-LCD-3.5 (ST7796)** using a USB cable and a desktop browser with ESP Web Tools.
 
+## New guided onboarding
+
+The hosted ESP Web Tools installer now continues after flashing with a **Configure Wi-Fi** prompt over USB (Improv Serial) and a **Visit device** link to the dashboard. Users do not need to join the setup hotspot during the normal installation. When home Wi-Fi is unavailable, both CYD and Waveshare S3 show a scannable **GlowDeck hotspot QR code** on the touchscreen; accept the phone's Join prompt and open `http://192.168.4.1` as a backup. The QR does not automatically join without OS confirmation.
+
+The 2.4 GHz Wi-Fi credentials are stored only after successful association. Failed attempts do not overwrite previously saved credentials. All existing WLED/Hue, NHL eligibility, audio settings and admin authentication remain unchanged. See [USB Wi-Fi onboarding and QR setup](https://github.com/ggrant111/glowdeck-gameday/blob/main/docs/USB_WIFI_ONBOARDING.md). This feature requires a new firmware image; earlier releases do not implement Improv Serial.
+
 ## Which binary should you use?
 
 | Device | Factory flash over USB | Existing device web OTA |
