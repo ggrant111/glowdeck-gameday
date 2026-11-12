@@ -10,7 +10,13 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <WiFiClientSecure.h>
+#ifdef GLOWDECK_WAVESHARE_S3
+// Preserve the already hardware-tested USB-CDC Improv Wi-Fi implementation.
+#include <ImprovWiFiLibrary.h>
+#else
+// Original CYD uses a USB-UART bridge; use the corrected RPC frame parser.
 #include "GameDayImprovSerial.h"
+#endif
 #include <qrcode.h>
 #ifdef GLOWDECK_WAVESHARE_S3
 #include "GameDayS3Hardware.h"
@@ -158,7 +164,11 @@ MultiGameArming::Queue huePriorityQueue;
 Preferences prefs;
 // USB Improv Serial: ESP Web Tools provisions home Wi-Fi without joining the setup AP.
 // BLE is not enabled: the same USB serial protocol serves CYD and S3.
+#ifdef GLOWDECK_WAVESHARE_S3
+ImprovWiFi improvSerial(&Serial);
+#else
 GameDayImprovSerial improvSerial(Serial);
+#endif
 uint32_t wifiOfflineSince=0;
 bool hotspotSetupShown=false;
 #ifdef GLOWDECK_WAVESHARE_S3
@@ -2058,7 +2068,7 @@ bool connectImprovWifi(const char *ssid,const char *password){
     if(WiFi.status()==WL_CONNECTED && WiFi.SSID()==String(ssid)){
       // The URL placeholder must be reset for each successful reconnect.
 #ifdef GLOWDECK_WAVESHARE_S3
-      improvSerial.setDeviceInfo(GameDayImprovSerial::ESP32_S3,
+      improvSerial.setDeviceInfo(ImprovTypes::CF_ESP32_S3,
         "GlowDeck GameDay","setup-1","GlowDeck GameDay","http://{LOCAL_IPV4}/");
 #else
       improvSerial.setDeviceInfo(GameDayImprovSerial::ESP32,
@@ -2092,7 +2102,7 @@ void savedImprovWifi(const char *ssid,const char *password){
 }
 void setupImprovSerial(){
 #ifdef GLOWDECK_WAVESHARE_S3
-  const auto family=GameDayImprovSerial::ESP32_S3;
+  const auto family=ImprovTypes::CF_ESP32_S3;
 #else
   const auto family=GameDayImprovSerial::ESP32;
 #endif
@@ -2100,7 +2110,11 @@ void setupImprovSerial(){
                             "GlowDeck GameDay","http://{LOCAL_IPV4}/");
   improvSerial.setCustomConnectWiFi(connectImprovWifi);
   improvSerial.onImprovConnected(savedImprovWifi);
+#ifdef GLOWDECK_WAVESHARE_S3
+  improvSerial.onImprovError([](ImprovTypes::Error err){
+#else
   improvSerial.onImprovError([](uint8_t err){
+#endif
     Serial.printf("[Improv] Provisioning error: %u\n",unsigned(err));
   });
 }
@@ -5798,6 +5812,15 @@ void draw() {
   // Phase 4: every S3 screen uses the native 480x320 canvas.
   // The uploaded GIF itself remains 320x240, centered and unscaled.
   tft.setNativeLayout(true);
+#endif
+#ifndef GLOWDECK_WAVESHARE_S3
+  // CYD offline is an onboarding state, not an empty NHL carousel.
+  // Enforce this on every redraw as a fallback if another UI route changed
+  // screen=LIVE/GAMES while STA was disconnected.
+  if(WiFi.status()!=WL_CONNECTED && screen!=Screen::CALIBRATE){
+    screen=Screen::SETUP;
+    hotspotSetupShown=true;
+  }
 #endif
   if (overlayController.active()) {
 #ifdef GLOWDECK_WAVESHARE_S3
