@@ -72,7 +72,7 @@ void feedAndProcess(GameDayImprovSerial &service,FakeStream &io,
 int main(){
   FakeStream io;
   GameDayImprovSerial service(io);
-  service.setDeviceInfo(GameDayImprovSerial::ESP32,
+  service.setDeviceInfo(GameDayImprovSerial::CHIP_ESP32,
        "GlowDeck GameDay","v2026.11.12","CYD","http://{LOCAL_IPV4}/");
   service.setCustomConnectWiFi(tryConnect);
   service.onImprovConnected(connected);
