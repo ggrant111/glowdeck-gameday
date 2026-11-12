@@ -2024,6 +2024,9 @@ void errorResponse(const char *message, int status = 400) {
 String localAddress() {
   return WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String("Not connected");
 }
+// Read-only status for S3 Phase 6C presentation; its renderer must not
+// perform Wi-Fi calls, allocations or other network state transitions.
+bool setupWifiOnline() { return WiFi.status() == WL_CONNECTED; }
 void beginStation() {
   if (cfg.ssid.isEmpty()) return;
   WiFi.begin(cfg.ssid.c_str(), cfg.wifiPassword.c_str());
