@@ -18,6 +18,8 @@ GlowDeck GameDay supports two ways to finish Wi-Fi setup **without requiring an 
 
 ### Backup path: scan the hotspot QR code
 
+**S3 Phase 6C note:** Earlier beta.2 firmware used a different Waveshare S3 Setup renderer than the one that had received the QR feature. The default Phase 6C renderer now includes the offline QR code, with a white 111×111 scan area and hotspot/network recovery instructions. The original CYD's QR recovery has been confirmed on hardware. Waveshare S3 needs its own phone-scan verification after the new firmware is installed.
+
 If the board cannot connect to home Wi-Fi:
 
 - A **new/factory installation** opens the SETUP screen with a QR code immediately.
