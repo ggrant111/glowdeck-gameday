@@ -88,6 +88,8 @@ jobs:
         run: python tests/check_web_ui.py
       - name: Validate USB Improv onboarding and QR fallback contract
         run: python tests/test_improv_qr_onboarding_contract.py
+      - name: Verify Waveshare S3 active Phase 6C offline hotspot QR
+        run: python tests/test_s3_offline_qr_contract.py
       - name: Test back-to-back CYD Improv serial RPCs using host-side simulation
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Itests/improv_stubs -Iinclude tests/test_gameday_improv_serial.cpp -o /tmp/gameday-improv-serial
