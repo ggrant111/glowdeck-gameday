@@ -5817,7 +5817,8 @@ void draw() {
   // CYD offline is an onboarding state, not an empty NHL carousel.
   // Enforce this on every redraw as a fallback if another UI route changed
   // screen=LIVE/GAMES while STA was disconnected.
-  if(WiFi.status()!=WL_CONNECTED && screen!=Screen::CALIBRATE){
+  if(WiFi.status()!=WL_CONNECTED && screen!=Screen::CALIBRATE &&
+     (hotspotSetupShown || cfg.ssid.isEmpty())){
     screen=Screen::SETUP;
     hotspotSetupShown=true;
   }
