@@ -2,6 +2,10 @@
 
 This release makes it possible to install the GameDay firmware on an **original ESP32-2432S028R (CYD)** or **Waveshare ESP32-S3-Touch-LCD-3.5 (ST7796)** using a USB cable and a desktop browser with ESP Web Tools.
 
+## S3 router-reboot hotspot QR correction
+
+**Observed on physical devices:** after restarting the home router and rebooting both controllers, the original CYD displayed a working hotspot join QR code, while the Waveshare S3 did not. The root cause was a renderer mismatch: S3's active **Phase 6C** setup screen (`drawS3CSetup`) omitted the QR branch, although the unused Phase 5 `drawS3Setup` already had it. The S3 Phase 6C renderer now draws the same WPA2 hotspot QR and setup instructions as the CYD whenever home Wi-Fi is disconnected, preserving the 480×320 layout and touch controls. A dedicated test verifies the actual active renderer, not merely that some other QR helper exists. The tested S3 USB Improv provisioning library is unchanged. Router-reboot QR scanning still requires a new physical hardware test.
+
 ## CYD onboarding correction
 
 **Feedback from physical hardware:** the Waveshare S3 successfully continued to the ESP Web Tools Wi-Fi workflow, but the original 2.8-inch CYD did not. This corrective release **preserves the known-working S3 USB Improv library** and fixes the CYD's consecutive serial RPC handling. It also keeps the **CYD offline** on the scannable hotspot QR setup screen, rather than rotating through empty NHL score/standings pages. Automated host serial-handshake tests and both firmware compiles are required before release. On-device CYD verification is still needed; a successful CI build alone is not proof that every USB/UART bridge works.
