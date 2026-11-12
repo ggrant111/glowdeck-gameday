@@ -43,7 +43,8 @@ assert source.find("setupImprovSerial();") < source.find("void loop()")
 
 # Original CYD must never display empty carousel screens while STA is offline.
 assert "screen=Screen::SETUP;" in source
-assert "if(WiFi.status()!=WL_CONNECTED && screen!=Screen::CALIBRATE)" in source
+assert "if(WiFi.status()!=WL_CONNECTED && screen!=Screen::CALIBRATE &&" in source
+assert "(hotspotSetupShown || cfg.ssid.isEmpty())" in source
 assert 'if(WiFi.status()!=WL_CONNECTED){screen=Screen::SETUP;hotspotSetupShown=true;}' in source
 assert "uint32_t(now-wifiOfflineSince)>=20000UL" in source
 assert source.count("drawHotspotJoinQr(") == 3
