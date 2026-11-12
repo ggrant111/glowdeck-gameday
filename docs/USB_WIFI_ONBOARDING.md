@@ -16,6 +16,14 @@ GlowDeck GameDay supports two ways to finish Wi-Fi setup **without requiring an 
 
 **Important:** An older (pre-Improv) release will still install but will not offer this USB Wi-Fi flow. The manifest's feature flag only works with compatible firmware built with the new serial handler.
 
+### One-scan setup portal: QR join + automatic setup page
+
+Both boards continue to show the same **WPA2 hotspot QR code** (it only encodes the Wi-Fi network and password; it cannot directly open a URL). After a phone scans the code and the user accepts the operating-system **Join Wi-Fi** prompt, GameDay now offers a **captive portal**: a wildcard DNS responder on its setup AP, plus well-known Android/iOS/Windows HTTP connectivity-check endpoints. On supported devices, iOS/Android may automatically display a **Sign in to network / Log In** window that loads the existing GlowDeck setup dashboard at `http://192.168.4.1/`.
+
+This is an **OS-controlled convenience**, not a guaranteed automatic browser launch. Some devices, HTTPS-only policies, disabled captive detection, private DNS, and network switching can suppress or dismiss the popup. If no prompt appears, open **http://192.168.4.1/** manually after the Wi-Fi join. The captive sign-in webview is sometimes temporary; use an ordinary browser for firmware updates.
+
+The WPA2 password, the QR payload, the USB Improv setup, the saved Wi-Fi credentials, and existing dashboard authentication **are unchanged**. The captive HTTP redirect is restricted to clients actually connected to the GlowDeck SoftAP interface; it never redirects home-LAN clients, steals HTTPS sessions, or changes `/api/*` behavior. DNS is processed opportunistically in the device loop and gracefully falls back to the manual setup URL if port 53 cannot be started.
+
 ### Backup path: scan the hotspot QR code
 
 **S3 Phase 6C note:** Earlier beta.2 firmware used a different Waveshare S3 Setup renderer than the one that had received the QR feature. The default Phase 6C renderer now includes the offline QR code, with a white 111×111 scan area and hotspot/network recovery instructions. The original CYD's QR recovery has been confirmed on hardware. Waveshare S3 needs its own phone-scan verification after the new firmware is installed.
