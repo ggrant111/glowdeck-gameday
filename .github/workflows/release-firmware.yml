@@ -64,6 +64,7 @@ jobs:
           python tests/test_nhl_live_ticker_contract.py
           python tests/test_wled_phase8d_contract.py
           python tests/test_wled_phase8e_quick_setup_contract.py
+          python tests/test_improv_qr_onboarding_contract.py
           python tests/test_s3_live_audio_reliability_contract.py
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_hue_color_policy.cpp -o /tmp/hue-policy
           /tmp/hue-policy
