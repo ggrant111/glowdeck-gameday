@@ -2,6 +2,10 @@
 
 This release makes it possible to install the GameDay firmware on an **original ESP32-2432S028R (CYD)** or **Waveshare ESP32-S3-Touch-LCD-3.5 (ST7796)** using a USB cable and a desktop browser with ESP Web Tools.
 
+## CYD onboarding correction
+
+**Feedback from physical hardware:** the Waveshare S3 successfully continued to the ESP Web Tools Wi-Fi workflow, but the original 2.8-inch CYD did not. This corrective release **preserves the known-working S3 USB Improv library** and fixes the CYD's consecutive serial RPC handling. It also keeps the **CYD offline** on the scannable hotspot QR setup screen, rather than rotating through empty NHL score/standings pages. Automated host serial-handshake tests and both firmware compiles are required before release. On-device CYD verification is still needed; a successful CI build alone is not proof that every USB/UART bridge works.
+
 ## New guided onboarding
 
 The hosted ESP Web Tools installer now continues after flashing with a **Configure Wi-Fi** prompt over USB (Improv Serial) and a **Visit device** link to the dashboard. Users do not need to join the setup hotspot during the normal installation. When home Wi-Fi is unavailable, both CYD and Waveshare S3 show a scannable **GlowDeck hotspot QR code** on the touchscreen; accept the phone's Join prompt and open `http://192.168.4.1` as a backup. The QR does not automatically join without OS confirmation.
