@@ -67,7 +67,7 @@ def package(version: str, out: Path) -> None:
         "name": "GlowDeck GameDay",
         "version": version,
         "new_install_prompt_erase": True,
-        "new_install_improv_wait_time": 0,
+        "new_install_improv_wait_time": 20,
         "builds": [],
     }
 
@@ -111,7 +111,7 @@ def package(version: str, out: Path) -> None:
         published.extend((factory_name, ota_name))
         manifest["builds"].append({
             "chipFamily": target["family"],
-            "improv": False,
+            "improv": True,
             "parts": [{"path": "firmware/" + factory_name, "offset": 0}],
         })
         print(f"{target['family']}: {factory_name} ({len(data)} bytes), OTA {app.stat().st_size} bytes")
