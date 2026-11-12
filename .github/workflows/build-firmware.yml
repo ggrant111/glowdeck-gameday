@@ -86,6 +86,8 @@ jobs:
           /tmp/glowdeck-hue
       - name: Validate embedded web dashboard JavaScript
         run: python tests/check_web_ui.py
+      - name: Validate USB Improv onboarding and QR fallback contract
+        run: python tests/test_improv_qr_onboarding_contract.py
       - name: Test arena web portal navigation, controls and centralized Test Lab
         run: python tests/test_web_portal_ux.py
       - name: Test CYD team-color gradient and RGB565 display bounds
