@@ -45,7 +45,7 @@ assert "NoError" in s
 
 # Existing authenticated dashboard/OTA behavior must be intact on home LAN.
 assert 'if (!authorized()) return;\n    server.send_P(200, "text/html; charset=utf-8", WEB_UI);' in s
-assert 'return requestFromSetupAp() ||\n          server.authenticate("admin", cfg.adminPassword.c_str());' in s
+assert re.search(r'return requestFromSetupAp\\(\\)\\s*\\|\\|\\s*server\\.authenticate\\("admin", cfg\\.adminPassword\\.c_str\\(\\)\\);', s)
 notfound=s[s.index("  server.onNotFound([]() {"):s.index("  server.begin();")]
 assert "requestFromSetupAp() && server.method()==HTTP_GET" in notfound
 assert '!server.uri().startsWith("/api/")' in notfound
