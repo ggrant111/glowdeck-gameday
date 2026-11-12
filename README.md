@@ -9,9 +9,10 @@
 **Fastest route for a brand-new board:** The release workflow produces a board-matched **merged factory image** and an HTTPS [GlowDeck USB installer](https://ggrant111.github.io/glowdeck-gameday/) built with [ESP Web Tools](https://esphome.github.io/esp-web-tools/). **The GitHub Pages installer link is available only after the Pages deployment is enabled and succeeds.** If it is unavailable, download your board's matching **`-factory.bin`** from [GitHub Releases](https://github.com/ggrant111/glowdeck-gameday/releases), open the independent [ESP Web Tool flasher](https://esptool.spacehuhn.com/) in desktop Chrome/Edge, connect the USB serial device, and flash that merged factory file at **offset `0x0`**. This also overwrites saved device preferences. Alternatively follow the PlatformIO steps below.
 
 1. Connect the **original CYD** or the **Waveshare S3 ST7796** via USB data cable to a computer running desktop **Chrome or Edge**. This will **not** work from an iPhone or iPad.
-2. Open the HTTPS installer, select **Connect & install GameDay**, choose the correct serial port, and approve the browser prompt. The firmware manifest selects **ESP32** or **ESP32-S3** automatically from the detected chip, but cannot detect an incompatible display variant using the same chip.
-3. Confirm any installation/erase prompt. **A full factory image overwrites stored NVS settings**, even if you skip a separate full-chip erase. Do not use it to upgrade a configured device.
-4. On the touchscreen, open **SETUP**, connect to the displayed `GlowDeck-XXXXXX` Wi-Fi, and open **http://192.168.4.1** to complete home Wi-Fi setup using the steps below.
+2. Open the HTTPS installer and select **Install & set up GameDay**, choose the correct serial port, and approve the browser prompt. The manifest selects **ESP32** or **ESP32-S3** by chip family (but cannot recognize incompatible displays using the same chip).
+3. Confirm the factory-flash/erase prompt. **A full factory image overwrites stored NVS settings**; it is not the right choice for routine upgrades.
+4. **Keep USB connected.** On the new firmware, ESP Web Tools offers **Configure Wi-Fi** directly in the installer using Improv Serial. Enter your 2.4 GHz network name and password. GameDay saves them only after a successful connection, and the installer provides **Visit device** to open the local dashboard.
+5. **Fallback without USB Wi-Fi setup:** If there is no home Wi-Fi, the device's **SETUP** screen displays a scannable hotspot QR code. Scan it with your phone, approve the join prompt, then open **http://192.168.4.1** to configure home Wi-Fi. After a sustained Wi-Fi outage, the screen returns to QR recovery mode automatically.
 
 For devices **already running GameDay**, download the matching **`-ota.bin`** from the release and upload it in **Device → Firmware & Maintenance** instead of choosing a USB factory reinstall. The published release includes both USB factory and OTA files plus checksums. See [release/Pages instructions](docs/WEB_INSTALLER.md) and [GitHub Releases](https://github.com/ggrant111/glowdeck-gameday/releases).
 
@@ -118,8 +119,10 @@ Do not flash the S3 binary onto a CYD or vice versa. If a device boot-loops and 
 
 ## 3. Connect Wi-Fi and open the dashboard
 
-1. On the ESP32 display, open **SETUP** and locate the device's **`GlowDeck-XXXXXX`** Wi-Fi hotspot and its **unique password**.
-2. Connect a phone or computer to that hotspot. The phone may report "No Internet" while connected; that is expected.
+**Preferred option:** After a new USB installation, use the **Configure Wi-Fi → Visit device** steps in ESP Web Tools as described above. **You do not need to switch your computer or phone to the GlowDeck hotspot.** The steps below are for recovery or when USB Improv provisioning is unavailable. See [Guided Wi-Fi onboarding and hotspot QR](docs/USB_WIFI_ONBOARDING.md).
+
+1. On the ESP32 display, open **SETUP** and scan the Wi-Fi QR code. It encodes the unique `GlowDeck-XXXXXX` WPA2 hotspot and password; no manual typing is required.
+2. Approve the phone's **Join Wi-Fi** prompt. The phone may report "No Internet" while connected; that is expected. If the QR is unreadable, enter the hotspot password displayed on the board manually.
 3. Open **http://192.168.4.1** in a browser. Use **HTTP**, not HTTPS. When connecting directly through the device's protected setup hotspot, there is **no additional browser/admin sign-in**.
 4. In **Device → Wi-Fi & Access**, select your normal 2.4 GHz home network and enter its password. Save/apply the connection settings.
 5. After the ESP32 joins your home network, read its **LAN IP address** from the device setup/status screen. Reconnect your phone to your normal home Wi-Fi, then browse to **http://YOUR-ESP32-IP/**.
