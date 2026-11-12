@@ -22,7 +22,7 @@ assert re.search(r'#if defined\(GLOWDECK_S3_PHASE6C_UI\).*?'
 start = pages.index("void drawS3CSetup(){")
 end = pages.index("void drawS3CTouchCheck(){", start)
 setup = pages[start:end]
-offline = re.search(r'if\(WiFi\.status\(\)!=WL_CONNECTED\)\{(.*?)\}\s*else\s*\{',
+offline = re.search(r'if\(!setupWifiOnline\(\)\)\{(.*?)\}\s*else\s*\{',
                     setup, re.S)
 assert offline, "S3 Phase 6C setup requires disconnected Wi-Fi branch"
 assert 'drawHotspotJoinQr(337,73,3);' in offline.group(1), (
@@ -46,6 +46,8 @@ assert 'left+(x+4)*scale' in main and 'top+(y+4)*scale' in main
 qr_width = (29 + 8) * 3
 assert 337 + qr_width <= 468 and 73 + qr_width <= 201, (
     "QR must fit inside S3 Setup card including white quiet zone")
+assert "bool setupWifiOnline() { return WiFi.status() == WL_CONNECTED; }" in main
+assert "WiFi." not in pages, "S3 renderer should not perform network operations"
 assert "ImprovWiFi improvSerial(&Serial);" in main, (
     "Preserve physical S3 USB provisioning confirmed by user")
 print("PASS: production S3 Phase 6C offline QR, recovery, geometry and USB Wi-Fi")
