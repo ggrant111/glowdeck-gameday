@@ -10,6 +10,8 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <WiFiClientSecure.h>
+#include <ImprovWiFiLibrary.h>
+#include <qrcode.h>
 #ifdef GLOWDECK_WAVESHARE_S3
 #include "GameDayS3Hardware.h"
 #include "S3GoalAudio.h"
@@ -154,6 +156,11 @@ uint32_t hueSeenRevision=0;
 uint32_t hueTestUntil=0;
 MultiGameArming::Queue huePriorityQueue;
 Preferences prefs;
+// USB Improv Serial: ESP Web Tools provisions home Wi-Fi without joining the setup AP.
+// BLE is not enabled: the same USB serial protocol serves CYD and S3.
+ImprovWiFi improvSerial(&Serial);
+uint32_t wifiOfflineSince=0;
+bool hotspotSetupShown=false;
 #ifdef GLOWDECK_WAVESHARE_S3
 GameDayS3Display tft;
 GameDayS3Touch touch;
@@ -2011,6 +2018,88 @@ void beginStation() {
   if (cfg.ssid.isEmpty()) return;
   WiFi.begin(cfg.ssid.c_str(), cfg.wifiPassword.c_str());
   reconnectAt = millis();
+}
+
+// Encode the WPA2 hotspot itself (not a URL) so iOS/Android camera scanners
+// offer to join the network. QR data is deterministic and only displayed on
+// physical screens the user can see. Four-module white quiet zone is required.
+void drawHotspotJoinQr(int16_t left,int16_t top,uint8_t scale){
+  const String payload="WIFI:T:WPA;S:"+apSsid+";P:"+apPassword+";;";
+  // Version 3 / low ECC has enough byte-mode capacity for this fixed payload.
+  // Keep a generous fixed scratch allocation on the stack; no dynamic sprite.
+  uint8_t modules[256]={};
+  QRCode qr;
+  if(qrcode_initText(&qr,modules,3,ECC_LOW,payload.c_str())<0){
+    Serial.println("[Setup QR] Unable to encode hotspot");
+    return;
+  }
+  const int16_t side=(qr.size+8)*scale;
+  tft.fillRect(left,top,side,side,WHITE);
+  for(uint8_t y=0;y<qr.size;++y)
+    for(uint8_t x=0;x<qr.size;++x)
+      if(qrcode_getModule(&qr,x,y))
+        tft.fillRect(left+(x+4)*scale,top+(y+4)*scale,scale,scale,0x0000);
+}
+
+// Provision only through a physically attached USB serial port. Never overwrite
+// saved Wi-Fi/password until the new network is actually connected. A failed
+// credential attempt restores the previous station connection when possible.
+bool connectImprovWifi(const char *ssid,const char *password){
+  if(!ssid || !password || !*ssid || strlen(ssid)>32 || strlen(password)>63)
+    return false;
+  if(wledActiveEvent!=CelebrationEngine::Event::NONE)
+    return false; // No network handoff during an active light celebration.
+  for(uint8_t i=0;i<MAX_WLED;++i)
+    if(restoring[i] || wledDdp[i].active) return false;
+  const String oldSsid=cfg.ssid,oldPassword=cfg.wifiPassword;
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.begin(ssid,password);
+  for(uint8_t i=0;i<48;++i){ // bounded 12 seconds for DHCP + association
+    if(WiFi.status()==WL_CONNECTED && WiFi.SSID()==String(ssid)){
+      // The URL placeholder must be reset for each successful reconnect.
+#ifdef GLOWDECK_WAVESHARE_S3
+      improvSerial.setDeviceInfo(ImprovTypes::CF_ESP32_S3,
+        "GlowDeck GameDay","setup-1","GlowDeck GameDay","http://{LOCAL_IPV4}/");
+#else
+      improvSerial.setDeviceInfo(ImprovTypes::CF_ESP32,
+        "GlowDeck GameDay","setup-1","GlowDeck GameDay","http://{LOCAL_IPV4}/");
+#endif
+      return true;
+    }
+    delay(250);
+  }
+  if(oldSsid.length())WiFi.begin(oldSsid.c_str(),oldPassword.c_str());
+  else WiFi.disconnect(false);
+  return false;
+}
+void savedImprovWifi(const char *ssid,const char *password){
+  if(!ssid || !password)return;
+  cfg.ssid=ssid;
+  cfg.wifiPassword=password;
+  // Only write the two existing wifi keys: don't overwrite Hue, WLED, audio,
+  // arming or admin configuration in the rest of Preferences.
+  prefs.putString("ssid",cfg.ssid);
+  prefs.putString("wpass",cfg.wifiPassword);
+  Serial.printf("[Improv] Home Wi-Fi provisioned: %s (%s)\n",
+                cfg.ssid.c_str(),WiFi.localIP().toString().c_str());
+  // Request the normal connected transition and refresh the setup display.
+  wifiWasConnected=false;
+  mdnsAttempted=false;
+  needsDraw=true;
+}
+void setupImprovSerial(){
+#ifdef GLOWDECK_WAVESHARE_S3
+  const auto family=ImprovTypes::CF_ESP32_S3;
+#else
+  const auto family=ImprovTypes::CF_ESP32;
+#endif
+  improvSerial.setDeviceInfo(family,"GlowDeck GameDay","setup-1",
+                            "GlowDeck GameDay","http://{LOCAL_IPV4}/");
+  improvSerial.setCustomConnectWiFi(connectImprovWifi);
+  improvSerial.onImprovConnected(savedImprovWifi);
+  improvSerial.onImprovError([](ImprovTypes::Error err){
+    Serial.printf("[Improv] Provisioning error: %u\n",unsigned(err));
+  });
 }
 
 bool postWled(const String &ip, const String &body) {
@@ -5589,6 +5678,20 @@ void drawS3SetupNav() {
 void drawS3Setup() {
   tft.fillScreen(S3_BG);
   drawS3Header(nullptr,"DEVICE SETUP");
+  if(WiFi.status()!=WL_CONNECTED){
+    tft.fillRoundRect(12,56,456,145,10,S3_CARD);
+    tft.setTextDatum(ML_DATUM);
+    tft.setTextColor(S3_AQUA,S3_CARD);
+    tft.drawString("CONNECT TO WI-FI",25,78,2);
+    tft.setTextColor(WHITE,S3_CARD);
+    tft.drawString("Scan QR with your phone",25,106,2);
+    tft.drawString(apSsid,25,132,2);
+    tft.setTextColor(S3_MUTED,S3_CARD);
+    tft.drawString("Then open 192.168.4.1",25,159,2);
+    tft.drawString("Or set up Wi-Fi by USB",25,183,2);
+    tft.setTextDatum(TL_DATUM);
+    drawHotspotJoinQr(337,73,3);
+  } else {
   tft.fillRoundRect(12,56,456,145,10,S3_CARD);
   tft.setTextDatum(ML_DATUM);
   tft.setTextColor(S3_AQUA,S3_CARD);
@@ -5607,6 +5710,7 @@ void drawS3Setup() {
   tft.setTextDatum(MR_DATUM);
   tft.setTextColor(S3_MUTED,S3_CARD);
   tft.drawString("KEY: "+apPassword,456,174,2);
+  }
   tft.setTextDatum(MC_DATUM);
   const S3NativeLayout::Rect b[3]={
     S3NativeLayout::kSetupTest,
@@ -5895,11 +5999,20 @@ void draw() {
       tft.setTextDatum(TL_DATUM);
     }
   } else if (screen == Screen::SETUP) {
-    textAt("Web setup", 12, 43, WHITE, 4);
-    textAt("Network: " + (cfg.ssid.isEmpty() ? String("Not configured") : cfg.ssid), 12, 76, MUTED);
-    textAt("IP: " + localAddress(), 12, 97, MUTED);
-    textAt("AP: " + apSsid, 12, 118, MUTED);
-    textAt("AP password: " + apPassword, 12, 138, WHITE);
+    if(WiFi.status()!=WL_CONNECTED){
+      textAt("Join hotspot",12,44,WHITE,2);
+      textAt("Scan with phone",12,69,MUTED,2);
+      textAt(apSsid,12,95,WHITE,2);
+      textAt("Then open:",12,119,MUTED,2);
+      textAt("192.168.4.1",12,140,WHITE,2);
+      drawHotspotJoinQr(198,42,3);
+    } else {
+      textAt("Web setup", 12, 43, WHITE, 4);
+      textAt("Network: " + cfg.ssid, 12, 76, MUTED);
+      textAt("IP: " + localAddress(), 12, 97, MUTED);
+      textAt("AP: " + apSsid, 12, 118, MUTED);
+      textAt("AP password: " + apPassword, 12, 138, WHITE);
+    }
     button(8, 161, 98, 29, "TEST");
     button(111, 161, 98, 29, "TOUCH");
     button(214, 161, 98, 29, "INVERT");
@@ -8884,6 +8997,10 @@ void setup() {
   if (!WiFi.softAP(apSsid.c_str(), apPassword.c_str())) Serial.println("AP start failed");
   registerRoutes();
   beginStation();
+  setupImprovSerial();
+  // On a new factory install show the QR instantly instead of an empty
+  // scoreboard. Users who already have credentials keep their normal screen.
+  if(cfg.ssid.isEmpty()){screen=Screen::SETUP;hotspotSetupShown=true;}
   draw();
 #ifdef GLOWDECK_WAVESHARE_S3
   tft.present();
@@ -9027,6 +9144,10 @@ void tickHueCelebrations(){
 }
 
 void loop() {
+  // Handle Improv frames from ESP Web Tools in the normal loop. It shares
+  // Serial with diagnostics; never echo supplied Wi-Fi passwords.
+  for(uint8_t i=0;i<32 && Serial.available();++i)
+    improvSerial.handleSerial();
   server.handleClient();
   handleTouch();
   tickHorn();
@@ -9044,6 +9165,18 @@ void loop() {
 
   const uint32_t now = millis();
   const bool connected = WiFi.status() == WL_CONNECTED;
+  if(connected){wifiOfflineSince=0;hotspotSetupShown=false;}
+  else {
+    if(!wifiOfflineSince)wifiOfflineSince=now;
+    // One-time recovery screen on a lost network; avoid interrupting a
+    // transient Wi-Fi dropout or active NHL event overlay.
+    if(!hotspotSetupShown && !overlayController.active() &&
+       uint32_t(now-wifiOfflineSince)>=20000UL){
+      hotspotSetupShown=true;
+      screen=Screen::SETUP;
+      needsDraw=true;
+    }
+  }
   if (connected && !wifiWasConnected) {
     wifiWasConnected = true;
     mdnsAttempted = false;
