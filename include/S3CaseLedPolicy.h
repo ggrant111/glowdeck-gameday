@@ -10,7 +10,7 @@
 namespace S3CaseLedPolicy {
 enum class Side : uint8_t { HOME=0, AWAY=1 };
 enum class Event : uint8_t { IDLE=0, GOAL=1, POWER_PLAY=2,
-                              GAME_START=3, FINAL=4, TEST=5, TEST_PP=6 };
+                              GAME_START=3, FINAL=4, TEST=5, TEST_PP=6, SHOOTOUT=7 };
 constexpr uint8_t kDefaultPixels=8;
 constexpr uint8_t kMaxPixels=16;
 constexpr uint8_t kDefaultBrightness=96;
@@ -62,7 +62,7 @@ class Controller {
     c.duration=duration?duration:
         event==Event::GOAL?kDefaultGoalMs:
         event==Event::GAME_START?kStartMs:
-        event==Event::FINAL?kFinalMs:kTestMs;
+        event==Event::FINAL?kFinalMs:event==Event::SHOOTOUT?3200UL:kTestMs;
   }
   Event eventAt(Side side,uint32_t now)const{
     if(!validSide(static_cast<uint8_t>(side)))return Event::IDLE;
@@ -101,6 +101,8 @@ class Controller {
         level=(uint8_t((index*7U)+(elapsed/180UL))%6U)==0U?255:32;
         break;
       case Event::TEST:level=255;break;
+      case Event::SHOOTOUT:
+        level=((elapsed/140UL+index)%4U)==0U?245:20;break;
       default:break;
     }
     const uint8_t scaled=uint8_t(uint16_t(level)*brightness/255U);
