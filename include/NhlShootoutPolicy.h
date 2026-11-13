@@ -15,13 +15,14 @@ inline Attempt classify(const char* period,uint16_t type){
 struct Watch {
   uint32_t gameId=0,lastSort=0;
   uint8_t homeAttempts=0,awayAttempts=0,homeGoals=0,awayGoals=0;
-  bool periodKnown=false,active=false,transitionSeen=false,playsKnown=false;
+  bool periodKnown=false,active=false,entered=false,transitionSeen=false,playsKnown=false;
   void reset(uint32_t id=0){*this=Watch{};gameId=id;}
   bool observe(uint32_t id,bool live,const char*period){
     if(gameId!=id)reset(id);
     const bool now=live&&period&&!strcmp(period,"SO");
-    const bool start=periodKnown&&!active&&now;
-    if(now&&!active){
+    const bool start=periodKnown&&!entered&&now;
+    if(now&&!entered){
+      entered=true;
       transitionSeen=start;playsKnown=false;lastSort=0;
       homeAttempts=awayAttempts=homeGoals=awayGoals=0;
     }
