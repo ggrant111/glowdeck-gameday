@@ -1090,6 +1090,166 @@ bool queueGameOverlay(const Game *g, EventOverlay::Kind kind,
   }
   return admitted;
 }
+
+// A shootout does not increment normal goal statistics. Track transitions and
+// official play-by-play separately, keyed by game ID instead of carousel index.
+NhlShootoutPolicy::Watch &shootoutWatch(uint32_t id){
+  for(auto &w:shootoutWatches)if(w.gameId==id)return w;
+  for(auto &w:shootoutWatches)if(!w.gameId){w.reset(id);return w;}
+  return shootoutWatches[0]; // Game count is bounded by MAX_GAMES.
+}
+void observeShootoutStarts(){
+  for(uint8_t i=0;i<gameCount;++i){
+    const Game &g=games[i];
+    if(!g.id)continue;
+    NhlShootoutPolicy::Watch &w=shootoutWatch(g.id);
+    if(!w.observe(g.id,CelebrationEngine::isLive(g.state.c_str()),
+                  g.periodType.c_str()))continue;
+    const bool followed=rearFollows(g.id);
+    const String &team=cfg.favoriteSide==0?g.home:g.away;
+    GameEventLog::Entry &row=addGameEvent(
+      g,GameEventLog::Type::SHOOTOUT_START,team,0);
+    row.rear=!followed?GameEventLog::Rear::NOT_SELECTED:
+      cfg.rearLedEnabled&&cfg.rearGoal?GameEventLog::Rear::ACTIVE:
+      GameEventLog::Rear::NOT_ENABLED;
+    if(isArmedGame(g.id))
+      queueArmedWledEvent(CelebrationEngine::Event::SHOOTOUT_START,
+        teamRgb(team),row.sequence,WledZonePolicy::kUnknownSide,g.id);
+    if(followed){
+      triggerRearShootout(teamRgb(team),false);
+#ifdef GLOWDECK_WAVESHARE_S3
+      if(cfg.caseLedsEnabled && cfg.caseStart){
+        caseLedFx.trigger(S3CaseLedPolicy::Side::HOME,
+          S3CaseLedPolicy::Event::SHOOTOUT,teamRgb(g.home),millis());
+        caseLedFx.trigger(S3CaseLedPolicy::Side::AWAY,
+          S3CaseLedPolicy::Event::SHOOTOUT,teamRgb(g.away),millis());
+      }
+#endif
+    }
+    if(followed||cfg.displayAllLiveEvents)
+      queueGameOverlay(&g,EventOverlay::Kind::SHOOTOUT_START,
+                       team,row.sequence,true);
+    Serial.printf("[SHOOTOUT] game=%lu entered shootout\n",
+                  (unsigned long)g.id);
+  }
+}
+void signalShootoutAttempt(const Game &g,uint8_t shooter,
+                           NhlShootoutPolicy::Attempt result,
+                           uint32_t sortOrder){
+  const bool goal=result==NhlShootoutPolicy::Attempt::GOAL;
+  const bool save=result==NhlShootoutPolicy::Attempt::SAVE;
+  // Give a save to the defending goalie, NOT the shooter.
+  const uint8_t signalSide=save?(shooter==1?2:1):shooter;
+  const String &team=signalSide==1?g.home:g.away;
+  const bool followed=rearFollows(g.id);
+  const uint32_t color=teamRgb(team);
+  const CelebrationEngine::Event evt=goal?
+    CelebrationEngine::Event::SHOOTOUT_GOAL:save?
+    CelebrationEngine::Event::SHOOTOUT_SAVE:
+    CelebrationEngine::Event::SHOOTOUT_MISS;
+  const EventOverlay::Kind overlay=goal?
+    EventOverlay::Kind::SHOOTOUT_GOAL:save?
+    EventOverlay::Kind::SHOOTOUT_SAVE:
+    EventOverlay::Kind::SHOOTOUT_MISS;
+  const GameEventLog::Type logType=goal?
+    GameEventLog::Type::SHOOTOUT_GOAL:save?
+    GameEventLog::Type::SHOOTOUT_SAVE:
+    GameEventLog::Type::SHOOTOUT_MISS;
+  GameEventLog::Entry &row=addGameEvent(g,logType,team,0);
+  row.rear=!followed?GameEventLog::Rear::NOT_SELECTED:
+    cfg.rearLedEnabled&&cfg.rearGoal?GameEventLog::Rear::ACTIVE:
+    GameEventLog::Rear::NOT_ENABLED;
+  // No startHorn()/celebrate() for shootout shots, including SO goals.
+  if(isArmedGame(g.id))
+    queueArmedWledEvent(evt,color,row.sequence,signalSide==1?
+      WledZonePolicy::kHomeSide:WledZonePolicy::kAwaySide,g.id);
+  if(followed){
+    triggerRearShootout(color,goal);
+#ifdef GLOWDECK_WAVESHARE_S3
+    if(cfg.caseLedsEnabled&&cfg.caseGoal)
+      caseLedFx.trigger(signalSide==1?S3CaseLedPolicy::Side::HOME:
+        S3CaseLedPolicy::Side::AWAY,S3CaseLedPolicy::Event::SHOOTOUT,
+        color,millis(),goal?4200UL:2300UL);
+#endif
+  }
+  if(followed||cfg.displayAllLiveEvents)
+    queueGameOverlay(&g,overlay,team,row.sequence,true);
+  Serial.printf("[SHOOTOUT] game=%lu eventSort=%lu shooter=%s "
+                "signal=%s result=%s log=%lu\n",
+    (unsigned long)g.id,(unsigned long)sortOrder,
+    shooter==1?g.home.c_str():g.away.c_str(),team.c_str(),
+    CelebrationEngine::label(evt),(unsigned long)row.sequence);
+}
+// Only fetch NHL PBP during a live SO. Filter the response to minimize heap
+// use and dedupe by official sortOrder. Never invent a shot from score deltas.
+void fetchShootoutPlays(){
+  Game *target=nullptr;
+  for(uint8_t i=0;i<gameCount;++i){
+    Game &g=games[i];
+    if(!g.id||g.periodType!="SO"||
+       !CelebrationEngine::isLive(g.state.c_str()))continue;
+    if(!target||(isArmedGame(g.id)&&!isArmedGame(target->id))||
+       (rearFollows(g.id)&&!rearFollows(target->id)))target=&g;
+  }
+  if(!target)return;
+  NhlShootoutPolicy::Watch &watch=shootoutWatch(target->id);
+  WiFiClientSecure client;client.setInsecure();
+  HTTPClient http;
+  http.setConnectTimeout(2500);http.setTimeout(4500);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.useHTTP10(true);
+  const String url="https://api-web.nhle.com/v1/gamecenter/"+
+    String(target->id)+"/play-by-play";
+  if(!http.begin(client,url))return;
+  http.addHeader("Accept-Encoding","identity");
+  if(http.GET()!=HTTP_CODE_OK){http.end();return;}
+  DynamicJsonDocument filter(1024);
+  filter["homeTeam"]["id"]=true;
+  filter["awayTeam"]["id"]=true;
+  JsonObject item=filter["plays"][0].to<JsonObject>();
+  item["sortOrder"]=true;
+  item["typeCode"]=true;
+  item["periodDescriptor"]["periodType"]=true;
+  item["details"]["eventOwnerTeamId"]=true;
+  // Never allocate the unfiltered PBP feed.
+  DynamicJsonDocument doc(65536);
+  if(filter.overflowed()||!doc.capacity()){http.end();return;}
+  Stream &body=http.getStream();body.setTimeout(4500);
+  const DeserializationError err=deserializeJson(
+    doc,body,DeserializationOption::Filter(filter));
+  http.end();
+  if(err||doc.overflowed()){
+    Serial.printf("[SHOOTOUT] NHL PBP parse failed game=%lu %s\n",
+      (unsigned long)target->id,err.c_str());return;
+  }
+  const uint32_t homeId=doc["homeTeam"]["id"]|0U;
+  const uint32_t awayId=doc["awayTeam"]["id"]|0U;
+  if(!homeId||!awayId||homeId==awayId)return;
+  const JsonArrayConst plays=doc["plays"].as<JsonArrayConst>();
+  if(plays.isNull())return;
+  // First poll after booting into an in-progress shootout seeds the cursor.
+  // An observed OT→SO transition may announce already-finished first shots.
+  const bool dispatch=watch.playsKnown||watch.transitionSeen;
+  uint32_t newest=watch.lastSort;
+  for(JsonVariantConst shot:plays){
+    const uint32_t sort=shot["sortOrder"]|0U;
+    if(sort>newest)newest=sort;
+    if(!dispatch||!sort||sort<=watch.lastSort)continue;
+    const auto result=NhlShootoutPolicy::classify(
+      shot["periodDescriptor"]["periodType"]|"",
+      uint16_t(shot["typeCode"]|0));
+    if(result==NhlShootoutPolicy::Attempt::NONE)continue;
+    const uint32_t owner=shot["details"]["eventOwnerTeamId"]|0U;
+    const uint8_t side=owner==homeId?1:owner==awayId?2:0;
+    if(!side)continue;
+    watch.record(side,result);
+    signalShootoutAttempt(*target,side,result,sort);
+  }
+  watch.lastSort=newest;
+  watch.playsKnown=true;
+  watch.transitionSeen=false;
+}
+
 void detectRearGoalChanges() {
   for (uint8_t i = 0; i < gameCount; ++i) {
     const Game &g = games[i];
