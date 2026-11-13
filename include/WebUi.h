@@ -811,7 +811,14 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <h2 id="deviceTitle">Device settings</h2>
 <p>Wi-Fi, dashboard access, firmware, connection information and diagnostics. Your game-day effects live under Customize.</p></div>
 <div class="subnav" aria-label="Device sections"><button type="button" data-jump="zone-network">Network &amp; access</button><button type="button" data-jump="zone-maintenance">Firmware &amp; maintenance</button><button type="button" data-jump="zone-connection">Device information</button></div>
-<div id="zone-network" class="portal-zone"><div class="zone-heading"><span class="zone-number">01</span><div><h3>Network &amp; access</h3><p>Connect the device to your Wi-Fi and manage the local dashboard login.</p></div></div><div id="mount-network"></div></div>
+<div id="zone-network" class="portal-zone"><div class="zone-heading"><span class="zone-number">01</span><div><h3>Network &amp; access</h3><p>Connect the device to your Wi-Fi and manage the local dashboard login.</p></div></div>
+<div class="card" id="wifiOnboardingPrompt" hidden style="display:none">
+<div class="kicker">GLOWDECK FIRST-RUN SETUP</div>
+<h2>Connect GameDay to your home Wi-Fi</h2>
+<p>You're connected to the temporary GlowDeck hotspot. Select <strong>Find nearby networks</strong>, choose your <strong>2.4 GHz home Wi-Fi</strong>, and enter its password. Then tap <strong>Save device settings</strong> below.</p>
+<p class="small muted">Your phone may leave this hotspot after GameDay connects. Rejoin your home Wi-Fi to continue at the device's new local address.</p>
+</div>
+<div id="mount-network"></div></div>
 <div id="zone-maintenance" class="portal-zone"><div class="zone-heading"><span class="zone-number">02</span><div><h3>Firmware &amp; maintenance</h3><p>Install verified S3 or CYD firmware for your specific board and restart safely.</p></div></div><div id="mount-maintenance"></div></div>
 <div id="zone-connection" class="portal-zone"><div class="zone-heading"><span class="zone-number">03</span><div><h3>Connection information</h3><p>Useful identifiers and local network diagnostics.</p></div></div><div id="mount-connection"></div></div>
 <div class="save-dock" role="region" aria-label="Save device settings"><span class="save-indicator" id="deviceSaveState">Network and access changes need to be saved</span><button type="button" class="primary" id="deviceSave">Save device settings</button></div>
@@ -2993,6 +3000,19 @@ $("reboot").onclick=()=>perform(async()=>{
     mountPortalModules();
     trackPortalChanges();
     ["zone-favorites","lab-screen","zone-network"].forEach(jumpToZone);
+    // Render captive setup immediately, BEFORE optional NHL/Hue/audio data
+    // loads. Network-less first boots previously waited on other dashboard
+    // requests before they navigated to Wi-Fi settings.
+    const captiveSetup=new URLSearchParams(location.search).get("setup")==="wifi";
+    const initial=location.hash.slice(1);
+    if(captiveSetup){
+      const banner=$("wifiOnboardingPrompt");
+      banner.hidden=false;
+      banner.style.display="block";
+      tab("settings");
+    }else if(initial && PORTAL_ROUTES[initial] && initial!=="dashboard"){
+      tab(initial);
+    }
     await loadConfig();
     await loadHueConfig().catch(err=>{$("huePairStatus").textContent=err.message});
     await refresh();
@@ -3000,9 +3020,6 @@ $("reboot").onclick=()=>perform(async()=>{
     await loadSoundLibrary();
     await loadS3CaseLeds();
     setPortalDirty(false);
-    const initial=location.hash.slice(1);
-    if(initial && PORTAL_ROUTES[initial] && initial!=="dashboard")
-      tab(initial);
   }catch(err){message("Cannot load device: "+err.message)}
   setInterval(()=>refresh().catch(()=>{}),15000);
 })();
