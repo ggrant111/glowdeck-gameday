@@ -2025,10 +2025,12 @@ void sendCaptiveSetupRedirect() {
     server.send(404, "text/plain", "Not found");
     return;
   }
-  server.sendHeader("Location", "http://192.168.4.1/");
+  // Route straight to the *existing* Wi-Fi settings form on both boards.
+  // The query parameter is a fallback if iOS drops the URL fragment.
+  server.sendHeader("Location", "http://192.168.4.1/?setup=wifi#settings");
   server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
   server.send(302, "text/plain",
-              "GlowDeck GameDay setup: open http://192.168.4.1/");
+              "GlowDeck GameDay: configure Wi-Fi at http://192.168.4.1/?setup=wifi");
 }
 void sendJson(const JsonDocument &doc, int status = 200) {
   String body;
@@ -6581,6 +6583,17 @@ void registerRoutes() {
     server.on(path, HTTP_GET, sendCaptiveSetupRedirect);
   server.on("/", HTTP_GET, []() {
     if (!authorized()) return;
+    // Manual opening of 192.168.4.1 on a disconnected GameDay should also
+    // lead to Wi-Fi setup, not an empty NHL dashboard. A setup=wifi request
+    // is the final destination (no redirect loop). LAN clients and online
+    // devices keep the ordinary overview.
+    if(requestFromSetupAp() && WiFi.status()!=WL_CONNECTED &&
+       !server.hasArg("setup")){
+      server.sendHeader("Location", "http://192.168.4.1/?setup=wifi#settings");
+      server.sendHeader("Cache-Control", "no-store");
+      server.send(302, "text/plain", "Open GameDay Wi-Fi setup");
+      return;
+    }
     server.send_P(200, "text/html; charset=utf-8", WEB_UI);
   });
   // Read-only, authenticated, page-sized session event log. Never writes
