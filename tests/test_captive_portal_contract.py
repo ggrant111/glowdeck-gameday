@@ -52,7 +52,10 @@ assert 'http://192.168.4.1/?setup=wifi#settings' in root
 assert "NoError" in s
 
 # Existing authenticated dashboard/OTA behavior must be intact on home LAN.
-assert 'if (!authorized()) return;\n    server.send_P(200, "text/html; charset=utf-8", WEB_UI);' in s
+# The offline AP root now redirects to setup, but authenticated LAN still
+# receives the unchanged HTML UI rather than a captive redirect.
+assert 'if (!authorized()) return;' in root
+assert 'server.send_P(200, "text/html; charset=utf-8", WEB_UI);' in root
 assert re.search(r'return requestFromSetupAp\\(\\)\\s*\\|\\|\\s*server\\.authenticate\\("admin", cfg\\.adminPassword\\.c_str\\(\\)\\);', s)
 notfound=s[s.index("  server.onNotFound([]() {"):s.index("  server.begin();")]
 assert "requestFromSetupAp() && server.method()==HTTP_GET" in notfound
