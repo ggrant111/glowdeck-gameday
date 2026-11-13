@@ -40,7 +40,15 @@ redirect=s[s.index("void sendCaptiveSetupRedirect() {"):s.index("void sendJson("
 assert 'if (!requestFromSetupAp())' in redirect
 assert 'if (!authorized()) return;' in redirect
 assert 'server.send(302, "text/plain"' in redirect
-assert 'server.sendHeader("Location", "http://192.168.4.1/");' in redirect
+assert 'server.sendHeader("Location", "http://192.168.4.1/?setup=wifi#settings");' in redirect
+# iOS may discard the fragment: query parameter remains usable by the UI.
+assert 'http://192.168.4.1/?setup=wifi' in redirect
+root=s[s.index('  server.on("/", HTTP_GET'):s.index('  // Read-only, authenticated')]
+assert 'if (!authorized()) return;' in root
+assert 'requestFromSetupAp() && WiFi.status()!=WL_CONNECTED' in root
+assert '!server.hasArg("setup")' in root  # guard redirect loop
+assert 'server.send_P(200, "text/html; charset=utf-8", WEB_UI);' in root
+assert 'http://192.168.4.1/?setup=wifi#settings' in root
 assert "NoError" in s
 
 # Existing authenticated dashboard/OTA behavior must be intact on home LAN.
