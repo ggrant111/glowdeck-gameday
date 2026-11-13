@@ -13,7 +13,10 @@ constexpr uint8_t kDevices = 8;
 enum class Type : uint8_t {
   GOAL = 1, POWER_PLAY_START, POWER_PLAY_END, GAME_START, FINAL_WIN,
   FINAL_LOSS, PREVIEW_GOAL, PREVIEW_POWER_PLAY, PREVIEW_START,
-  PREVIEW_WIN, PREVIEW_LOSS, PREVIEW_STOP, REAR_TEST
+  PREVIEW_WIN, PREVIEW_LOSS, PREVIEW_STOP, REAR_TEST,
+  SHOOTOUT_START, SHOOTOUT_GOAL, SHOOTOUT_SAVE, SHOOTOUT_MISS,
+  PREVIEW_SHOOTOUT_START, PREVIEW_SHOOTOUT_GOAL,
+  PREVIEW_SHOOTOUT_SAVE, PREVIEW_SHOOTOUT_MISS
 };
 enum class Rear : uint8_t {
   NA = 0, NOT_SELECTED, NOT_ENABLED, SCHEDULED, ACTIVE
@@ -69,6 +72,14 @@ inline const char *typeLabel(Type t) {
     case Type::PREVIEW_LOSS: return "Loss preview";
     case Type::PREVIEW_STOP: return "Stop/restore preview";
     case Type::REAR_TEST: return "Rear LED preview";
+    case Type::SHOOTOUT_START:return "Shootout started";
+    case Type::SHOOTOUT_GOAL:return "Shootout goal";
+    case Type::SHOOTOUT_SAVE:return "Shootout save";
+    case Type::SHOOTOUT_MISS:return "Shootout miss";
+    case Type::PREVIEW_SHOOTOUT_START:return "Shootout-start preview";
+    case Type::PREVIEW_SHOOTOUT_GOAL:return "Shootout-goal preview";
+    case Type::PREVIEW_SHOOTOUT_SAVE:return "Shootout-save preview";
+    case Type::PREVIEW_SHOOTOUT_MISS:return "Shootout-miss preview";
     default: return "Event";
   }
 }
@@ -98,13 +109,19 @@ inline const char *wledLabel(Wled w) {
 inline bool matchesCategory(Type t, const char *category) {
   if (!category || !strcmp(category, "all")) return true;
   if (!strcmp(category, "goals")) return t == Type::GOAL;
+  if(!strcmp(category,"shootouts"))return t==Type::SHOOTOUT_START ||
+    t==Type::SHOOTOUT_GOAL || t==Type::SHOOTOUT_SAVE || t==Type::SHOOTOUT_MISS;
   if (!strcmp(category, "powerplays"))
     return t == Type::POWER_PLAY_START || t == Type::POWER_PLAY_END;
   if (!strcmp(category, "previews"))
     return t == Type::PREVIEW_GOAL || t == Type::PREVIEW_POWER_PLAY ||
            t == Type::PREVIEW_START || t == Type::PREVIEW_WIN ||
            t == Type::PREVIEW_LOSS || t == Type::PREVIEW_STOP ||
-           t == Type::REAR_TEST;
+           t == Type::REAR_TEST ||
+           t==Type::PREVIEW_SHOOTOUT_START ||
+           t==Type::PREVIEW_SHOOTOUT_GOAL ||
+           t==Type::PREVIEW_SHOOTOUT_SAVE ||
+           t==Type::PREVIEW_SHOOTOUT_MISS;
   if (!strcmp(category, "other"))
     return t == Type::GAME_START || t == Type::FINAL_WIN ||
            t == Type::FINAL_LOSS;
