@@ -27,7 +27,7 @@ inline bool target(bool mappingEnabled,uint32_t packed,uint8_t id,
   const Role z=role(packed,id);
   if(z==UNASSIGNED)return false;
   // Type 1 goal, 2 power play, 3 start, 4 final_win, 5 final_loss.
-  if(eventType==1 || eventType==2){
+  if(eventType==1 || eventType==2 || (eventType>=7 && eventType<=9)){
     if(scorerSide==kHomeSide)return z==HOME||z==NEUTRAL;
     if(scorerSide==kAwaySide)return z==AWAY||z==NEUTRAL;
     return false; // unknown side must never touch a mapped zone
