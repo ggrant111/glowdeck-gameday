@@ -1827,7 +1827,7 @@ void tickPregameConferenceRecords() {
   }
   if (!g || detail.gameId != g->id ||
       (g->state != "FUT" && g->state != "PRE")) return;
-  if (rearEvent == RearEvent::GOAL) return;
+  if(rearEvent==RearEvent::GOAL || rearEvent==RearEvent::SHOOTOUT)return;
   for (uint8_t i = 0; i < MAX_WLED; ++i)
     if (restoring[i]) return;
   const uint32_t now = millis();
@@ -1990,6 +1990,8 @@ void fetchDetailStats(uint32_t id) {
 
 void loadSettings() {
   prefs.begin("gameday", false);
+  // Migrate legacy all-event masks once; otherwise users cannot opt out of SO.
+  const bool migrateSoMasks=!prefs.getBool("soMasksV1",false);
   cfg.ssid = prefs.getString("ssid", "");
   cfg.wifiPassword = prefs.getString("wpass", "");
   cfg.adminPassword = prefs.getString("admin", apPassword);
@@ -1997,7 +1999,10 @@ void loadSettings() {
   hue.config.key=prefs.getString("hueKey","");
   hue.config.enabled=prefs.getBool("hueOn",false);
   hue.config.events=prefs.getUChar("hueMask",CelebrationEngine::ALL_EVENTS)&CelebrationEngine::ALL_EVENTS;
-  if(hue.config.events==15)hue.config.events=CelebrationEngine::ALL_EVENTS;
+  if(migrateSoMasks && hue.config.events==15){
+    hue.config.events=CelebrationEngine::ALL_EVENTS;
+    prefs.putUChar("hueMask",hue.config.events);
+  }
   hue.config.brightness=constrain((int)prefs.getUChar("hueBri",75),5,100);
   for(uint8_t i=0;i<HuePolicy::kMaxLights;++i){
     String id=prefs.getString(("hueL"+String(i)).c_str(),"");
@@ -2027,8 +2032,12 @@ void loadSettings() {
     cfg.wledEvents[i] = prefs.getUChar(("event" + String(i)).c_str(),
                                          CelebrationEngine::ALL_EVENTS) &
                         CelebrationEngine::ALL_EVENTS;
-    if(cfg.wledEvents[i]==15)cfg.wledEvents[i]=CelebrationEngine::ALL_EVENTS;
+    if(migrateSoMasks && cfg.wledEvents[i]==15){
+      cfg.wledEvents[i]=CelebrationEngine::ALL_EVENTS;
+      prefs.putUChar(("event"+String(i)).c_str(),cfg.wledEvents[i]);
+    }
   }
+  if(migrateSoMasks)prefs.putBool("soMasksV1",true);
   cfg.mode = constrain(prefs.getUChar("mode", 3), 0, 3);
   cfg.wledPP = prefs.getBool("wledPP", true);
   cfg.wledGameStart = prefs.getBool("wledStart", true);
@@ -9555,7 +9564,7 @@ void loop() {
   // Active WLED PP effects MUST NOT starve this request: otherwise the
   // tracker never sees a verified penalty expiry and PP_END won't be logged.
   if (connected && uint32_t(now - lastPenaltyLedgerAttempt) >= 20000UL &&
-      rearEvent != RearEvent::GOAL) {
+      rearEvent != RearEvent::GOAL && rearEvent != RearEvent::SHOOTOUT) {
     const bool restoringLights=wledRestoreWouldConflict(
         millis(),NhlFetchPolicy::kResponseTimeoutMs+500UL);
     if (!restoringLights) {
@@ -9651,7 +9660,7 @@ void loop() {
       uint32_t(millis() - lastSlideStandingsCheck) > 5000UL) {
     const bool restoringLights=wledRestoreWouldConflict(
         millis(),NhlFetchPolicy::kResponseTimeoutMs+500UL);
-    if (!restoringLights && rearEvent != RearEvent::GOAL) {
+    if (!restoringLights && rearEvent != RearEvent::GOAL && rearEvent != RearEvent::SHOOTOUT) {
       lastSlideStandingsCheck = millis();
       loadSeasonStandings();
     }
