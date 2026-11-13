@@ -4104,6 +4104,7 @@ void pollNhl() {
   // Goal detection owns both hardware dispatch and the event log, ensuring
   // each observed score increment is recorded exactly once.
   detectRearGoalChanges();
+  observeShootoutStarts();
   observePowerPlayEvents();
   // League-wide display-only puck drop and final observations, keyed by NHL ID.
   // An armed matchup retains its existing independent WLED transition engine.
@@ -8936,6 +8937,10 @@ void registerRoutes() {
     else if (type == "start") event = CelebrationEngine::Event::GAME_START;
     else if (type == "win") event = CelebrationEngine::Event::FINAL_WIN;
     else if (type == "loss") event = CelebrationEngine::Event::FINAL_LOSS;
+    else if(type=="so-start")event=CelebrationEngine::Event::SHOOTOUT_START;
+    else if(type=="so-goal")event=CelebrationEngine::Event::SHOOTOUT_GOAL;
+    else if(type=="so-save")event=CelebrationEngine::Event::SHOOTOUT_SAVE;
+    else if(type=="so-miss")event=CelebrationEngine::Event::SHOOTOUT_MISS;
     else if (type != "stop") return errorResponse("Invalid celebration type");
     Game *previewGame = testMatchup();
     String previewTeam = previewGame
@@ -8955,6 +8960,10 @@ void registerRoutes() {
         type == "start" ? GameEventLog::Type::PREVIEW_START :
         type == "win" ? GameEventLog::Type::PREVIEW_WIN :
         type == "loss" ? GameEventLog::Type::PREVIEW_LOSS :
+        type=="so-start"?GameEventLog::Type::PREVIEW_SHOOTOUT_START:
+        type=="so-goal"?GameEventLog::Type::PREVIEW_SHOOTOUT_GOAL:
+        type=="so-save"?GameEventLog::Type::PREVIEW_SHOOTOUT_SAVE:
+        type=="so-miss"?GameEventLog::Type::PREVIEW_SHOOTOUT_MISS:
                          GameEventLog::Type::PREVIEW_STOP;
     GameEventLog::Entry &previewRow =
         addPreviewEvent(requestedTeam.length() ? nullptr : previewGame,
@@ -8987,7 +8996,10 @@ void registerRoutes() {
         wledPpTestUntil = 0;
       // Start the rear flash after potentially slow WLED snapshots/POSTs.
       if (combined && cfg.rearLedEnabled) {
-        if (event == CelebrationEngine::Event::GOAL && cfg.rearGoal) {
+        if(event>=CelebrationEngine::Event::SHOOTOUT_START&&cfg.rearGoal){
+          triggerRearShootout(color,event==CelebrationEngine::Event::SHOOTOUT_GOAL);
+          rearStarted=true;
+        }else if (event == CelebrationEngine::Event::GOAL && cfg.rearGoal) {
           triggerRearGoal(color);
           rearStarted = true;
         } else if (event == CelebrationEngine::Event::POWER_PLAY && cfg.rearPowerPlay) {
@@ -9010,6 +9022,10 @@ void registerRoutes() {
         event == CelebrationEngine::Event::GAME_START ? EventOverlay::Kind::GAME_START :
         event == CelebrationEngine::Event::FINAL_WIN ? EventOverlay::Kind::FINAL_WIN :
         event == CelebrationEngine::Event::FINAL_LOSS ? EventOverlay::Kind::FINAL_LOSS :
+        event == CelebrationEngine::Event::SHOOTOUT_START?EventOverlay::Kind::SHOOTOUT_START:
+        event == CelebrationEngine::Event::SHOOTOUT_GOAL?EventOverlay::Kind::SHOOTOUT_GOAL:
+        event == CelebrationEngine::Event::SHOOTOUT_SAVE?EventOverlay::Kind::SHOOTOUT_SAVE:
+        event == CelebrationEngine::Event::SHOOTOUT_MISS?EventOverlay::Kind::SHOOTOUT_MISS:
         EventOverlay::Kind::NONE;
     if (overlayKind != EventOverlay::Kind::NONE)
       overlayStarted = queueGameOverlay(requestedTeam.length() ? nullptr : previewGame,
@@ -9546,6 +9562,17 @@ void loop() {
       lastPenaltyLedgerAttempt = millis();
       fetchFollowedPowerPlays();
       observePowerPlayEvents();
+    }
+  }
+  // SO play-by-play stays separate from regular scores and PP requests.
+  // Never block a pending WLED state restoration with a new NHL request.
+  if(connected && uint32_t(millis()-lastShootoutPoll)>=6000UL){
+    bool liveSo=false;
+    for(uint8_t i=0;i<gameCount;++i)
+      if(games[i].periodType=="SO" &&
+         CelebrationEngine::isLive(games[i].state.c_str()))liveSo=true;
+    if(liveSo&&!wledRestoreWouldConflict(millis(),5000UL)){
+      lastShootoutPoll=millis();fetchShootoutPlays();
     }
   }
   if (overlayController.tick(millis())) {
