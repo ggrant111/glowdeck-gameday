@@ -45,6 +45,7 @@
 #include "GameDayIcons.h"
 #include "NhlFetchPolicy.h"
 #include "CelebrationEngine.h"
+#include "NhlShootoutPolicy.h"
 #include "WledDiscoveryPolicy.h"
 #include "WledZonePolicy.h"
 #include "WledScenePolicy.h"
@@ -112,7 +113,7 @@ struct Settings {
   String wled[MAX_WLED];
   bool wledEnabled[MAX_WLED] = {};
   // Masked opt-in for every connected controller: goal / PP / start / final.
-  uint8_t wledEvents[MAX_WLED] = {15,15,15,15,15,15,15,15};
+  uint8_t wledEvents[MAX_WLED] = {31,31,31,31,31,31,31,31};
   String wledName[MAX_WLED];
   bool wledZoneEnabled[MAX_WLED] = {}; // OFF for migrated 8A/legacy slots
   uint32_t wledZoneMap[MAX_WLED] = {}; // 2-bit per existing WLED segment ID
@@ -196,6 +197,8 @@ struct GoalWatch {
   bool baseline = false;
 };
 GoalWatch goalWatch[MAX_GAMES];
+NhlShootoutPolicy::Watch shootoutWatches[MAX_GAMES];
+uint32_t lastShootoutPoll=0;
 struct StateWatch {
   uint32_t id = 0;
   char state[8] = {};
@@ -226,7 +229,7 @@ uint16_t liveTickerScroll=0; // UTF-8 starting byte (not a glyph frame step)
 uint8_t liveTickerPixelOffset=0; // fractional glyph scroll, in LCD pixels
 uint16_t liveTickerTextWidthPx=0;
 bool liveTickerDirty=false;
-enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY, DIAGNOSTIC };
+enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY, DIAGNOSTIC, SHOOTOUT };
 RearEvent rearEvent = RearEvent::IDLE;
 uint32_t rearGoalAt = 0, rearGoalColor = 0, rearGoalDuration = 0;
 uint32_t rearPulseStart = 0;
@@ -675,6 +678,13 @@ void triggerRearGoal(uint32_t rgb) {
   rearEvent = RearEvent::GOAL;
 }
 
+void triggerRearShootout(uint32_t rgb,bool scored){
+  if(!cfg.rearLedEnabled||!cfg.rearGoal)return;
+  rearDiagnosticUntil=0;rearTestPpUntil=0;
+  rearGoalColor=rgb;rearGoalAt=millis();
+  rearGoalDuration=scored?4200UL:2300UL;
+  rearEvent=RearEvent::SHOOTOUT;
+}
 void stopRearLed() {
   rearEvent = RearEvent::IDLE;
   rearGoalDuration = 0;
@@ -871,7 +881,8 @@ void tickRearLed() {
   if (!cfg.rearLedEnabled) { stopRearLed(); return; }
   const uint32_t goalElapsed = uint32_t(now - rearGoalAt);
   if (rearGoalDuration && goalElapsed < rearGoalDuration && cfg.rearGoal) {
-    rearEvent = RearEvent::GOAL;
+    rearEvent=rearEvent==RearEvent::SHOOTOUT?
+      RearEvent::SHOOTOUT:RearEvent::GOAL;
     writeRearLed(rearGoalColor,
                  RearLedPattern::flash(goalElapsed, rearGoalDuration));
     return;
@@ -1012,6 +1023,10 @@ bool overlayAllowed(EventOverlay::Kind kind) {
   if (!cfg.overlayEnabled || screen == Screen::CALIBRATE) return false;
   switch(kind) {
     case EventOverlay::Kind::GOAL: return cfg.overlayGoals;
+    case EventOverlay::Kind::SHOOTOUT_START:
+    case EventOverlay::Kind::SHOOTOUT_GOAL:
+    case EventOverlay::Kind::SHOOTOUT_SAVE:
+    case EventOverlay::Kind::SHOOTOUT_MISS:return true;
     case EventOverlay::Kind::POWER_PLAY_START:
     case EventOverlay::Kind::POWER_PLAY_END: return cfg.overlayPowerPlays;
     case EventOverlay::Kind::GAME_START: return cfg.overlayStart;
@@ -1075,6 +1090,166 @@ bool queueGameOverlay(const Game *g, EventOverlay::Kind kind,
   }
   return admitted;
 }
+
+// A shootout does not increment normal goal statistics. Track transitions and
+// official play-by-play separately, keyed by game ID instead of carousel index.
+NhlShootoutPolicy::Watch &shootoutWatch(uint32_t id){
+  for(auto &w:shootoutWatches)if(w.gameId==id)return w;
+  for(auto &w:shootoutWatches)if(!w.gameId){w.reset(id);return w;}
+  return shootoutWatches[0]; // Game count is bounded by MAX_GAMES.
+}
+void observeShootoutStarts(){
+  for(uint8_t i=0;i<gameCount;++i){
+    const Game &g=games[i];
+    if(!g.id)continue;
+    NhlShootoutPolicy::Watch &w=shootoutWatch(g.id);
+    if(!w.observe(g.id,CelebrationEngine::isLive(g.state.c_str()),
+                  g.periodType.c_str()))continue;
+    const bool followed=rearFollows(g.id);
+    const String &team=cfg.favoriteSide==0?g.home:g.away;
+    GameEventLog::Entry &row=addGameEvent(
+      g,GameEventLog::Type::SHOOTOUT_START,team,0);
+    row.rear=!followed?GameEventLog::Rear::NOT_SELECTED:
+      cfg.rearLedEnabled&&cfg.rearGoal?GameEventLog::Rear::ACTIVE:
+      GameEventLog::Rear::NOT_ENABLED;
+    if(isArmedGame(g.id))
+      queueArmedWledEvent(CelebrationEngine::Event::SHOOTOUT_START,
+        teamRgb(team),row.sequence,WledZonePolicy::kUnknownSide,g.id);
+    if(followed){
+      triggerRearShootout(teamRgb(team),false);
+#ifdef GLOWDECK_WAVESHARE_S3
+      if(cfg.caseLedsEnabled && cfg.caseStart){
+        caseLedFx.trigger(S3CaseLedPolicy::Side::HOME,
+          S3CaseLedPolicy::Event::SHOOTOUT,teamRgb(g.home),millis());
+        caseLedFx.trigger(S3CaseLedPolicy::Side::AWAY,
+          S3CaseLedPolicy::Event::SHOOTOUT,teamRgb(g.away),millis());
+      }
+#endif
+    }
+    if(followed||cfg.displayAllLiveEvents)
+      queueGameOverlay(&g,EventOverlay::Kind::SHOOTOUT_START,
+                       team,row.sequence,true);
+    Serial.printf("[SHOOTOUT] game=%lu entered shootout\n",
+                  (unsigned long)g.id);
+  }
+}
+void signalShootoutAttempt(const Game &g,uint8_t shooter,
+                           NhlShootoutPolicy::Attempt result,
+                           uint32_t sortOrder){
+  const bool goal=result==NhlShootoutPolicy::Attempt::GOAL;
+  const bool save=result==NhlShootoutPolicy::Attempt::SAVE;
+  // Give a save to the defending goalie, NOT the shooter.
+  const uint8_t signalSide=save?(shooter==1?2:1):shooter;
+  const String &team=signalSide==1?g.home:g.away;
+  const bool followed=rearFollows(g.id);
+  const uint32_t color=teamRgb(team);
+  const CelebrationEngine::Event evt=goal?
+    CelebrationEngine::Event::SHOOTOUT_GOAL:save?
+    CelebrationEngine::Event::SHOOTOUT_SAVE:
+    CelebrationEngine::Event::SHOOTOUT_MISS;
+  const EventOverlay::Kind overlay=goal?
+    EventOverlay::Kind::SHOOTOUT_GOAL:save?
+    EventOverlay::Kind::SHOOTOUT_SAVE:
+    EventOverlay::Kind::SHOOTOUT_MISS;
+  const GameEventLog::Type logType=goal?
+    GameEventLog::Type::SHOOTOUT_GOAL:save?
+    GameEventLog::Type::SHOOTOUT_SAVE:
+    GameEventLog::Type::SHOOTOUT_MISS;
+  GameEventLog::Entry &row=addGameEvent(g,logType,team,0);
+  row.rear=!followed?GameEventLog::Rear::NOT_SELECTED:
+    cfg.rearLedEnabled&&cfg.rearGoal?GameEventLog::Rear::ACTIVE:
+    GameEventLog::Rear::NOT_ENABLED;
+  // No startHorn()/celebrate() for shootout shots, including SO goals.
+  if(isArmedGame(g.id))
+    queueArmedWledEvent(evt,color,row.sequence,signalSide==1?
+      WledZonePolicy::kHomeSide:WledZonePolicy::kAwaySide,g.id);
+  if(followed){
+    triggerRearShootout(color,goal);
+#ifdef GLOWDECK_WAVESHARE_S3
+    if(cfg.caseLedsEnabled&&cfg.caseGoal)
+      caseLedFx.trigger(signalSide==1?S3CaseLedPolicy::Side::HOME:
+        S3CaseLedPolicy::Side::AWAY,S3CaseLedPolicy::Event::SHOOTOUT,
+        color,millis(),goal?4200UL:2300UL);
+#endif
+  }
+  if(followed||cfg.displayAllLiveEvents)
+    queueGameOverlay(&g,overlay,team,row.sequence,true);
+  Serial.printf("[SHOOTOUT] game=%lu eventSort=%lu shooter=%s "
+                "signal=%s result=%s log=%lu\n",
+    (unsigned long)g.id,(unsigned long)sortOrder,
+    shooter==1?g.home.c_str():g.away.c_str(),team.c_str(),
+    CelebrationEngine::label(evt),(unsigned long)row.sequence);
+}
+// Only fetch NHL PBP during a live SO. Filter the response to minimize heap
+// use and dedupe by official sortOrder. Never invent a shot from score deltas.
+void fetchShootoutPlays(){
+  Game *target=nullptr;
+  for(uint8_t i=0;i<gameCount;++i){
+    Game &g=games[i];
+    if(!g.id||g.periodType!="SO"||
+       !CelebrationEngine::isLive(g.state.c_str()))continue;
+    if(!target||(isArmedGame(g.id)&&!isArmedGame(target->id))||
+       (rearFollows(g.id)&&!rearFollows(target->id)))target=&g;
+  }
+  if(!target)return;
+  NhlShootoutPolicy::Watch &watch=shootoutWatch(target->id);
+  WiFiClientSecure client;client.setInsecure();
+  HTTPClient http;
+  http.setConnectTimeout(2500);http.setTimeout(4500);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.useHTTP10(true);
+  const String url="https://api-web.nhle.com/v1/gamecenter/"+
+    String(target->id)+"/play-by-play";
+  if(!http.begin(client,url))return;
+  http.addHeader("Accept-Encoding","identity");
+  if(http.GET()!=HTTP_CODE_OK){http.end();return;}
+  DynamicJsonDocument filter(1024);
+  filter["homeTeam"]["id"]=true;
+  filter["awayTeam"]["id"]=true;
+  JsonObject item=filter["plays"][0].to<JsonObject>();
+  item["sortOrder"]=true;
+  item["typeCode"]=true;
+  item["periodDescriptor"]["periodType"]=true;
+  item["details"]["eventOwnerTeamId"]=true;
+  // Never allocate the unfiltered PBP feed.
+  DynamicJsonDocument doc(65536);
+  if(filter.overflowed()||!doc.capacity()){http.end();return;}
+  Stream &body=http.getStream();body.setTimeout(4500);
+  const DeserializationError err=deserializeJson(
+    doc,body,DeserializationOption::Filter(filter));
+  http.end();
+  if(err||doc.overflowed()){
+    Serial.printf("[SHOOTOUT] NHL PBP parse failed game=%lu %s\n",
+      (unsigned long)target->id,err.c_str());return;
+  }
+  const uint32_t homeId=doc["homeTeam"]["id"]|0U;
+  const uint32_t awayId=doc["awayTeam"]["id"]|0U;
+  if(!homeId||!awayId||homeId==awayId)return;
+  const JsonArrayConst plays=doc["plays"].as<JsonArrayConst>();
+  if(plays.isNull())return;
+  // First poll after booting into an in-progress shootout seeds the cursor.
+  // An observed OT→SO transition may announce already-finished first shots.
+  const bool dispatch=watch.playsKnown||watch.transitionSeen;
+  uint32_t newest=watch.lastSort;
+  for(JsonVariantConst shot:plays){
+    const uint32_t sort=shot["sortOrder"]|0U;
+    if(sort>newest)newest=sort;
+    if(!sort||sort<=watch.lastSort)continue;
+    const auto result=NhlShootoutPolicy::classify(
+      shot["periodDescriptor"]["periodType"]|"",
+      uint16_t(shot["typeCode"]|0));
+    if(result==NhlShootoutPolicy::Attempt::NONE)continue;
+    const uint32_t owner=shot["details"]["eventOwnerTeamId"]|0U;
+    const uint8_t side=owner==homeId?1:owner==awayId?2:0;
+    if(!side)continue;
+    watch.record(side,result);
+    if(dispatch)signalShootoutAttempt(*target,side,result,sort);
+  }
+  watch.lastSort=newest;
+  watch.playsKnown=true;
+  watch.transitionSeen=false;
+}
+
 void detectRearGoalChanges() {
   for (uint8_t i = 0; i < gameCount; ++i) {
     const Game &g = games[i];
@@ -1086,7 +1261,7 @@ void detectRearGoalChanges() {
     const bool live = g.state == "LIVE" || g.state == "CRIT";
     // Record observed NHL score increments, even when that game's lighting
     // isn't selected. No synthetic goals are added from current scores at boot.
-    if (watch.baseline && live) {
+    if (watch.baseline && live && g.periodType!="SO") {
       const int deltaHome = g.homeScore - watch.home;
       const int deltaAway = g.awayScore - watch.away;
       for (uint8_t side = 0; side < 2; ++side) {
@@ -1272,6 +1447,8 @@ void prepareNewScoreboardDate(const String &today) {
     overlayLastFrame = 0;
     lastArmedGameState = "";
     for (auto &entry : goalWatch) entry = GoalWatch();
+    for(auto &entry:shootoutWatches)entry=NhlShootoutPolicy::Watch{};
+    lastShootoutPoll=0;
     for (auto &entry : stateWatch) entry = StateWatch();
     hasBackgroundOverlay = false;
     for (auto &entry : ppSessions) entry.reset();
@@ -1650,7 +1827,7 @@ void tickPregameConferenceRecords() {
   }
   if (!g || detail.gameId != g->id ||
       (g->state != "FUT" && g->state != "PRE")) return;
-  if (rearEvent == RearEvent::GOAL) return;
+  if(rearEvent==RearEvent::GOAL || rearEvent==RearEvent::SHOOTOUT)return;
   for (uint8_t i = 0; i < MAX_WLED; ++i)
     if (restoring[i]) return;
   const uint32_t now = millis();
@@ -1813,6 +1990,8 @@ void fetchDetailStats(uint32_t id) {
 
 void loadSettings() {
   prefs.begin("gameday", false);
+  // Migrate legacy all-event masks once; otherwise users cannot opt out of SO.
+  const bool migrateSoMasks=!prefs.getBool("soMasksV1",false);
   cfg.ssid = prefs.getString("ssid", "");
   cfg.wifiPassword = prefs.getString("wpass", "");
   cfg.adminPassword = prefs.getString("admin", apPassword);
@@ -1820,6 +1999,10 @@ void loadSettings() {
   hue.config.key=prefs.getString("hueKey","");
   hue.config.enabled=prefs.getBool("hueOn",false);
   hue.config.events=prefs.getUChar("hueMask",CelebrationEngine::ALL_EVENTS)&CelebrationEngine::ALL_EVENTS;
+  if(migrateSoMasks && hue.config.events==15){
+    hue.config.events=CelebrationEngine::ALL_EVENTS;
+    prefs.putUChar("hueMask",hue.config.events);
+  }
   hue.config.brightness=constrain((int)prefs.getUChar("hueBri",75),5,100);
   for(uint8_t i=0;i<HuePolicy::kMaxLights;++i){
     String id=prefs.getString(("hueL"+String(i)).c_str(),"");
@@ -1849,7 +2032,12 @@ void loadSettings() {
     cfg.wledEvents[i] = prefs.getUChar(("event" + String(i)).c_str(),
                                          CelebrationEngine::ALL_EVENTS) &
                         CelebrationEngine::ALL_EVENTS;
+    if(migrateSoMasks && cfg.wledEvents[i]==15){
+      cfg.wledEvents[i]=CelebrationEngine::ALL_EVENTS;
+      prefs.putUChar(("event"+String(i)).c_str(),cfg.wledEvents[i]);
+    }
   }
+  if(migrateSoMasks)prefs.putBool("soMasksV1",true);
   cfg.mode = constrain(prefs.getUChar("mode", 3), 0, 3);
   cfg.wledPP = prefs.getBool("wledPP", true);
   cfg.wledGameStart = prefs.getBool("wledStart", true);
@@ -2586,6 +2774,7 @@ bool prepareWledDdp(uint8_t slot,CelebrationEngine::Event event,
   if(slot>=MAX_WLED || !cfg.wledDdpEnabled[slot] ||
      !cfg.wledZoneEnabled[slot] || snapshot.isEmpty() ||
      event==CelebrationEngine::Event::POWER_PLAY ||
+     event>=CelebrationEngine::Event::SHOOTOUT_START ||
      event==CelebrationEngine::Event::NONE){
     if(slot<MAX_WLED)wledDdp[slot].status="Native JSON (DDP not enabled / PP)";
     return false;
@@ -3924,6 +4113,7 @@ void pollNhl() {
   // Goal detection owns both hardware dispatch and the event log, ensuring
   // each observed score increment is recorded exactly once.
   detectRearGoalChanges();
+  observeShootoutStarts();
   observePowerPlayEvents();
   // League-wide display-only puck drop and final observations, keyed by NHL ID.
   // An armed matchup retains its existing independent WLED transition engine.
@@ -4721,6 +4911,14 @@ void drawOverlayStatic() {
   switch(e.kind) {
     case EventOverlay::Kind::GOAL:
       description = String(e.team) + " SCORES!"; break;
+    case EventOverlay::Kind::SHOOTOUT_START:
+      description=String(e.away)+" VS "+String(e.home);break;
+    case EventOverlay::Kind::SHOOTOUT_GOAL:
+      description=String(e.team)+" SCORES IN THE SHOOTOUT";break;
+    case EventOverlay::Kind::SHOOTOUT_SAVE:
+      description=String(e.team)+" SHOOTOUT SAVE";break;
+    case EventOverlay::Kind::SHOOTOUT_MISS:
+      description=String(e.team)+" SHOT MISSED";break;
     case EventOverlay::Kind::POWER_PLAY_START:
       description = String(e.team) + " MAN ADVANTAGE"; break;
     case EventOverlay::Kind::POWER_PLAY_END:
@@ -5566,6 +5764,10 @@ String s3OverlaySubtitle(const EventOverlay::Item &e) {
   switch(e.kind) {
     case EventOverlay::Kind::GOAL:
       return String(e.team)+" SCORES!";
+    case EventOverlay::Kind::SHOOTOUT_START:return "SHOOTOUT BEGINS";
+    case EventOverlay::Kind::SHOOTOUT_GOAL:return String(e.team)+" SCORES!";
+    case EventOverlay::Kind::SHOOTOUT_SAVE:return String(e.team)+" MAKES THE SAVE";
+    case EventOverlay::Kind::SHOOTOUT_MISS:return String(e.team)+" SHOT MISSED";
     case EventOverlay::Kind::POWER_PLAY_START:
       return String(e.team)+" HAS THE ADVANTAGE";
     case EventOverlay::Kind::POWER_PLAY_END:
@@ -6738,6 +6940,7 @@ void registerRoutes() {
     doc["rearEnabled"] = cfg.rearLedEnabled;
     doc["rearEvent"] = rearEvent == RearEvent::GOAL ? "GOAL" :
                        rearEvent == RearEvent::POWER_PLAY ? "POWER_PLAY" :
+                       rearEvent == RearEvent::SHOOTOUT ? "SHOOTOUT" :
                        rearEvent == RearEvent::DIAGNOSTIC ? "RGB_DIAGNOSTIC" : "IDLE";
     JsonArray followed = doc.createNestedArray("followed");
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
@@ -6816,6 +7019,13 @@ void registerRoutes() {
       g["startTimeUTC"] = games[i].startUTC;
       g["period"] = games[i].period;
       g["periodType"] = games[i].periodType;
+      for(const auto &so:shootoutWatches)if(so.gameId==games[i].id){
+        g["soHomeAttempts"]=so.homeAttempts;
+        g["soAwayAttempts"]=so.awayAttempts;
+        g["soHomeGoals"]=so.homeGoals;
+        g["soAwayGoals"]=so.awayGoals;
+        break;
+      }
       g["clock"] = games[i].clock;
       g["intermission"] = games[i].intermission;
       g["powerPlaySide"] = games[i].ppSide;
@@ -8736,6 +8946,10 @@ void registerRoutes() {
     else if (type == "start") event = CelebrationEngine::Event::GAME_START;
     else if (type == "win") event = CelebrationEngine::Event::FINAL_WIN;
     else if (type == "loss") event = CelebrationEngine::Event::FINAL_LOSS;
+    else if(type=="so-start")event=CelebrationEngine::Event::SHOOTOUT_START;
+    else if(type=="so-goal")event=CelebrationEngine::Event::SHOOTOUT_GOAL;
+    else if(type=="so-save")event=CelebrationEngine::Event::SHOOTOUT_SAVE;
+    else if(type=="so-miss")event=CelebrationEngine::Event::SHOOTOUT_MISS;
     else if (type != "stop") return errorResponse("Invalid celebration type");
     Game *previewGame = testMatchup();
     String previewTeam = previewGame
@@ -8755,6 +8969,10 @@ void registerRoutes() {
         type == "start" ? GameEventLog::Type::PREVIEW_START :
         type == "win" ? GameEventLog::Type::PREVIEW_WIN :
         type == "loss" ? GameEventLog::Type::PREVIEW_LOSS :
+        type=="so-start"?GameEventLog::Type::PREVIEW_SHOOTOUT_START:
+        type=="so-goal"?GameEventLog::Type::PREVIEW_SHOOTOUT_GOAL:
+        type=="so-save"?GameEventLog::Type::PREVIEW_SHOOTOUT_SAVE:
+        type=="so-miss"?GameEventLog::Type::PREVIEW_SHOOTOUT_MISS:
                          GameEventLog::Type::PREVIEW_STOP;
     GameEventLog::Entry &previewRow =
         addPreviewEvent(requestedTeam.length() ? nullptr : previewGame,
@@ -8787,7 +9005,10 @@ void registerRoutes() {
         wledPpTestUntil = 0;
       // Start the rear flash after potentially slow WLED snapshots/POSTs.
       if (combined && cfg.rearLedEnabled) {
-        if (event == CelebrationEngine::Event::GOAL && cfg.rearGoal) {
+        if(event>=CelebrationEngine::Event::SHOOTOUT_START&&cfg.rearGoal){
+          triggerRearShootout(color,event==CelebrationEngine::Event::SHOOTOUT_GOAL);
+          rearStarted=true;
+        }else if (event == CelebrationEngine::Event::GOAL && cfg.rearGoal) {
           triggerRearGoal(color);
           rearStarted = true;
         } else if (event == CelebrationEngine::Event::POWER_PLAY && cfg.rearPowerPlay) {
@@ -8810,6 +9031,10 @@ void registerRoutes() {
         event == CelebrationEngine::Event::GAME_START ? EventOverlay::Kind::GAME_START :
         event == CelebrationEngine::Event::FINAL_WIN ? EventOverlay::Kind::FINAL_WIN :
         event == CelebrationEngine::Event::FINAL_LOSS ? EventOverlay::Kind::FINAL_LOSS :
+        event == CelebrationEngine::Event::SHOOTOUT_START?EventOverlay::Kind::SHOOTOUT_START:
+        event == CelebrationEngine::Event::SHOOTOUT_GOAL?EventOverlay::Kind::SHOOTOUT_GOAL:
+        event == CelebrationEngine::Event::SHOOTOUT_SAVE?EventOverlay::Kind::SHOOTOUT_SAVE:
+        event == CelebrationEngine::Event::SHOOTOUT_MISS?EventOverlay::Kind::SHOOTOUT_MISS:
         EventOverlay::Kind::NONE;
     if (overlayKind != EventOverlay::Kind::NONE)
       overlayStarted = queueGameOverlay(requestedTeam.length() ? nullptr : previewGame,
@@ -9339,13 +9564,24 @@ void loop() {
   // Active WLED PP effects MUST NOT starve this request: otherwise the
   // tracker never sees a verified penalty expiry and PP_END won't be logged.
   if (connected && uint32_t(now - lastPenaltyLedgerAttempt) >= 20000UL &&
-      rearEvent != RearEvent::GOAL) {
+      rearEvent != RearEvent::GOAL && rearEvent != RearEvent::SHOOTOUT) {
     const bool restoringLights=wledRestoreWouldConflict(
         millis(),NhlFetchPolicy::kResponseTimeoutMs+500UL);
     if (!restoringLights) {
       lastPenaltyLedgerAttempt = millis();
       fetchFollowedPowerPlays();
       observePowerPlayEvents();
+    }
+  }
+  // SO play-by-play stays separate from regular scores and PP requests.
+  // Never block a pending WLED state restoration with a new NHL request.
+  if(connected && uint32_t(millis()-lastShootoutPoll)>=6000UL){
+    bool liveSo=false;
+    for(uint8_t i=0;i<gameCount;++i)
+      if(games[i].periodType=="SO" &&
+         CelebrationEngine::isLive(games[i].state.c_str()))liveSo=true;
+    if(liveSo&&!wledRestoreWouldConflict(millis(),5000UL)){
+      lastShootoutPoll=millis();fetchShootoutPlays();
     }
   }
   if (overlayController.tick(millis())) {
@@ -9424,7 +9660,7 @@ void loop() {
       uint32_t(millis() - lastSlideStandingsCheck) > 5000UL) {
     const bool restoringLights=wledRestoreWouldConflict(
         millis(),NhlFetchPolicy::kResponseTimeoutMs+500UL);
-    if (!restoringLights && rearEvent != RearEvent::GOAL) {
+    if (!restoringLights && rearEvent != RearEvent::GOAL && rearEvent != RearEvent::SHOOTOUT) {
       lastSlideStandingsCheck = millis();
       loadSeasonStandings();
     }

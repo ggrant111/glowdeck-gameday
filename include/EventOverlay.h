@@ -7,13 +7,16 @@
 namespace EventOverlay {
 enum class Kind : uint8_t {
   NONE=0, GOAL, POWER_PLAY_START, POWER_PLAY_END, GAME_START,
-  FINAL_WIN, FINAL_LOSS
+  FINAL_WIN, FINAL_LOSS, SHOOTOUT_START, SHOOTOUT_GOAL,
+  SHOOTOUT_SAVE, SHOOTOUT_MISS
 };
 inline uint8_t priority(Kind k) {
   switch (k) {
-    case Kind::GOAL: return 4;
+    case Kind::GOAL: case Kind::SHOOTOUT_GOAL:return 4;
     case Kind::FINAL_WIN: case Kind::FINAL_LOSS: return 3;
-    case Kind::GAME_START: return 2;
+    case Kind::GAME_START: case Kind::SHOOTOUT_START:
+    case Kind::SHOOTOUT_SAVE:return 2;
+    case Kind::SHOOTOUT_MISS:return 1;
     case Kind::POWER_PLAY_START: case Kind::POWER_PLAY_END: return 1;
     default: return 0;
   }
@@ -24,6 +27,9 @@ inline uint32_t durationMs(Kind k, uint8_t goalSeconds, uint8_t otherSeconds) {
     case Kind::POWER_PLAY_START: return 4500UL;
     case Kind::POWER_PLAY_END: return 2500UL;
     case Kind::GAME_START: return 4500UL;
+    case Kind::SHOOTOUT_START:return 3000UL;
+    case Kind::SHOOTOUT_GOAL:return 4500UL;
+    case Kind::SHOOTOUT_SAVE:case Kind::SHOOTOUT_MISS:return 2300UL;
     case Kind::FINAL_WIN: case Kind::FINAL_LOSS:
       return uint32_t(otherSeconds)*1000UL;
     default: return 0;
@@ -35,6 +41,10 @@ inline const char* label(Kind k) {
     case Kind::POWER_PLAY_START: return "POWER PLAY";
     case Kind::POWER_PLAY_END: return "FULL STRENGTH";
     case Kind::GAME_START: return "PUCK DROP";
+    case Kind::SHOOTOUT_START:return "SHOOTOUT!";
+    case Kind::SHOOTOUT_GOAL:return "SO GOAL!";
+    case Kind::SHOOTOUT_SAVE:return "SO SAVE!";
+    case Kind::SHOOTOUT_MISS:return "SO MISSED";
     case Kind::FINAL_WIN: return "FINAL - WIN";
     case Kind::FINAL_LOSS: return "FINAL - LOSS";
     default: return "";
@@ -44,7 +54,7 @@ inline bool isPulse(Kind k) {
   return k==Kind::POWER_PLAY_START || k==Kind::POWER_PLAY_END;
 }
 inline bool isFlash(Kind k) {
-  return k==Kind::GOAL;
+  return k==Kind::GOAL || k==Kind::SHOOTOUT_GOAL;
 }
 struct Item {
   Kind kind=Kind::NONE;

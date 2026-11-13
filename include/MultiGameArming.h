@@ -52,10 +52,14 @@ struct Armed {
 // uses the user-assigned 1..5 rank, then first-observed ordering.
 inline uint8_t priority(CelebrationEngine::Event event) {
   switch(event){
-    case CelebrationEngine::Event::GOAL:return 4;
+    case CelebrationEngine::Event::GOAL:
+    case CelebrationEngine::Event::SHOOTOUT_GOAL:return 4;
     case CelebrationEngine::Event::FINAL_WIN:
     case CelebrationEngine::Event::FINAL_LOSS:return 3;
-    case CelebrationEngine::Event::GAME_START:return 2;
+    case CelebrationEngine::Event::GAME_START:
+    case CelebrationEngine::Event::SHOOTOUT_START:
+    case CelebrationEngine::Event::SHOOTOUT_SAVE:
+    case CelebrationEngine::Event::SHOOTOUT_MISS:return 2;
     case CelebrationEngine::Event::POWER_PLAY:return 1;
     default:return 0;
   }

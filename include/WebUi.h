@@ -382,7 +382,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <div class="row">
 <div><label for="eventCategory">Filter by event</label><select id="eventCategory">
 <option value="all">All events</option><option value="goals">Goals</option>
-<option value="powerplays">Power plays</option><option value="other">Game start & final</option>
+<option value="powerplays">Power plays</option><option value="shootouts">Shootouts</option><option value="other">Game start & final</option>
 <option value="previews">Manual tests</option>
 </select></div>
 </div>
@@ -492,7 +492,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <section id="devices" class="panel">
 <div class="section-intro"><div class="eyebrow">PHYSICAL CELEBRATIONS</div><h2>Your WLED light show</h2><p>Choose which controllers participate, test their effects, and restore their previous lighting afterward.</p></div>
 <div class="card"><h2>WLED celebration engine</h2>
-<p>Run matching event effects on the WLED controllers you choose. Each controller can participate in goals, power plays, game starts and final results independently.</p>
+<p>Run matching event effects on the WLED controllers you choose. Each controller can participate in goals, power plays, shootouts, game starts and finals independently.</p>
 <div class="stats">
 <div class="stat"><span>Playing now</span><b id="wledEventStatus">Idle</b></div>
 <div class="stat"><span>Selected controllers</span><b id="wledSelectedCount">—</b></div>
@@ -536,6 +536,10 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <button id="wledTestStart">Game start</button>
 <button id="wledTestWin">Final win</button>
 <button id="wledTestLoss">Final loss</button>
+<button id="wledTestSoStart">Shootout starts</button>
+<button id="wledTestSoGoal">Shootout goal</button>
+<button id="wledTestSoSave">Shootout save</button>
+<button id="wledTestSoMiss">Shootout miss</button>
 <button id="wledStop">Stop and restore</button>
 </div>
 <p class="small muted" id="wledDeviceFeedback">Controller status will appear here after a test.</p>
@@ -762,7 +766,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <div id="hueLightList"><p class="small muted">Pair a Bridge and select Refresh lights.</p></div>
 <div class="toggle"><input id="hueEnabled" type="checkbox"><label for="hueEnabled">Enable Philips Hue celebrations</label></div>
 <div class="row"><div><label for="hueBrightness">Hue brightness limit (5–100%)</label><input id="hueBrightness" type="range" min="5" max="100" value="75"><span id="hueBrightnessLabel" class="small muted">75%</span></div></div>
-<div class="row"><div class="toggle"><input id="hueGoal" type="checkbox" checked><label for="hueGoal">Goals</label></div><div class="toggle"><input id="huePP" type="checkbox" checked><label for="huePP">Verified power plays</label></div><div class="toggle"><input id="hueStart" type="checkbox" checked><label for="hueStart">Game start</label></div><div class="toggle"><input id="hueFinal" type="checkbox" checked><label for="hueFinal">Final results</label></div></div>
+<div class="row"><div class="toggle"><input id="hueGoal" type="checkbox" checked><label for="hueGoal">Goals</label></div><div class="toggle"><input id="huePP" type="checkbox" checked><label for="huePP">Verified power plays</label></div><div class="toggle"><input id="hueStart" type="checkbox" checked><label for="hueStart">Game start</label></div><div class="toggle"><input id="hueFinal" type="checkbox" checked><label for="hueFinal">Final results</label></div><div class="toggle"><input id="hueShootout" type="checkbox" checked><label for="hueShootout">Shootouts</label></div></div>
 <div class="actions"><button class="primary" id="hueSave" type="button">Save Hue lighting</button></div>
 <p class="small muted">Hue v2 commands use local HTTPS. GameDay stores the Bridge pairing key on this device and never sends it to the dashboard. Hue does not use WLED segments or DDP streaming.</p></div>
 </div>
@@ -1605,9 +1609,10 @@ function renderDevices(){
     const flags=document.createElement("div");flags.className="row";flags.style.marginTop="10px";
     const events=[
       ["goal",1,"Goals"],["pp",2,"Power plays"],
-      ["start",4,"Game start"],["final",8,"Final results"]
+      ["start",4,"Game start"],["final",8,"Final results"],
+      ["shootout",16,"Shootouts"]
     ];
-    const mask=Number(device.events??15);
+    const mask=Number(device.events??31);
     events.forEach(([name,bit,title])=>{
       const option=document.createElement("div");
       option.className="toggle";
@@ -2415,8 +2420,8 @@ async function loadHueConfig(){
   $("hueEnabled").checked=!!hueConfig.enabled;
   $("hueBrightness").value=String(hueConfig.brightness||75);
   $("hueBrightnessLabel").textContent=$("hueBrightness").value+"%";
-  [["hueGoal",1],["huePP",2],["hueStart",4],["hueFinal",8]].forEach(
-    ([id,bit])=>$(id).checked=!!((hueConfig.events??15)&bit));
+  [["hueGoal",1],["huePP",2],["hueStart",4],["hueFinal",8],["hueShootout",16]].forEach(
+    ([id,bit])=>$(id).checked=!!((hueConfig.events??31)&bit));
   $("huePairStatus").textContent=hueConfig.paired?
     "Bridge paired · "+(hueConfig.enabled?"Hue enabled":"Hue not yet enabled"):
     "Bridge not paired. Press its button, then select Pair bridge.";
@@ -2458,7 +2463,7 @@ $("hueSave").onclick=()=>perform(async()=>{
   const lights=Array.from(document.querySelectorAll(".hue-choice:checked"))
     .map(el=>el.value);
   if(lights.length>4)throw Error("Choose no more than four Hue bulbs");
-  const events=[["hueGoal",1],["huePP",2],["hueStart",4],["hueFinal",8]]
+  const events=[["hueGoal",1],["huePP",2],["hueStart",4],["hueFinal",8],["hueShootout",16]]
     .reduce((v,[id,bit])=>v+($(id).checked?bit:0),0);
   await post("/api/hue/config",{lights,events,
     brightness:Number($("hueBrightness").value),enabled:$("hueEnabled").checked});
@@ -2481,7 +2486,7 @@ $("hueTestFinal").onclick=()=>testHue("win");
 $("hueTestStop").onclick=()=>testHue("stop");
 function deviceSettings(){
   return Array.from({length:(currentConfig?.wled?.length||8)},(_,i)=>{
-    const choices=[["goal",1],["pp",2],["start",4],["final",8]];
+    const choices=[["goal",1],["pp",2],["start",4],["final",8],["shootout",16]];
     const events=choices.reduce((mask,[name,bit])=>
       mask+($("event"+i+"_"+name).checked?bit:0),0);
     return {ip:$("ip"+i).value.trim(),name:$("wname"+i).value.trim(),enabled:$("enabled"+i).checked,events};
@@ -2821,6 +2826,10 @@ function wledPreview(event,side="home"){
 $("wledTestGoalHome").onclick=()=>wledPreview("goal","home");
 $("wledTestGoalAway").onclick=()=>wledPreview("goal","away");
 $("wledTestPP").onclick=()=>wledPreview("pp");
+$("wledTestSoStart").onclick=()=>wledPreview("so-start");
+$("wledTestSoGoal").onclick=()=>wledPreview("so-goal");
+$("wledTestSoSave").onclick=()=>wledPreview("so-save");
+$("wledTestSoMiss").onclick=()=>wledPreview("so-miss");
 $("wledTestStart").onclick=()=>wledPreview("start");
 $("wledTestWin").onclick=()=>wledPreview("win");
 $("wledTestLoss").onclick=()=>wledPreview("loss");

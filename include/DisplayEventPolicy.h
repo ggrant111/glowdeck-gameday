@@ -56,7 +56,11 @@ inline uint32_t duration(EventOverlay::Kind kind, uint8_t tier,
 inline bool backgroundAllowed(EventOverlay::Kind kind, uint8_t tier,
                               uint32_t now, uint32_t lastAt,
                               bool hasPrevious) {
-  if (tier>0 || kind==EventOverlay::Kind::GOAL) return true;
+  if (tier>0 || kind==EventOverlay::Kind::GOAL ||
+      kind==EventOverlay::Kind::SHOOTOUT_START ||
+      kind==EventOverlay::Kind::SHOOTOUT_GOAL ||
+      kind==EventOverlay::Kind::SHOOTOUT_SAVE ||
+      kind==EventOverlay::Kind::SHOOTOUT_MISS)return true;
   return !hasPrevious || uint32_t(now-lastAt)>=12000UL;
 }
 } // namespace DisplayEventPolicy

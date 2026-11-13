@@ -7,10 +7,11 @@
 namespace CelebrationEngine {
 enum class Event : uint8_t {
   NONE = 0, GOAL = 1, POWER_PLAY = 2, GAME_START = 3,
-  FINAL_WIN = 4, FINAL_LOSS = 5
+  FINAL_WIN = 4, FINAL_LOSS = 5,
+  SHOOTOUT_START = 6, SHOOTOUT_GOAL = 7, SHOOTOUT_SAVE = 8, SHOOTOUT_MISS = 9
 };
-enum : uint8_t { GOAL_FLAG = 1, PP_FLAG = 2, START_FLAG = 4, FINAL_FLAG = 8 };
-constexpr uint8_t ALL_EVENTS = 15;
+enum : uint8_t { GOAL_FLAG = 1, PP_FLAG = 2, START_FLAG = 4, FINAL_FLAG = 8, SHOOTOUT_FLAG = 16 };
+constexpr uint8_t ALL_EVENTS = 31;
 constexpr uint32_t kStartDurationMs = 4500UL;
 constexpr uint32_t kFinalDurationMs = 7000UL;
 constexpr uint8_t kMaxSegments = 16;
@@ -26,6 +27,8 @@ inline uint8_t flagFor(Event event) {
     case Event::GAME_START: return START_FLAG;
     case Event::FINAL_WIN:
     case Event::FINAL_LOSS: return FINAL_FLAG;
+    case Event::SHOOTOUT_START: case Event::SHOOTOUT_GOAL:
+    case Event::SHOOTOUT_SAVE: case Event::SHOOTOUT_MISS:return SHOOTOUT_FLAG;
     default: return 0;
   }
 }
@@ -37,6 +40,9 @@ inline bool temporary(Event event) {
 }
 inline uint32_t duration(Event event, uint8_t goalSeconds) {
   if (event == Event::GOAL) return uint32_t(goalSeconds) * 1000UL;
+  if(event==Event::SHOOTOUT_START)return 3000UL;
+  if(event==Event::SHOOTOUT_GOAL)return 4500UL;
+  if(event==Event::SHOOTOUT_SAVE||event==Event::SHOOTOUT_MISS)return 2300UL;
   if (event == Event::GAME_START) return kStartDurationMs;
   if (event == Event::FINAL_WIN || event == Event::FINAL_LOSS)
     return kFinalDurationMs;
@@ -60,6 +66,10 @@ inline Effect effect(Event event, uint8_t stage, uint8_t goalStyle) {
       return {23, 230, 185};
     case Event::POWER_PLAY: return {2, 115, 160};
     case Event::GAME_START: return {3, 170, 170};
+    case Event::SHOOTOUT_START:return {3,125,185};
+    case Event::SHOOTOUT_GOAL:return {28,235,205};
+    case Event::SHOOTOUT_SAVE:return {17,185,170};
+    case Event::SHOOTOUT_MISS:return {12,80,100};
     case Event::FINAL_WIN: return {17, 165, 195};
     case Event::FINAL_LOSS: return {12, 65, 105};
     default: return {0, 128, 128};
@@ -89,6 +99,10 @@ inline const char *label(Event event) {
     case Event::GAME_START: return "GAME START";
     case Event::FINAL_WIN: return "FINAL WIN";
     case Event::FINAL_LOSS: return "FINAL LOSS";
+    case Event::SHOOTOUT_START:return "SHOOTOUT START";
+    case Event::SHOOTOUT_GOAL:return "SHOOTOUT GOAL";
+    case Event::SHOOTOUT_SAVE:return "SHOOTOUT SAVE";
+    case Event::SHOOTOUT_MISS:return "SHOOTOUT MISS";
     default: return "IDLE";
   }
 }
