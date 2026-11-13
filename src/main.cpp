@@ -45,6 +45,7 @@
 #include "GameDayIcons.h"
 #include "NhlFetchPolicy.h"
 #include "CelebrationEngine.h"
+#include "NhlShootoutPolicy.h"
 #include "WledDiscoveryPolicy.h"
 #include "WledZonePolicy.h"
 #include "WledScenePolicy.h"
@@ -112,7 +113,7 @@ struct Settings {
   String wled[MAX_WLED];
   bool wledEnabled[MAX_WLED] = {};
   // Masked opt-in for every connected controller: goal / PP / start / final.
-  uint8_t wledEvents[MAX_WLED] = {15,15,15,15,15,15,15,15};
+  uint8_t wledEvents[MAX_WLED] = {31,31,31,31,31,31,31,31};
   String wledName[MAX_WLED];
   bool wledZoneEnabled[MAX_WLED] = {}; // OFF for migrated 8A/legacy slots
   uint32_t wledZoneMap[MAX_WLED] = {}; // 2-bit per existing WLED segment ID
@@ -196,6 +197,8 @@ struct GoalWatch {
   bool baseline = false;
 };
 GoalWatch goalWatch[MAX_GAMES];
+NhlShootoutPolicy::Watch shootoutWatches[MAX_GAMES];
+uint32_t lastShootoutPoll=0;
 struct StateWatch {
   uint32_t id = 0;
   char state[8] = {};
@@ -226,7 +229,7 @@ uint16_t liveTickerScroll=0; // UTF-8 starting byte (not a glyph frame step)
 uint8_t liveTickerPixelOffset=0; // fractional glyph scroll, in LCD pixels
 uint16_t liveTickerTextWidthPx=0;
 bool liveTickerDirty=false;
-enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY, DIAGNOSTIC };
+enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY, DIAGNOSTIC, SHOOTOUT };
 RearEvent rearEvent = RearEvent::IDLE;
 uint32_t rearGoalAt = 0, rearGoalColor = 0, rearGoalDuration = 0;
 uint32_t rearPulseStart = 0;
@@ -675,6 +678,13 @@ void triggerRearGoal(uint32_t rgb) {
   rearEvent = RearEvent::GOAL;
 }
 
+void triggerRearShootout(uint32_t rgb,bool scored){
+  if(!cfg.rearLedEnabled||!cfg.rearGoal)return;
+  rearDiagnosticUntil=0;rearTestPpUntil=0;
+  rearGoalColor=rgb;rearGoalAt=millis();
+  rearGoalDuration=scored?4200UL:2300UL;
+  rearEvent=RearEvent::SHOOTOUT;
+}
 void stopRearLed() {
   rearEvent = RearEvent::IDLE;
   rearGoalDuration = 0;
@@ -871,7 +881,8 @@ void tickRearLed() {
   if (!cfg.rearLedEnabled) { stopRearLed(); return; }
   const uint32_t goalElapsed = uint32_t(now - rearGoalAt);
   if (rearGoalDuration && goalElapsed < rearGoalDuration && cfg.rearGoal) {
-    rearEvent = RearEvent::GOAL;
+    rearEvent=rearEvent==RearEvent::SHOOTOUT?
+      RearEvent::SHOOTOUT:RearEvent::GOAL;
     writeRearLed(rearGoalColor,
                  RearLedPattern::flash(goalElapsed, rearGoalDuration));
     return;
@@ -1012,6 +1023,10 @@ bool overlayAllowed(EventOverlay::Kind kind) {
   if (!cfg.overlayEnabled || screen == Screen::CALIBRATE) return false;
   switch(kind) {
     case EventOverlay::Kind::GOAL: return cfg.overlayGoals;
+    case EventOverlay::Kind::SHOOTOUT_START:
+    case EventOverlay::Kind::SHOOTOUT_GOAL:
+    case EventOverlay::Kind::SHOOTOUT_SAVE:
+    case EventOverlay::Kind::SHOOTOUT_MISS:return true;
     case EventOverlay::Kind::POWER_PLAY_START:
     case EventOverlay::Kind::POWER_PLAY_END: return cfg.overlayPowerPlays;
     case EventOverlay::Kind::GAME_START: return cfg.overlayStart;
@@ -1086,7 +1101,7 @@ void detectRearGoalChanges() {
     const bool live = g.state == "LIVE" || g.state == "CRIT";
     // Record observed NHL score increments, even when that game's lighting
     // isn't selected. No synthetic goals are added from current scores at boot.
-    if (watch.baseline && live) {
+    if (watch.baseline && live && g.periodType!="SO") {
       const int deltaHome = g.homeScore - watch.home;
       const int deltaAway = g.awayScore - watch.away;
       for (uint8_t side = 0; side < 2; ++side) {
@@ -1272,6 +1287,8 @@ void prepareNewScoreboardDate(const String &today) {
     overlayLastFrame = 0;
     lastArmedGameState = "";
     for (auto &entry : goalWatch) entry = GoalWatch();
+    for(auto &entry:shootoutWatches)entry=NhlShootoutPolicy::Watch{};
+    lastShootoutPoll=0;
     for (auto &entry : stateWatch) entry = StateWatch();
     hasBackgroundOverlay = false;
     for (auto &entry : ppSessions) entry.reset();
@@ -1820,6 +1837,7 @@ void loadSettings() {
   hue.config.key=prefs.getString("hueKey","");
   hue.config.enabled=prefs.getBool("hueOn",false);
   hue.config.events=prefs.getUChar("hueMask",CelebrationEngine::ALL_EVENTS)&CelebrationEngine::ALL_EVENTS;
+  if(hue.config.events==15)hue.config.events=CelebrationEngine::ALL_EVENTS;
   hue.config.brightness=constrain((int)prefs.getUChar("hueBri",75),5,100);
   for(uint8_t i=0;i<HuePolicy::kMaxLights;++i){
     String id=prefs.getString(("hueL"+String(i)).c_str(),"");
@@ -1849,6 +1867,7 @@ void loadSettings() {
     cfg.wledEvents[i] = prefs.getUChar(("event" + String(i)).c_str(),
                                          CelebrationEngine::ALL_EVENTS) &
                         CelebrationEngine::ALL_EVENTS;
+    if(cfg.wledEvents[i]==15)cfg.wledEvents[i]=CelebrationEngine::ALL_EVENTS;
   }
   cfg.mode = constrain(prefs.getUChar("mode", 3), 0, 3);
   cfg.wledPP = prefs.getBool("wledPP", true);
@@ -2586,6 +2605,7 @@ bool prepareWledDdp(uint8_t slot,CelebrationEngine::Event event,
   if(slot>=MAX_WLED || !cfg.wledDdpEnabled[slot] ||
      !cfg.wledZoneEnabled[slot] || snapshot.isEmpty() ||
      event==CelebrationEngine::Event::POWER_PLAY ||
+     event>=CelebrationEngine::Event::SHOOTOUT_START ||
      event==CelebrationEngine::Event::NONE){
     if(slot<MAX_WLED)wledDdp[slot].status="Native JSON (DDP not enabled / PP)";
     return false;
@@ -4721,6 +4741,14 @@ void drawOverlayStatic() {
   switch(e.kind) {
     case EventOverlay::Kind::GOAL:
       description = String(e.team) + " SCORES!"; break;
+    case EventOverlay::Kind::SHOOTOUT_START:
+      description=String(e.away)+" VS "+String(e.home);break;
+    case EventOverlay::Kind::SHOOTOUT_GOAL:
+      description=String(e.team)+" SCORES IN THE SHOOTOUT";break;
+    case EventOverlay::Kind::SHOOTOUT_SAVE:
+      description=String(e.team)+" SHOOTOUT SAVE";break;
+    case EventOverlay::Kind::SHOOTOUT_MISS:
+      description=String(e.team)+" SHOT MISSED";break;
     case EventOverlay::Kind::POWER_PLAY_START:
       description = String(e.team) + " MAN ADVANTAGE"; break;
     case EventOverlay::Kind::POWER_PLAY_END:
@@ -5566,6 +5594,10 @@ String s3OverlaySubtitle(const EventOverlay::Item &e) {
   switch(e.kind) {
     case EventOverlay::Kind::GOAL:
       return String(e.team)+" SCORES!";
+    case EventOverlay::Kind::SHOOTOUT_START:return "SHOOTOUT BEGINS";
+    case EventOverlay::Kind::SHOOTOUT_GOAL:return String(e.team)+" SCORES!";
+    case EventOverlay::Kind::SHOOTOUT_SAVE:return String(e.team)+" MAKES THE SAVE";
+    case EventOverlay::Kind::SHOOTOUT_MISS:return String(e.team)+" SHOT MISSED";
     case EventOverlay::Kind::POWER_PLAY_START:
       return String(e.team)+" HAS THE ADVANTAGE";
     case EventOverlay::Kind::POWER_PLAY_END:
@@ -6738,6 +6770,7 @@ void registerRoutes() {
     doc["rearEnabled"] = cfg.rearLedEnabled;
     doc["rearEvent"] = rearEvent == RearEvent::GOAL ? "GOAL" :
                        rearEvent == RearEvent::POWER_PLAY ? "POWER_PLAY" :
+                       rearEvent == RearEvent::SHOOTOUT ? "SHOOTOUT" :
                        rearEvent == RearEvent::DIAGNOSTIC ? "RGB_DIAGNOSTIC" : "IDLE";
     JsonArray followed = doc.createNestedArray("followed");
     for (uint8_t i = 0; i < MAX_FOLLOWED_GAMES; ++i)
@@ -6816,6 +6849,13 @@ void registerRoutes() {
       g["startTimeUTC"] = games[i].startUTC;
       g["period"] = games[i].period;
       g["periodType"] = games[i].periodType;
+      for(const auto &so:shootoutWatches)if(so.gameId==games[i].id){
+        g["soHomeAttempts"]=so.homeAttempts;
+        g["soAwayAttempts"]=so.awayAttempts;
+        g["soHomeGoals"]=so.homeGoals;
+        g["soAwayGoals"]=so.awayGoals;
+        break;
+      }
       g["clock"] = games[i].clock;
       g["intermission"] = games[i].intermission;
       g["powerPlaySide"] = games[i].ppSide;
