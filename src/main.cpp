@@ -1234,7 +1234,7 @@ void fetchShootoutPlays(){
   for(JsonVariantConst shot:plays){
     const uint32_t sort=shot["sortOrder"]|0U;
     if(sort>newest)newest=sort;
-    if(!dispatch||!sort||sort<=watch.lastSort)continue;
+    if(!sort||sort<=watch.lastSort)continue;
     const auto result=NhlShootoutPolicy::classify(
       shot["periodDescriptor"]["periodType"]|"",
       uint16_t(shot["typeCode"]|0));
@@ -1243,7 +1243,7 @@ void fetchShootoutPlays(){
     const uint8_t side=owner==homeId?1:owner==awayId?2:0;
     if(!side)continue;
     watch.record(side,result);
-    signalShootoutAttempt(*target,side,result,sort);
+    if(dispatch)signalShootoutAttempt(*target,side,result,sort);
   }
   watch.lastSort=newest;
   watch.playsKnown=true;
