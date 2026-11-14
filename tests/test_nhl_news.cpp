@@ -26,6 +26,11 @@ int main() {
   assert(classify("Game recap: Mammoth 3 - Bruins 2")==Kind::POSTGAME);
   assert(classify("GameDay roundtable")==Kind::GENERAL);
   const uint32_t utah=(1UL<<DisplayEventPolicy::teamIndex("UTA"));
+  Catalog joint;
+  Story duel=story("two-teams","2026-11-13T09:00:00Z","BOS","Game preview");
+  duel.taggedTeams=(1UL<<DisplayEventPolicy::teamIndex("BOS"))|utah;
+  joint.merge(duel,utah);
+  assert(joint.matching(utah,Filter::FOLLOWED)==1);
   Catalog cache;
   cache.merge(story("league-new","2026-11-13T10:00:00Z","","League news"),utah);
   cache.merge(story("uta-older","2026-11-12T10:00:00Z","UTA","Utah preview"),utah);
