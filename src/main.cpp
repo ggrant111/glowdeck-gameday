@@ -236,6 +236,8 @@ uint32_t newsLastAttempt=0, newsTickerAt=0;
 uint16_t newsTickerOffset=0;
 uint8_t newsSlide=0, newsTeamCursor=0;
 bool newsFetchTeamNext=false, newsRefreshRequested=false, newsTickerDirty=false;
+bool newsTryEspnNext=false; // Fallback is scheduled separately to avoid two TLS requests in one loop.
+String newsLastError="Awaiting first headline fetch";
 enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY, DIAGNOSTIC, SHOOTOUT };
 RearEvent rearEvent = RearEvent::IDLE;
 uint32_t rearGoalAt = 0, rearGoalColor = 0, rearGoalDuration = 0;
@@ -6060,7 +6062,10 @@ bool newsAnyLive() {
   return false;
 }
 bool newsViewEnabled() {
-  return screen==Screen::LIVE && scoreboardLoaded && newsCache.count &&
+  // News is the PRIMARY idle display, not an optional carousel page.
+  // An empty/unreachable feed must show a clear diagnostic placeholder rather
+  // than silently resuming upcoming games and conference standings.
+  return screen==Screen::LIVE && scoreboardLoaded &&
     !newsAnyLive() && !carouselHold.paused;
 }
 const NhlNews::Story *visibleNewsStory() {
@@ -6076,24 +6081,31 @@ void advanceNews(int direction) {
   needsDraw=true;
 }
 void tickForgeNews(uint32_t now) {
-  // HTTPS + streaming JSON are idle-only: live scoring, PP verification,
-  // WLED/Hue restoration, touch and celebration overlays always win.
+  // Keep score, physical event output, and restore timing higher priority.
   if(WiFi.status()!=WL_CONNECTED || !scoreboardLoaded || newsAnyLive() ||
      overlayController.active() || rearEvent!=RearEvent::IDLE ||
      wledRestoreWouldConflict(now,8500UL) || now<NhlNews::kMinimumBootMs)
     return;
   const uint32_t follows=newsFollowMask();
-  // Prime the first followed-team fetch shortly after the league feed,
-  // then return to an eight-minute refresh cycle.
-  const uint32_t interval=newsCache.failures?NhlNews::kRetryMs:
-      (newsFetchTeamNext && follows ? 30000UL : NhlNews::kRefreshMs);
+  // A failed Forge attempt schedules ESPN for the NEXT loop, rather than
+  // blocking the controller for two network timeouts during one iteration.
+  const uint32_t interval=newsTryEspnNext ? 0UL :
+    (newsCache.failures ? NhlNews::kRetryMs :
+     (newsFetchTeamNext && follows ? 30000UL : NhlNews::kRefreshMs));
   if(!newsRefreshRequested && newsLastAttempt &&
      uint32_t(now-newsLastAttempt)<interval)return;
-  if(ESP.getFreeHeap()<39000UL)return; // CYD must retain TLS/scoreboard headroom.
+  if(ESP.getFreeHeap()<39000UL){
+    if(newsLastError!="News paused: low free heap"){
+      newsLastError="News paused: low free heap";
+      if(newsViewEnabled() && !newsCache.count)needsDraw=true;
+    }
+    return;
+  }
   newsLastAttempt=millis();
   newsRefreshRequested=false;
   uint8_t teamId=0;
-  if(newsFetchTeamNext && follows) {
+  const bool usingEspn=newsTryEspnNext;
+  if(!usingEspn && newsFetchTeamNext && follows){
     for(uint8_t n=0;n<TeamPalette::kCount;++n){
       const uint8_t ix=uint8_t((newsTeamCursor+n)%TeamPalette::kCount);
       if((follows&(1UL<<ix))==0)continue;
@@ -6102,20 +6114,37 @@ void tickForgeNews(uint32_t now) {
       break;
     }
   }
-  const auto result=NhlNewsService::fetch(newsCache,follows,teamId);
+  const auto result=usingEspn ?
+      NhlNewsService::fetchEspn(newsCache,follows) :
+      NhlNewsService::fetch(newsCache,follows,teamId);
   newsCache.lastHttpCode=result.code;
-  if(result.ok){
+  if(result.ok && result.accepted){
     newsCache.failures=0;
     newsCache.lastSuccessAt=millis();
-    newsFetchTeamNext=!newsFetchTeamNext;
+    newsTryEspnNext=false;
+    newsLastError="";
+    NhlNews::copy(newsCache.source,sizeof(newsCache.source),
+                  usingEspn?"ESPN":"NHL Forge");
+    // After fallback, attempt NHL Forge again on the next regular cycle.
+    newsFetchTeamNext=usingEspn?false:!newsFetchTeamNext;
     if(newsSlide>=newsCache.count)newsSlide=0;
     if(newsViewEnabled())needsDraw=true;
-    Serial.printf("[NEWS] Forge ok team=%u received=%u cached=%u heap=%u\n",
-      teamId,result.accepted,newsCache.count,(unsigned)ESP.getFreeHeap());
+    Serial.printf("[NEWS] %s ok team=%u received=%u cached=%u heap=%u\n",
+      newsCache.source,teamId,result.accepted,newsCache.count,
+      (unsigned)ESP.getFreeHeap());
+  }else if(!usingEspn){
+    newsTryEspnNext=true;
+    newsLastError=String("NHL Forge ")+result.error+
+      " (HTTP "+String(result.code)+"); ESPN next";
+    Serial.printf("[NEWS] %s\n",newsLastError.c_str());
+    if(newsViewEnabled() && !newsCache.count)needsDraw=true;
   }else{
+    newsTryEspnNext=false;
     if(newsCache.failures<255)++newsCache.failures;
-    Serial.printf("[NEWS] Forge failed team=%u HTTP=%d reason=%s; stale cache retained\n",
-      teamId,result.code,result.error);
+    newsLastError=String("ESPN ")+result.error+
+      " (HTTP "+String(result.code)+"); retry scheduled";
+    Serial.printf("[NEWS] %s\n",newsLastError.c_str());
+    if(newsViewEnabled() && !newsCache.count)needsDraw=true;
   }
 }
 // News typography is independent of NHL game panes and only runs on a card
@@ -6150,6 +6179,7 @@ void newsWrap(const char *raw,int16_t x,int16_t y,int16_t width,
   }
 }
 void drawNewsTicker() {
+  if(!newsCache.count)return; // Never modulo by zero while awaiting first feed.
   const int w=
 #ifdef GLOWDECK_WAVESHARE_S3
     480;
@@ -6170,7 +6200,6 @@ void drawNewsTicker() {
 }
 void drawNewsCard() {
   const NhlNews::Story *story=visibleNewsStory();
-  if(!story)return;
 #ifdef GLOWDECK_WAVESHARE_S3
   const int w=480, h=320, margin=26;
   const int titleY=76, summaryY=190, titleLines=3;
@@ -6183,6 +6212,19 @@ void drawNewsCard() {
   tft.setTextDatum(TL_DATUM);
   tft.setTextColor(WHITE,ARENA_BLACK);
   tft.drawString("GLOWDECK  /  NHL NEWS",margin,18,2);
+  if(!story){
+    tft.setTextColor(TEAL,ARENA_BLACK);
+    tft.drawString("UPDATING HEADLINES",margin,titleY,4);
+    const String detail=WiFi.status()!=WL_CONNECTED?
+      "Offline: waiting for Wi-Fi" :
+      newsLastError.length()?newsLastError:String("Retrieving latest NHL stories");
+    newsWrap(detail.c_str(),margin,summaryY,w-2*margin,2,3,22,
+             MUTED,ARENA_BLACK);
+    tft.setTextColor(MUTED,ARENA_BLACK);
+    tft.drawString("No live games  |  GAMES menu available",
+      margin,h-48,2);
+    return;
+  }
   const String category=String(story->team[0]?story->team:"LEAGUE")+
       "  /  "+NhlNews::kindLabel(story->kind);
   tft.setTextColor(TEAL,ARENA_BLACK);
@@ -6209,9 +6251,9 @@ void drawNewsCard() {
     ,MUTED,ARENA_BLACK);
   tft.setTextColor(MUTED,ARENA_BLACK);
 #ifdef GLOWDECK_WAVESHARE_S3
-  tft.drawString("NHL.com  |  Swipe for stories  |  GAMES >",margin,260,2);
+  tft.drawString(String(story->source)+"  |  Swipe for stories  |  GAMES >",margin,260,2);
 #else
-  tft.drawString("NHL.com  |  "+String(newsSlide+1)+"/"+String(newsCache.count),
+  tft.drawString(String(story->source)+"  |  "+String(newsSlide+1)+"/"+String(newsCache.count),
                  margin,203,2);
   tft.drawString("MENU",w-49,18,2);
 #endif
@@ -7208,8 +7250,14 @@ void registerRoutes() {
     else if(filterArg=="postgame")filter=NhlNews::Filter::POSTGAME;
     const uint32_t mask=newsFollowMask();
     DynamicJsonDocument doc(10000);
-    doc["source"]="NHL Forge";
-    doc["cached"]=newsCache.lastSuccessAt>0;
+    doc["source"]=newsCache.source;
+    doc["cached"]=newsCache.count>0;
+    doc["lastError"]=newsLastError;
+    doc["fallbackPending"]=newsTryEspnNext;
+    doc["lastAttemptMs"]=newsLastAttempt;
+    doc["freeHeap"]=ESP.getFreeHeap();
+    doc["idleMode"]=newsViewEnabled();
+    doc["paused"]=carouselHold.paused;
     doc["ageSeconds"]=newsCache.lastSuccessAt?
        uint32_t(millis()-newsCache.lastSuccessAt)/1000UL:0;
     doc["httpCode"]=newsCache.lastHttpCode;
@@ -7228,6 +7276,8 @@ void registerRoutes() {
       row["team"]=story->team;
       row["kind"]=NhlNews::kindLabel(story->kind);
       row["image"]=story->image;
+      row["url"]=story->url;
+      row["source"]=story->source;
     }
     sendJson(doc);
   });
@@ -9954,7 +10004,7 @@ void loop() {
   bool s3NewsTickerFrame=false;
   uint8_t s3PartialMask=S3BroadcastFrame::BOTH;
 #endif
-  if(newsViewEnabled() && !overlayController.active() &&
+  if(newsViewEnabled() && newsCache.count && !overlayController.active() &&
      uint32_t(now-newsTickerAt)>=120UL){
     newsTickerAt=now;
     newsTickerOffset+=2;
@@ -10055,7 +10105,7 @@ void loop() {
     liveTickerDirty=false;
   }
   if(!fullDrawThisLoop && !overlayController.active() &&
-     newsTickerDirty && newsViewEnabled()) {
+     newsTickerDirty && newsCache.count && newsViewEnabled()) {
     drawNewsTicker();
 #ifdef GLOWDECK_WAVESHARE_S3
     s3NewsTickerFrame=true;
