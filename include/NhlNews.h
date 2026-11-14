@@ -82,6 +82,8 @@ struct Story {
   char team[5]={};
   uint32_t taggedTeams=0; // One story may reference multiple NHL teams.
   char image[192]={};
+  char url[192]={}; // Per-story canonical link; ESPN fallback is not on NHL.com.
+  char source[8]="NHL";
   Kind kind=Kind::GENERAL;
   bool valid() const {return slug[0] && headline[0];}
 };
@@ -109,6 +111,7 @@ struct Catalog {
   uint32_t lastSuccessAt=0;
   int16_t lastHttpCode=0;
   uint8_t failures=0;
+  char source[12]="Pending";
 
   void merge(const Story &story,uint32_t favorites) {
     if(!story.valid())return;
