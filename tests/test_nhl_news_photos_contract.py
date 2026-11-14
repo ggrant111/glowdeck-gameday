@@ -40,7 +40,7 @@ for policy in ('newsViewEnabled()', 'overlayController.active()',
                'WiFi.status()!=WL_CONNECTED'):
     assert policy in tick,policy
 assert 'kMaxBytes=65000UL' in photo and 'kMaxBytes=110000UL' in photo
-assert 'kSlots=5;' in photo and 'kSlots=8;' in photo
+assert photo.count('kSlots=10;')==2
 assert 'http.collectHeaders(headers,1);' in photo
 assert 'type.startsWith("image/jpeg")' in photo
 assert 'total+uint32_t(got)>kMaxBytes' in photo
