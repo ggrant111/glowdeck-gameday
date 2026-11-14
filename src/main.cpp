@@ -6252,7 +6252,8 @@ void newsWrap(const char *raw,int16_t x,int16_t y,int16_t width,
 // 480x320 sprite. No second framebuffer, PNG inflater or large heap array.
 int16_t newsImageX0=0,newsImageY0=0,newsImageX1=0,newsImageY1=0;
 bool newsJpegBlock(int16_t x,int16_t y,uint16_t w,uint16_t h,uint16_t *pixels) {
-  if(!pixels || x>=newsImageX1 || y>=newsImageY1)return false;
+  if(!pixels || y>=newsImageY1)return false;
+  if(x>=newsImageX1)return true; // Skip cropped blocks, continue later rows.
   if(x>=newsImageX0 && y>=newsImageY0 &&
      x+w<=newsImageX1 && y+h<=newsImageY1){
     tft.pushImage(x,y,w,h,pixels);
@@ -6339,20 +6340,44 @@ void drawNewsCard() {
     36
 #endif
     ,2);
-  newsWrap(story->headline,margin,titleY,w-2*margin,4,titleLines,
+  const bool photo=newsPhotos.has(story->image,millis());
+  if(photo){
 #ifdef GLOWDECK_WAVESHARE_S3
-    30
+    constexpr int16_t px=283,py=84,pw=173,ph=145;
+    tft.fillRoundRect(px-3,py-3,pw+6,ph+6,6,PANEL);
+    newsImageX0=px;newsImageY0=py;newsImageX1=px+pw;newsImageY1=py+ph;
+    const bool shown=newsPhotos.draw(story->image,px,py,pw,ph,
+                                    newsJpegBlock,millis());
+    if(!shown)tft.fillRect(px,py,pw,ph,PANEL);
+    newsWrap(story->headline,margin,titleY,235,4,3,30,WHITE,ARENA_BLACK);
+    newsWrap(story->summary,margin,summaryY,235,2,3,22,MUTED,ARENA_BLACK);
 #else
-    28
+    constexpr int16_t px=190,py=113,pw=115,ph=78;
+    tft.fillRoundRect(px-3,py-3,pw+6,ph+6,5,PANEL);
+    newsImageX0=px;newsImageY0=py;newsImageX1=px+pw;newsImageY1=py+ph;
+    const bool shown=newsPhotos.draw(story->image,px,py,pw,ph,
+                                    newsJpegBlock,millis());
+    if(!shown)tft.fillRect(px,py,pw,ph,PANEL);
+    newsWrap(story->headline,margin,titleY,w-2*margin,2,3,18,
+             WHITE,ARENA_BLACK);
+    newsWrap(story->summary,margin,121,162,2,4,18,MUTED,ARENA_BLACK);
 #endif
-    ,WHITE,ARENA_BLACK);
-  newsWrap(story->summary,margin,summaryY,w-2*margin,2,
+  }else{
+    newsWrap(story->headline,margin,titleY,w-2*margin,4,titleLines,
 #ifdef GLOWDECK_WAVESHARE_S3
-    3,22
+      30
 #else
-    3,19
+      28
 #endif
-    ,MUTED,ARENA_BLACK);
+      ,WHITE,ARENA_BLACK);
+    newsWrap(story->summary,margin,summaryY,w-2*margin,2,
+#ifdef GLOWDECK_WAVESHARE_S3
+      3,22
+#else
+      3,19
+#endif
+      ,MUTED,ARENA_BLACK);
+  }
   tft.setTextColor(MUTED,ARENA_BLACK);
 #ifdef GLOWDECK_WAVESHARE_S3
   tft.drawString(String(story->source)+"  |  Swipe for stories  |  GAMES >",margin,260,2);
