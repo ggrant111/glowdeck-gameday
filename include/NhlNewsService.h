@@ -75,13 +75,22 @@ inline Result fetch(NhlNews::Catalog &catalog,uint32_t teamMask,
     NhlNews::copy(story.image,sizeof(story.image),
                   item["thumbnail"]["thumbnailUrl"] | "");
     const char *team=NhlNews::teamFromId(filteredTeamId);
+    if(team[0]){
+      const int8_t index=DisplayEventPolicy::teamIndex(team);
+      if(index>=0)story.taggedTeams|=1UL<<index;
+    }
     for(JsonObject tag:item["tags"].as<JsonArray>()){
       const char *found=NhlNews::teamFromTag(tag["slug"] | "");
       if(!found[0])found=NhlNews::teamFromTag(tag["neutralSlug"] | "");
-      if(found[0]){team=found;break;}
       // Some NHL stories store team abbreviations in tag extras.
-      const char *abbr=tag["extraData"]["abbreviation"] | "";
-      if(DisplayEventPolicy::teamIndex(abbr)>=0){team=abbr;break;}
+      if(!found[0]){
+        const char *abbr=tag["extraData"]["abbreviation"] | "";
+        if(DisplayEventPolicy::teamIndex(abbr)>=0)found=abbr;
+      }
+      const int8_t index=DisplayEventPolicy::teamIndex(found);
+      if(index<0)continue;
+      story.taggedTeams|=1UL<<index;
+      if(!team[0])team=found;
     }
     NhlNews::copy(story.team,sizeof(story.team),team);
     story.kind=NhlNews::classify(story.headline);
