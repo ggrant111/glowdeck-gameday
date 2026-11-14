@@ -58,3 +58,13 @@ The main GitHub Actions workflow also runs `tests/test_nhl_news_photos_contract.
 - Article tags may be incomplete, and editorial classification is best-effort.
 - The Forge service may block direct connections or change its path. ESPN's public NHL news JSON is an alternate source, not a guaranteed service contract. If both sources fail, GameDay displays a visible loading/error card rather than stale game/standings slides. The local /api/news response includes source, lastError, lastAttemptMs, freeHeap, paused, and fallbackPending.
 - To provide longer multi-paragraph pregame briefings, a future release can add on-demand article detail retrieval with stricter memory/performance limits.
+
+## JSON parsing recovery (HTTP 200 but no headlines)
+
+A successful HTTP status does not guarantee that ArduinoJson can decode ESPN/Forge editorial JSON. Since the ESP32 receives a streaming HTTP body, a 1-second default stream timeout, byte-at-a-time TLS reads, chunked transfer encoding, or a too-small filtered JSON document can all cause the old generic `invalid/truncated JSON` error. The original fallback did not preserve which of these happened.
+
+The new parser uses StreamUtils for 512-byte read buffering and optional HTTP chunk decoding, an 8-second stream timeout, HTTP header collection, and a fixed memory budget. ESPN fetches five articles instead of ten per request and uses a correct array filter for JPEG photo metadata. It retains a detailed `DeserializationError::c_str()` failure category (e.g. `NoMemory`, `IncompleteInput`, `InvalidInput`, or `TooDeep`).
+
+On the serial console (`115200`), look for `[NEWS] ESPN decode=... HTTP=200 length=... transfer=... encoding=... jsonUsed=... jsonCapacity=... heap=...`. This distinguishes memory exhaustion, a truncated TLS stream, and unsupported content encoding. The `/api/news` endpoint/dashboard reports the latest error without clearing previously cached articles. If both sources fail on first boot, the screen intentionally displays `UPDATING HEADLINES` rather than stale standings.
+
+**Hardware acceptance:** confirm an ESP32-S3 and original CYD can fetch genuine ESPN stories into the news cache; inspect the precise error if either fails, check that article links point to their source, and confirm live score / WLED / goal audio behavior remains unaffected. GitHub CI verifies code and board compilation but cannot reproduce the user's exact Wi-Fi/network conditions.
