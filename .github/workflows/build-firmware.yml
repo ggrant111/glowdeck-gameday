@@ -52,6 +52,8 @@ jobs:
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_nhl_news.cpp -o /tmp/glowdeck-nhl-news
           /tmp/glowdeck-nhl-news
           python tests/test_nhl_news_contract.py
+          python tests/test_nhl_news_photos_contract.py
+          python tests/test_nhl_news_links.py
       - name: Test local calendar rollover
         run: |
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/test_day_rollover.cpp -o /tmp/glowdeck-day-test

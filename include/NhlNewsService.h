@@ -140,6 +140,7 @@ inline Result fetchEspn(NhlNews::Catalog &catalog,uint32_t teamMask) {
   sample["description"]=true;
   sample["published"]=true;
   sample["type"]=true;
+  sample["images"].createNestedObject()["url"]=true;
   sample["links"]["web"]["href"]=true;
   JsonObject category=sample.createNestedArray("categories").createNestedObject();
   category["type"]=true;
@@ -161,6 +162,13 @@ inline Result fetchEspn(NhlNews::Catalog &catalog,uint32_t teamMask) {
     NhlNews::copy(story.headline,sizeof(story.headline),item["headline"] | "");
     NhlNews::copy(story.summary,sizeof(story.summary),item["description"] | "");
     NhlNews::copy(story.published,sizeof(story.published),item["published"] | "");
+    for(JsonObject photo:item["images"].as<JsonArray>()){
+      const char *url=photo["url"] | "";
+      if(strncmp(url,"https://",8)==0){
+        NhlNews::copy(story.image,sizeof(story.image),url);
+        break;
+      }
+    }
     NhlNews::copy(story.source,sizeof(story.source),"ESPN");
     const char *type=item["type"] | "";
     story.kind=NhlNews::classify(story.headline);
@@ -169,9 +177,19 @@ inline Result fetchEspn(NhlNews::Catalog &catalog,uint32_t teamMask) {
     // Only expose a verified ESPN page, never an arbitrary URL in the UI.
     String target=link;
     if(target.startsWith("http://"))target="https://"+target.substring(7);
-    if(target.startsWith("https://www.espn.com/") ||
-       target.startsWith("https://espn.com/"))
+    if((target.startsWith("https://www.espn.com/") ||
+        target.startsWith("https://espn.com/")) &&
+       target.length()<sizeof(story.url)){
+      // ESPN news provides the actual publication URL (which can be a
+      // story, feature, or media page). Retain it verbatim where possible.
       NhlNews::copy(story.url,sizeof(story.url),target.c_str());
+    }else if(!strcmp(type,"Story") || !strcmp(type,"HeadlineNews")){
+      // Fallback only for editorial articles: numeric ESPN ID, never an
+      // nhl.com/news/espn-... pseudo-slug. Video/news clips need their
+      // original links, so do not manufacture an article path for those.
+      const String fallback=String("https://www.espn.com/nhl/story/_/id/")+String(id);
+      NhlNews::copy(story.url,sizeof(story.url),fallback.c_str());
+    }
     const char *firstTeam="";
     for(JsonObject cat:item["categories"].as<JsonArray>()){
       if(strcmp(cat["type"] | "","team")!=0)continue;

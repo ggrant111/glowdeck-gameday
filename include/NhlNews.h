@@ -81,7 +81,7 @@ struct Story {
   char published[26]={};
   char team[5]={};
   uint32_t taggedTeams=0; // One story may reference multiple NHL teams.
-  char image[192]={};
+  char image[256]={};
   char url[192]={}; // Per-story canonical link; ESPN fallback is not on NHL.com.
   char source[8]="NHL";
   Kind kind=Kind::GENERAL;
