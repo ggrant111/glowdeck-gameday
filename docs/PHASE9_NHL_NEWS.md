@@ -1,9 +1,9 @@
 # Phase 9 — NHL Forge news cards and ticker
 
-Status: **Implemented on the Phase 9 feature branch; hardware validation required.**
+Status: **Implemented, with idle news fallback recovery; CYD and S3 hardware validation required.**
 
 ## Features
-- League-wide article feed and team-tag feed from Forge DAPI.
+- League-wide article feed and team-tag feed from Forge DAPI; when unavailable, low-priority ESPN NHL news provides an editorial fallback.
 - Followed-team relevance: persistent favorite teams and both teams in today's starred/armed games. Following a game **never** arms physical lights, sound, WLED, or Hue.
 - Editorial pregame and postgame categories. These classify titles with conservative keywords; the story API is **not** an authoritative source of injuries, lineups, game outcomes, or events.
 - Read-only `GET /api/news?filter=all|followed|pregame|postgame` with headline, summary, team tag, published date, thumbnail, and article slug. Requires existing dashboard authorization.
@@ -11,18 +11,21 @@ Status: **Implemented on the Phase 9 feature branch; hardware validation require
 - A self-hosted **NHL News** dashboard page offers story cards, an accessible headline marquee and article links, no additional proxy/server.
 - CYD 320x240 and Waveshare S3 480x320 render a headline/summary card and scroll the next headline in a separate bottom strip. Swipe or tap to advance. Use the GAMES corner to open today's schedule.
 - News cards rotate every 10 seconds when no NHL game state is LIVE/CRIT. During LIVE or intermission, existing scoreboard and NHL events take immediate precedence. Manual pinned games are respected.
+- **Important**: the idle display is selected even with zero cached articles. While fetching, a visible "UPDATING HEADLINES" card replaces the old games/standings carousel and explains why no stories are currently available. A blank or failed Forge feed cannot force a silent return to the old idle carousel.
 
 ## Source and API
 ```text
 GET https://forge-dapi.d3.nhle.com/v2/content/en-us/stories
 GET https://forge-dapi.d3.nhle.com/v2/content/en-us/stories?tags.slug=teamid-59
+GET https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/news?limit=10  # fallback only
 ```
 Forge's Deltatre Distribution API documents `items[]`, `headline`, `title`, `summary`, `slug`, `contentDate`, `tags[].slug`, `thumbnail.thumbnailUrl`, plus tag filtering. NHL-specific success and response schema must be verified on hardware. The backend is not an official, stable NHL developer contract, and may return HTTP errors.
 
 ## Performance and caching
 - Fixed-size **10-article RAM cache** shared by the device and dashboard; no daily write wear or additional flash partition. Reboot clears news; network failures preserve already cached stories until reboot.
-- Two small alternating fetches: general feed, then a team-specific tag feed when favorites exist. The team rotates among followed teams across fetch cycles. Followed-team news is prioritized on cards and filtered dashboard views.
-- Update period: every **8 minutes** when safe, with the first followed-team fetch primed **30 seconds** after a successful league fetch; **2-minute** retry after failure. No requests until after boot, the first scoreboard load, Wi-Fi connection, and adequate free heap.
+- Two small alternating Forge fetches: general feed, then a team-specific tag feed when favorites exist. The team rotates among followed teams across fetch cycles. Followed-team news is prioritized on cards and filtered dashboard views.
+- Update period: every **8 minutes** when safe, with the first followed-team fetch primed **30 seconds** after a successful Forge league fetch; **2-minute** retry after both sources fail.
+- Forge failure or zero usable articles queues ESPN on the **next loop** (never two blocking TLS calls in one loop). A successful fallback populates the same bounded cache and keeps original story source/links. ESPN is editorial-only and cannot trigger game events. No requests until after boot, the first scoreboard load, Wi-Fi connection, and adequate free heap.
 - Uses streamed, filtered ArduinoJson to discard full story bodies, relations and excess metadata, with bounded TLS timeouts and minimum free heap.
 - Skips news HTTP calls during any game with state LIVE/CRIT, including intermission; during active event overlays or rear LED goals; or when a WLED restoration may be due. Goal/PP/SO polling and physical effects always take priority.
 - News is editorial: it must never call a celebration, horn, WLED/Hue state change, or game arming function.
@@ -48,5 +51,5 @@ The main GitHub Actions workflow runs both tests before building board firmware.
 ## Limitations / next enhancements
 - This release does not fetch full article bodies or show photographs on the TFT.
 - Article tags may be incomplete, and editorial classification is best-effort.
-- The Forge service may block direct connections or change its path; the local dashboard reports HTTP errors and keeps old headlines. No fabricated news or ESPN fallback is shown.
+- The Forge service may block direct connections or change its path. ESPN's public NHL news JSON is an alternate source, not a guaranteed service contract. If both sources fail, GameDay displays a visible loading/error card rather than stale game/standings slides. The local /api/news response includes source, lastError, lastAttemptMs, freeHeap, paused, and fallbackPending.
 - To provide longer multi-paragraph pregame briefings, a future release can add on-demand article detail retrieval with stricter memory/performance limits.

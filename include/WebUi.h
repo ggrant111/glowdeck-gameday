@@ -3053,8 +3053,10 @@ async function loadNews(){
     "Cached "+Math.floor((data.ageSeconds||0)/60)+" min ago":
     "Awaiting first successful Forge fetch";
   $("newsStatus").textContent=cache+" · "+rows.length+" stories"+
-     (data.live?" · live games take priority":"")+
-     (data.failures?" · retrying after API error":"");
+     " · "+(data.source||"Waiting for news")+
+     (data.live?" · Live games take priority":"")+
+     (data.paused?" · Paused on selected game":"")+
+     (data.lastError?" · "+data.lastError:"");
   const ticker=$("newsTicker");
   ticker.replaceChildren();
   const moving=document.createElement("span");
@@ -3080,7 +3082,8 @@ async function loadNews(){
     const body=document.createElement("div");body.className="news-card-body";
     const label=document.createElement("div");label.className="news-meta";
     const date=article.published?new Date(article.published):null;
-    label.textContent=[article.team||"LEAGUE",article.kind||"NHL NEWS",
+    label.textContent=[article.source||data.source||"NHL",article.team||"LEAGUE",
+      article.kind||"NHL NEWS",
       date && !Number.isNaN(date.getTime())?
         date.toLocaleDateString([],{month:"short",day:"numeric"}):""]
       .filter(Boolean).join(" · ");
@@ -3089,11 +3092,17 @@ async function loadNews(){
     const summary=document.createElement("p");
     summary.textContent=article.summary||"Open the story for details.";
     body.append(label,title,summary);
-    if(article.slug && /^[a-z0-9-]+$/i.test(article.slug)){
+    const trustedUrl=typeof article.url==="string" &&
+      /^https:\/\/(?:www\.)?(?:nhl\.com|espn\.com)\//i.test(article.url)?
+        article.url:"";
+    const nhlUrl=article.source!=="ESPN" && article.slug &&
+      /^[a-z0-9-]+$/i.test(article.slug)?
+      "https://www.nhl.com/news/"+encodeURIComponent(article.slug):"";
+    if(trustedUrl||nhlUrl){
       const link=document.createElement("a");
-      link.href="https://www.nhl.com/news/"+encodeURIComponent(article.slug);
+      link.href=trustedUrl||nhlUrl;
       link.target="_blank";link.rel="noopener noreferrer";
-      link.textContent="Read on NHL.com";
+      link.textContent=article.source==="ESPN"?"Read on ESPN":"Read on NHL.com";
       body.append(link);
     }
     card.append(body);cards.append(card);

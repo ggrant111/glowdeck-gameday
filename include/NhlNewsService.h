@@ -30,8 +30,9 @@ inline Result fetch(NhlNews::Catalog &catalog,uint32_t teamMask,
   http.useHTTP10(true);
   String url=kBase;
   // Ordinary Forge tag filter; optional fallback if NHL changes tagging.
+  url+="?%24limit=12"; // Keep filtered JSON within CYD heap budgets.
   if(filteredTeamId)
-    url+="?tags.slug=teamid-"+String(filteredTeamId);
+    url+="&tags.slug=teamid-"+String(filteredTeamId);
   if(!http.begin(client,url)){result.error="TLS begin failed";return result;}
   http.addHeader("Accept","application/json");
   http.addHeader("Accept-Encoding","identity");
@@ -74,6 +75,8 @@ inline Result fetch(NhlNews::Catalog &catalog,uint32_t teamMask,
     NhlNews::copy(story.published,sizeof(story.published),item["contentDate"] | "");
     NhlNews::copy(story.image,sizeof(story.image),
                   item["thumbnail"]["thumbnailUrl"] | "");
+    const String link=String("https://www.nhl.com/news/")+story.slug;
+    NhlNews::copy(story.url,sizeof(story.url),link.c_str());
     const char *team=NhlNews::teamFromId(filteredTeamId);
     if(team[0]){
       const int8_t index=DisplayEventPolicy::teamIndex(team);
@@ -98,8 +101,93 @@ inline Result fetch(NhlNews::Catalog &catalog,uint32_t teamMask,
     catalog.merge(story,teamMask);
     ++result.accepted;
   }
-  result.ok=true;
-  result.error="";
+  result.ok=result.accepted>0;
+  result.error=result.ok?"":"Forge has no usable stories";
+  return result;
+}
+
+// ESPN's public Site API is an alternate editorial source, used only when
+// Forge fails or its response contains no usable article cards. This is NOT
+// a gameplay, score, goal or lighting source.
+inline Result fetchEspn(NhlNews::Catalog &catalog,uint32_t teamMask) {
+  Result result;
+  if(WiFi.status()!=WL_CONNECTED){result.error="offline";return result;}
+  WiFiClientSecure client;
+  client.setInsecure(); // Same transport behavior as existing NHL requests.
+  client.setTimeout(6000);
+  HTTPClient http;
+  http.setConnectTimeout(3500);
+  http.setTimeout(6500);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.useHTTP10(true);
+  const char *url=
+      "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/news?limit=10";
+  if(!http.begin(client,url)){result.error="ESPN TLS begin failed";return result;}
+  http.addHeader("Accept","application/json");
+  http.addHeader("Accept-Encoding","identity");
+  result.code=http.GET();
+  if(result.code!=HTTP_CODE_OK){
+    http.end();
+    result.error="ESPN HTTP error";
+    return result;
+  }
+  // The raw ESPN response includes dozens of image variants and links per
+  // article; explicitly discard them to keep this viable on original CYDs.
+  StaticJsonDocument<768> filter;
+  JsonObject sample=filter.createNestedArray("articles").createNestedObject();
+  sample["id"]=true;
+  sample["headline"]=true;
+  sample["description"]=true;
+  sample["published"]=true;
+  sample["type"]=true;
+  sample["links"]["web"]["href"]=true;
+  JsonObject category=sample.createNestedArray("categories").createNestedObject();
+  category["type"]=true;
+  category["team"]["abbreviation"]=true;
+  DynamicJsonDocument doc(16384);
+  if(doc.capacity()<16384){http.end();result.error="ESPN no memory";return result;}
+  const auto parsed=deserializeJson(doc,http.getStream(),
+      DeserializationOption::Filter(filter),DeserializationOption::NestingLimit(12));
+  http.end();
+  if(parsed){result.error="ESPN invalid/truncated JSON";return result;}
+  JsonArray items=doc["articles"].as<JsonArray>();
+  if(items.isNull()){result.error="ESPN missing articles";return result;}
+  for(JsonObject item:items){
+    const uint32_t id=item["id"] | 0UL;
+    if(!id)continue;
+    NhlNews::Story story;
+    const String slug=String("espn-")+String(id);
+    NhlNews::copy(story.slug,sizeof(story.slug),slug.c_str());
+    NhlNews::copy(story.headline,sizeof(story.headline),item["headline"] | "");
+    NhlNews::copy(story.summary,sizeof(story.summary),item["description"] | "");
+    NhlNews::copy(story.published,sizeof(story.published),item["published"] | "");
+    NhlNews::copy(story.source,sizeof(story.source),"ESPN");
+    const char *type=item["type"] | "";
+    story.kind=NhlNews::classify(story.headline);
+    if(NhlNews::includes(type,"recap"))story.kind=NhlNews::Kind::POSTGAME;
+    const char *link=item["links"]["web"]["href"] | "";
+    // Only expose a verified ESPN page, never an arbitrary URL in the UI.
+    String target=link;
+    if(target.startsWith("http://"))target="https://"+target.substring(7);
+    if(target.startsWith("https://www.espn.com/") ||
+       target.startsWith("https://espn.com/"))
+      NhlNews::copy(story.url,sizeof(story.url),target.c_str());
+    const char *firstTeam="";
+    for(JsonObject cat:item["categories"].as<JsonArray>()){
+      if(strcmp(cat["type"] | "","team")!=0)continue;
+      const char *abbr=cat["team"]["abbreviation"] | "";
+      const int8_t index=DisplayEventPolicy::teamIndex(abbr);
+      if(index<0)continue;
+      story.taggedTeams|=1UL<<index;
+      if(!firstTeam[0])firstTeam=abbr;
+    }
+    NhlNews::copy(story.team,sizeof(story.team),firstTeam);
+    if(!story.valid())continue;
+    catalog.merge(story,teamMask);
+    ++result.accepted;
+  }
+  result.ok=result.accepted>0;
+  result.error=result.ok?"":"ESPN has no usable stories";
   return result;
 }
 } // namespace NhlNewsService
