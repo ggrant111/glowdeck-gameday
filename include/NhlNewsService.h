@@ -42,7 +42,7 @@ inline DeserializationError parseHttpJson(HTTPClient &http,
 inline void logParseFailure(const char *source,HTTPClient &http,
                            DeserializationError err,const JsonDocument &doc) {
   Serial.printf("[NEWS] %s decode=%s HTTP=200 length=%d transfer=%s "
-                "encoding=%s jsonUsed=%u jsonCapacity=%u heap=%u\\n",
+                "encoding=%s jsonUsed=%u jsonCapacity=%u heap=%u\n",
                 source,err.c_str(),http.getSize(),
                 http.header("Transfer-Encoding").c_str(),
                 http.header("Content-Encoding").c_str(),
