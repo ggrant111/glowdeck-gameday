@@ -19,6 +19,7 @@ For devices **already running GameDay**, download the matching **`-ota.bin`** fr
 ## What you can do
 
 - View NHL games, live scores, game clock, shots on goal, team logos/colors, pregame records, standings, and a live scrolling goal/penalty/stat ticker.
+- When no NHL games are live, rotate official NHL Forge news cards with an independent headline ticker on CYD/S3; browse league, followed-team, pregame and postgame stories in the local **NHL News** dashboard. See [Phase 9 news guide](docs/PHASE9_NHL_NEWS.md).
 - Follow games from the touchscreen or **Live games** dashboard and separately **arm** the games and team sides eligible for external celebrations.
 - Display live goal, verified power-play, game-start, and game-finish event overlays. League-wide display-only events do **not** automatically activate external lights or sounds.
 - Trigger team-color celebrations across **up to eight WLED controllers**, with discovery, per-controller event permissions, segment zones, custom scenes, native JSON state restoration, and optional dedicated-controller DDP streaming.
@@ -137,6 +138,7 @@ The setup hotspot remains available for recovery when home Wi-Fi credentials cha
 | --- | --- |
 | **Overview** | Current game, connection/health, activity summary, shortcuts |
 | **Live games** | Daily games, favorites/follow stars, arm/team choices, game details |
+| **NHL News** | League stories, followed-team news, pregame/postgame editorial articles, headline marquee and refresh queue |
 | **Customize** | Favorites, Screen, WLED, Philips Hue, Sound, board LEDs |
 | **Test Lab** | Isolated screen, audio, WLED, Hue, LEDs, and full-celebration tests |
 | **Device** | Wi-Fi, admin/security, firmware upload, restart, diagnostics |

@@ -60,6 +60,7 @@
 #include "NhlPowerPlayTracker2.h"
 #include "NhlPowerPlayPresentation.h"
 #include "NhlLiveTicker.h"
+#include "NhlNewsService.h"
 #include "NhlOnIce.h"
 #include "EventOverlay.h"
 #include "DisplayEventPolicy.h"
@@ -229,6 +230,12 @@ uint16_t liveTickerScroll=0; // UTF-8 starting byte (not a glyph frame step)
 uint8_t liveTickerPixelOffset=0; // fractional glyph scroll, in LCD pixels
 uint16_t liveTickerTextWidthPx=0;
 bool liveTickerDirty=false;
+// Phase 9: RAM-only bounded editorial cache; never attached to celebrations.
+NhlNews::Catalog newsCache;
+uint32_t newsLastAttempt=0, newsTickerAt=0;
+uint16_t newsTickerOffset=0;
+uint8_t newsSlide=0, newsTeamCursor=0;
+bool newsFetchTeamNext=false, newsRefreshRequested=false, newsTickerDirty=false;
 enum class RearEvent : uint8_t { IDLE, GOAL, POWER_PLAY, DIAGNOSTIC, SHOOTOUT };
 RearEvent rearEvent = RearEvent::IDLE;
 uint32_t rearGoalAt = 0, rearGoalColor = 0, rearGoalDuration = 0;
@@ -6034,6 +6041,184 @@ void drawS3Empty() {
 #endif
 #endif
 
+
+uint32_t newsFollowMask() {
+  // Game stars apply to today's matchups; favorite teams persist through
+  // the season. Both feed personalized news without arming any lights.
+  uint32_t mask=cfg.favoriteTeams;
+  for(uint8_t i=0;i<gameCount;++i)if(rearFollows(games[i].id)) {
+    const int8_t away=DisplayEventPolicy::teamIndex(games[i].away.c_str());
+    const int8_t home=DisplayEventPolicy::teamIndex(games[i].home.c_str());
+    if(away>=0)mask|=1UL<<away;
+    if(home>=0)mask|=1UL<<home;
+  }
+  return mask;
+}
+bool newsAnyLive() {
+  // An intermission is still a live game: never replace its scoreboard.
+  for(uint8_t i=0;i<gameCount;++i)if(gameIsLive(games[i]))return true;
+  return false;
+}
+bool newsViewEnabled() {
+  return screen==Screen::LIVE && scoreboardLoaded && newsCache.count &&
+    !newsAnyLive() && !carouselHold.paused;
+}
+const NhlNews::Story *visibleNewsStory() {
+  if(!newsCache.count)return nullptr;
+  return newsCache.ranked(newsSlide%newsCache.count,newsFollowMask());
+}
+void advanceNews(int direction) {
+  if(newsCache.count<2)return;
+  const int count=newsCache.count;
+  newsSlide=uint8_t((int(newsSlide)+count+(direction<0?-1:1))%count);
+  newsTickerOffset=0;
+  lastCarouselAdvance=millis();
+  needsDraw=true;
+}
+void tickForgeNews(uint32_t now) {
+  // HTTPS + streaming JSON are idle-only: live scoring, PP verification,
+  // WLED/Hue restoration, touch and celebration overlays always win.
+  if(WiFi.status()!=WL_CONNECTED || !scoreboardLoaded || newsAnyLive() ||
+     overlayController.active() || rearEvent!=RearEvent::IDLE ||
+     wledRestoreWouldConflict(now,8500UL) || now<NhlNews::kMinimumBootMs)
+    return;
+  const uint32_t follows=newsFollowMask();
+  // Prime the first followed-team fetch shortly after the league feed,
+  // then return to an eight-minute refresh cycle.
+  const uint32_t interval=newsCache.failures?NhlNews::kRetryMs:
+      (newsFetchTeamNext && follows ? 30000UL : NhlNews::kRefreshMs);
+  if(!newsRefreshRequested && newsLastAttempt &&
+     uint32_t(now-newsLastAttempt)<interval)return;
+  if(ESP.getFreeHeap()<39000UL)return; // CYD must retain TLS/scoreboard headroom.
+  newsLastAttempt=millis();
+  newsRefreshRequested=false;
+  uint8_t teamId=0;
+  if(newsFetchTeamNext && follows) {
+    for(uint8_t n=0;n<TeamPalette::kCount;++n){
+      const uint8_t ix=uint8_t((newsTeamCursor+n)%TeamPalette::kCount);
+      if((follows&(1UL<<ix))==0)continue;
+      teamId=NhlNews::idFromTeam(TeamPalette::kTeams[ix].abbr);
+      newsTeamCursor=uint8_t((ix+1)%TeamPalette::kCount);
+      break;
+    }
+  }
+  const auto result=NhlNewsService::fetch(newsCache,follows,teamId);
+  newsCache.lastHttpCode=result.code;
+  if(result.ok){
+    newsCache.failures=0;
+    newsCache.lastSuccessAt=millis();
+    newsFetchTeamNext=!newsFetchTeamNext;
+    if(newsSlide>=newsCache.count)newsSlide=0;
+    if(newsViewEnabled())needsDraw=true;
+    Serial.printf("[NEWS] Forge ok team=%u received=%u cached=%u heap=%u\n",
+      teamId,result.accepted,newsCache.count,(unsigned)ESP.getFreeHeap());
+  }else{
+    if(newsCache.failures<255)++newsCache.failures;
+    Serial.printf("[NEWS] Forge failed team=%u HTTP=%d reason=%s; stale cache retained\n",
+      teamId,result.code,result.error);
+  }
+}
+// News typography is independent of NHL game panes and only runs on a card
+// transition, not on every ticker tick.
+void newsWrap(const char *raw,int16_t x,int16_t y,int16_t width,
+              uint8_t font,uint8_t maxLines,uint8_t lineHeight,
+              uint16_t color,uint16_t background) {
+  String input(raw?raw:"");
+  input.replace("\n"," ");
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(color,background);
+  int at=0;
+  for(uint8_t row=0;row<maxLines && at<int(input.length());++row){
+    String line;
+    while(at<int(input.length()) && input[at]==' ')++at;
+    while(at<int(input.length())){
+      int end=at;
+      while(end<int(input.length()) && input[end]!=' ')++end;
+      const String word=input.substring(at,end);
+      const String probe=line.length()?line+" "+word:word;
+      if(line.length() && tft.textWidth(probe,font)>width)break;
+      line=probe;
+      at=end;
+      while(at<int(input.length()) && input[at]==' ')++at;
+      if(tft.textWidth(line,font)>width)break;
+    }
+    if(!line.length())break;
+    // Very long single words are bounded so they cannot overflow a TFT.
+    while(line.length()>1 && tft.textWidth(line,font)>width)
+      line.remove(line.length()-1);
+    tft.drawString(line,x,y+int(row)*lineHeight,font);
+  }
+}
+void drawNewsTicker() {
+  const int w=
+#ifdef GLOWDECK_WAVESHARE_S3
+    480;
+  const int y=286, h=24;
+#else
+    320;
+  const int y=215, h=23;
+#endif
+  tft.fillRect(0,y,w,h,ARENA_PLATE);
+  const uint8_t next=uint8_t((newsSlide+1)%newsCache.count);
+  const NhlNews::Story *story=newsCache.ranked(next,newsFollowMask());
+  const String ticker="  NHL NEWS  |  "+String(story?story->headline:"Headlines updating")+"  |  ";
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(WHITE,ARENA_PLATE);
+  const int span=tft.textWidth(ticker,2)+w;
+  if(span>0 && newsTickerOffset>=span)newsTickerOffset=0;
+  tft.drawString(ticker,w-int(newsTickerOffset),y+4,2);
+}
+void drawNewsCard() {
+  const NhlNews::Story *story=visibleNewsStory();
+  if(!story)return;
+#ifdef GLOWDECK_WAVESHARE_S3
+  const int w=480, h=320, margin=26;
+  const int titleY=76, summaryY=190, titleLines=3;
+#else
+  const int w=320, h=240, margin=15;
+  const int titleY=53, summaryY=147, titleLines=3;
+#endif
+  tft.fillScreen(ARENA_BLACK);
+  tft.fillRect(0,0,w,5,TEAL);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(WHITE,ARENA_BLACK);
+  tft.drawString("GLOWDECK  /  NHL NEWS",margin,18,2);
+  const String category=String(story->team[0]?story->team:"LEAGUE")+
+      "  /  "+NhlNews::kindLabel(story->kind);
+  tft.setTextColor(TEAL,ARENA_BLACK);
+  tft.drawString(category,margin,
+#ifdef GLOWDECK_WAVESHARE_S3
+    48
+#else
+    36
+#endif
+    ,2);
+  newsWrap(story->headline,margin,titleY,w-2*margin,4,titleLines,
+#ifdef GLOWDECK_WAVESHARE_S3
+    30
+#else
+    28
+#endif
+    ,WHITE,ARENA_BLACK);
+  newsWrap(story->summary,margin,summaryY,w-2*margin,2,
+#ifdef GLOWDECK_WAVESHARE_S3
+    3,22
+#else
+    3,19
+#endif
+    ,MUTED,ARENA_BLACK);
+  tft.setTextColor(MUTED,ARENA_BLACK);
+#ifdef GLOWDECK_WAVESHARE_S3
+  tft.drawString("NHL.com  |  Swipe for stories  |  GAMES >",margin,260,2);
+#else
+  tft.drawString("NHL.com  |  "+String(newsSlide+1)+"/"+String(newsCache.count),
+                 margin,203,2);
+  tft.drawString("MENU",w-49,18,2);
+#endif
+  newsTickerOffset=0;
+  drawNewsTicker();
+}
+
 void draw() {
   needsDraw = false;
 #ifdef GLOWDECK_WAVESHARE_S3
@@ -6099,6 +6284,7 @@ void draw() {
 #else
   if (screen == Screen::CALIBRATE) { drawCalibration(); return; }
 #endif
+  if (newsViewEnabled()) { drawNewsCard(); return; }
   if (screen == Screen::LIVE) {
 #ifdef GLOWDECK_WAVESHARE_S3
     if (tft.nativeLayout()) {
@@ -6429,6 +6615,15 @@ void handleS3NativeTouch(bool pressed) {
     needsDraw=true;
     return;
   }
+  if(screen==Screen::LIVE && newsViewEnabled()){
+    if(S3NativeLayout::carouselSwipe(dx,dy))advanceNews(dx<0?1:-1);
+    else if(gestureStartY<65 && gestureStartX>=385)screen=Screen::GAMES;
+    else if(gestureStartY>248 && gestureStartX>=385)screen=Screen::GAMES;
+    else advanceNews(1);
+    lastCarouselAdvance=millis();
+    needsDraw=true;
+    return;
+  }
   if(screen==Screen::LIVE && showingStandingsPage()) {
     if(carouselPageCount()>1 && S3NativeLayout::carouselSwipe(dx,dy)) {
       advanceCarousel(dx<0?1:-1);
@@ -6656,7 +6851,12 @@ void handleTouch() {
       touchWasDown = false;
       const int dx = gestureEndX - gestureStartX;
       const int dy = gestureEndY - gestureStartY;
-      if (carouselPageCount() > 1 && abs(dx) > 48 && abs(dy) < 90) {
+      if (newsViewEnabled()) {
+        if(abs(dx)>48 && abs(dy)<90)advanceNews(dx<0?1:-1);
+        else if(gestureStartY<=45 && gestureStartX>=260)
+          screen=Screen::GAMES;
+        else advanceNews(1);
+      } else if (carouselPageCount() > 1 && abs(dx) > 48 && abs(dy) < 90) {
         advanceCarousel(dx < 0 ? 1 : -1);
       } else if (showingGamePage() && gameCount &&
                  GameFollowPolicy::headerStarTap(
@@ -6998,6 +7198,46 @@ void registerRoutes() {
     doc["uptimeSeconds"] = millis() / 1000UL;
     if (doc.overflowed()) return errorResponse("Status response too large", 503);
     sendJson(doc);
+  });
+  server.on("/api/news",HTTP_GET,[](){
+    if(!authorized())return;
+    const String filterArg=server.arg("filter");
+    NhlNews::Filter filter=NhlNews::Filter::ALL;
+    if(filterArg=="followed")filter=NhlNews::Filter::FOLLOWED;
+    else if(filterArg=="pregame")filter=NhlNews::Filter::PREGAME;
+    else if(filterArg=="postgame")filter=NhlNews::Filter::POSTGAME;
+    const uint32_t mask=newsFollowMask();
+    DynamicJsonDocument doc(10000);
+    doc["source"]="NHL Forge";
+    doc["cached"]=newsCache.lastSuccessAt>0;
+    doc["ageSeconds"]=newsCache.lastSuccessAt?
+       uint32_t(millis()-newsCache.lastSuccessAt)/1000UL:0;
+    doc["httpCode"]=newsCache.lastHttpCode;
+    doc["failures"]=newsCache.failures;
+    doc["live"]=newsAnyLive();
+    doc["matches"]=newsCache.matching(mask,filter);
+    JsonArray arr=doc.createNestedArray("articles");
+    for(uint8_t i=0;i<newsCache.count;++i){
+      const NhlNews::Story *story=newsCache.ranked(i,mask,filter);
+      if(!story)break;
+      JsonObject row=arr.createNestedObject();
+      row["slug"]=story->slug;
+      row["headline"]=story->headline;
+      row["summary"]=story->summary;
+      row["published"]=story->published;
+      row["team"]=story->team;
+      row["kind"]=NhlNews::kindLabel(story->kind);
+      row["image"]=story->image;
+    }
+    sendJson(doc);
+  });
+  server.on("/api/news/refresh",HTTP_POST,[](){
+    if(!authorized())return;
+    newsRefreshRequested=true; // No HTTP request in a web handler.
+    StaticJsonDocument<128> doc;
+    doc["queued"]=true;
+    doc["note"]="Refresh runs when live games and lights are idle";
+    sendJson(doc,202);
   });
   server.on("/api/games", HTTP_GET, []() {
     if (!authorized()) return;
@@ -9584,6 +9824,7 @@ void loop() {
       lastShootoutPoll=millis();fetchShootoutPlays();
     }
   }
+  tickForgeNews(millis());
   if (overlayController.tick(millis())) {
     // A queued alert may take over; after the final event, re-pin the
     // user's selected NHL game rather than advancing to another slide.
@@ -9607,8 +9848,13 @@ void loop() {
     partialLiveUpdate=false;
     needsDraw=true;
   }
-  if (!overlayController.active() && screen == Screen::LIVE &&
-      cfg.cycleGames && !carouselHold.paused && carouselPageCount() > 1 &&
+  if(!overlayController.active() && screen==Screen::LIVE &&
+     cfg.cycleGames && newsViewEnabled() && newsCache.count>1 &&
+     uint32_t(now-lastCarouselAdvance)>=NhlNews::kCardMs){
+    advanceNews(1);
+  } else if (!overlayController.active() && screen == Screen::LIVE &&
+      cfg.cycleGames && !newsViewEnabled() && !carouselHold.paused &&
+      carouselPageCount() > 1 &&
       uint32_t(now - lastCarouselAdvance) >= uint32_t(cfg.cycleSeconds) * 1000UL) {
     advanceCarousel(1);
   }
@@ -9705,13 +9951,21 @@ void loop() {
   bool displayChanged = false;
   bool s3ScoreOnlyFrame = false;
   bool s3TickerFrame=false;
+  bool s3NewsTickerFrame=false;
   uint8_t s3PartialMask=S3BroadcastFrame::BOTH;
 #endif
+  if(newsViewEnabled() && !overlayController.active() &&
+     uint32_t(now-newsTickerAt)>=120UL){
+    newsTickerAt=now;
+    newsTickerOffset+=2;
+    newsTickerDirty=true;
+  }
   const bool fullDrawThisLoop=needsDraw;
   if (needsDraw) {
     partialLiveUpdate = false;
     draw();
     liveTickerDirty=false;
+    newsTickerDirty=false;
 #ifdef GLOWDECK_WAVESHARE_S3
     displayChanged = true;
 #endif
@@ -9800,19 +10054,29 @@ void loop() {
     }
     liveTickerDirty=false;
   }
+  if(!fullDrawThisLoop && !overlayController.active() &&
+     newsTickerDirty && newsViewEnabled()) {
+    drawNewsTicker();
+#ifdef GLOWDECK_WAVESHARE_S3
+    s3NewsTickerFrame=true;
+    displayChanged=true;
+#endif
+  }
+  newsTickerDirty=false;
 #ifdef GLOWDECK_WAVESHARE_S3
   if (displayChanged) {
     const uint32_t transferStarted=millis();
     uint32_t bytesSent=S3BroadcastFrame::kFullBytes;
-    if((s3ScoreOnlyFrame||s3TickerFrame) && !overlayController.active()) {
+    if((s3ScoreOnlyFrame||s3TickerFrame||s3NewsTickerFrame) && !overlayController.active()) {
       bytesSent=s3ScoreOnlyFrame?
           (s3Arena.ready()?
           S3BroadcastFrame::transferBytes(s3PartialMask):
           uint32_t(S3Raster::kClockScore.w*S3Raster::kClockScore.h*2+
                    S3Raster::kShots.w*S3Raster::kShots.h*2)):0;
       if(s3TickerFrame)bytesSent+=480UL*20UL*2UL;
+      if(s3NewsTickerFrame)bytesSent+=480UL*24UL*2UL;
     }
-    if ((s3ScoreOnlyFrame||s3TickerFrame) && !overlayController.active()) {
+    if ((s3ScoreOnlyFrame||s3TickerFrame||s3NewsTickerFrame) && !overlayController.active()) {
       // Two small SPI transfers instead of the full 480x320 (~300 KiB).
       // Full redraws always transmit all pixels, so changing away from
       // standings/stats/events can never preserve portions of old pages.
@@ -9835,12 +10099,14 @@ void loop() {
           tft.presentRegion(shots.x,shots.y,shots.w,shots.h);
         }
       }
+      // Text cards are independent of the arena framebuffer on S3.
+      if(s3NewsTickerFrame)tft.presentRegion(0,286,480,24);
     } else {
       tft.present();
     }
 #if defined(GLOWDECK_S3_PHASE6_LIVE) && GLOWDECK_S3_PHASE6_LIVE
     if(s3Arena.ready()){
-      if(s3ScoreOnlyFrame||s3TickerFrame)++s3PerfPartialFrames;
+      if(s3ScoreOnlyFrame||s3TickerFrame||s3NewsTickerFrame)++s3PerfPartialFrames;
       else ++s3PerfFullFrames;
       s3PerfTransferBytes+=bytesSent;
       const uint32_t elapsed=millis()-transferStarted;

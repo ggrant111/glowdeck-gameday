@@ -4,7 +4,7 @@ main=Path("src/main.cpp").read_text()
 layout=Path("include/S3NativeLayout.h").read_text()
 icons=Path("include/GameDayIcons.h").read_text()
 assert "CarouselHoldPolicy::State carouselHold;" in main
-assert "cfg.cycleGames && !carouselHold.paused" in main
+assert "cfg.cycleGames && !newsViewEnabled()" in main
 assert "currentCarouselPage()" in main and "carouselHold.index(games,gameCount)" in main
 assert "carouselHold.reset();" in main
 assert "void toggleCarouselHold()" in main
@@ -48,7 +48,7 @@ assert "overlayController.dismiss(millis());" in main
 touch=main.split("void handleTouch() {",1)[1].split("  if (screen == Screen::LIVE) {",1)[0]
 assert "swallowLiveGesture=true;" in touch
 assert "overlayController.dismiss(millis());" in touch
-assert "cfg.cycleGames && !carouselHold.paused" in main
+assert "cfg.cycleGames && !newsViewEnabled()" in main
 assert "wledPpManuallyStoppedGameId" in main
 assert "void tickWledCelebrations()" in main
 assert "tickWledDdpStreams();" in main

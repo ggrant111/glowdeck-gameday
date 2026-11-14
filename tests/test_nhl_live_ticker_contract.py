@@ -46,7 +46,7 @@ assert '"% / "+g.home+" "+stats.faceHome+"%"' not in ticker
 assert 'drawLiveTickerCYD(g);' in s and 'drawS3ArenaTicker(g);' in s
 assert 'tft.presentRegion(0,269,480,20)' in s
 assert 'bool s3TickerFrame=false;' in s
-assert '(s3ScoreOnlyFrame||s3TickerFrame)' in s
+assert '(s3ScoreOnlyFrame||s3TickerFrame||s3NewsTickerFrame)' in s
 assert 'if(!fullDrawThisLoop && !overlayController.active()' in s
 assert 'gameIsLive(g)' in s and 'NhlLiveTicker::kStepMs' in s
 assert 'kMaxGoals = 16' in header and 'kMaxPenalties = 20' in header

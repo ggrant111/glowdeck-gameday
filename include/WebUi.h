@@ -292,7 +292,24 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 .wled-quick-hint{min-height:32px;margin-top:7px}
 #wledDdpTestCard{border-left:3px solid #6bd5df}
 #wledDdpLabSlot{max-width:460px}
-@media(max-width:620px){.wled-ddp-panel{padding:11px}}</style>
+@media(max-width:620px){.wled-ddp-panel{padding:11px}}
+.news-intro{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px}
+.news-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:end}
+.news-actions label{font-size:12px;display:block;color:var(--muted);margin-bottom:4px}
+.news-actions select{min-width:168px}
+.news-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,275px),1fr));gap:15px;margin-top:16px}
+.news-card{background:var(--panel);border:1px solid var(--edge);border-radius:16px;overflow:hidden;display:flex;flex-direction:column;min-width:0}
+.news-card img{display:block;width:100%;height:148px;object-fit:cover;background:#173038}
+.news-card-body{display:flex;flex-direction:column;gap:9px;padding:16px;flex:1}
+.news-card h3{font-size:17px;line-height:1.35;margin:0}
+.news-card p{font-size:13px;line-height:1.5;margin:0;overflow-wrap:anywhere}
+.news-card a{margin-top:auto;color:var(--active);font-weight:650}
+.news-meta{font-size:11px;color:var(--active);font-weight:750;text-transform:uppercase;letter-spacing:.05em}
+.news-marquee{overflow:hidden;border-radius:11px;background:#0b252b;border:1px solid var(--edge);padding:11px 0;min-height:43px}
+.news-marquee span{display:inline-block;white-space:nowrap;animation:news-roll 28s linear infinite;padding-left:100%;color:#ddf5ef}
+@keyframes news-roll{to{transform:translateX(-100%)}}
+@media(prefers-reduced-motion:reduce){.news-marquee span{animation:none;white-space:normal;padding:0 12px}}
+</style>
 </head>
 <body>
 <header>
@@ -308,6 +325,7 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <div class="rail-note"><span class="kicker">GAME DAY CONTROL</span><p class="small">Your local command station</p></div>
 <button class="tab selected" data-tab="dashboard" aria-current="page"><span class="nav-glyph" aria-hidden="true">▦</span><span>Overview</span></button>
 <button class="tab" data-tab="games"><span class="nav-glyph" aria-hidden="true">◉</span><span>Live games</span></button>
+<button class="tab" data-tab="news"><span class="nav-glyph" aria-hidden="true">▤</span><span>NHL News</span></button>
 <button class="tab" data-tab="customize"><span class="nav-glyph" aria-hidden="true">◈</span><span>Customize</span><span class="nav-hint">SETUP</span></button>
 <button class="tab" data-tab="lab"><span class="nav-glyph" aria-hidden="true">⚡</span><span>Test Lab</span><span class="nav-hint">PREVIEW</span></button>
 <button class="tab" data-tab="device"><span class="nav-glyph" aria-hidden="true">⚙</span><span>Device</span></button>
@@ -394,6 +412,23 @@ input,select{background:#0b1c2a;border-color:#385b6c;border-radius:9px}
 <div id="eventList"><p class="muted">No events recorded yet.</p></div>
 <div class="actions"><button id="eventNewer">Newer</button><button id="eventOlder">Older</button></div>
 </div>
+</section>
+<section id="news" class="panel">
+<div class="section-intro news-intro">
+<div><div class="eyebrow">FROM NHL.COM</div><h2>NHL News &amp; Game Briefings</h2>
+<p>Official league headlines, stories about followed teams, and editorial pregame and postgame coverage. News cards rotate on the device when no games are live.</p></div>
+<div class="news-actions">
+<div><label for="newsFilter">Show stories</label><select id="newsFilter">
+<option value="all">League-wide</option><option value="followed">Followed teams</option>
+<option value="pregame">Pregame briefings</option><option value="postgame">Postgame stories</option>
+</select></div>
+<button id="refreshNews" type="button" class="primary">Refresh feed</button>
+</div>
+</div>
+<div class="card"><div class="row"><div><h2>Headline ticker</h2>
+<p class="small muted" id="newsStatus">Loading NHL Forge stories...</p></div></div>
+<div id="newsTicker" class="news-marquee"><span>News loading</span></div></div>
+<div id="newsCards" class="news-grid"><p class="muted">Loading news...</p></div>
 </section>
 <section id="games" class="panel">
 <div class="section-intro"><div class="eyebrow">NHL LIVE BOARD</div><h2>Every matchup, one place</h2><p>Tap ☆ to follow any game for rear RGB and screen alerts, even before puck drop. Follow the entire daily schedule if you like. Arm up to five games for WLED and goal horns. Priority #1 wins ties; goals outrank finals, starts, and power plays.</p></div>
@@ -970,7 +1005,7 @@ function mountPortalModules(){
 }
 
 const PORTAL_ROUTES={
-  dashboard:{page:"dashboard"},games:{page:"games"},
+  dashboard:{page:"dashboard"},games:{page:"games"},news:{page:"news"},
   customize:{page:"customize"},lab:{page:"lab"},device:{page:"device"},
   events:{page:"events"},
   display:{page:"customize",anchor:"zone-screen"},
@@ -1080,6 +1115,7 @@ function tab(id,anchor){
   }
   // Bookmark navigational state without requesting extra firmware routes.
   history.replaceState(null,"","#"+page);
+  if(page==="news")loadNews().catch(err=>message("News: "+err.message));
 }
 document.querySelectorAll("[data-tab]").forEach(x=>x.addEventListener("click",
   ()=>tab(x.dataset.tab,x.dataset.anchor)));
@@ -1592,6 +1628,8 @@ async function refresh(){
   await refreshEventSummary().catch(()=>{});
   if($("events").classList.contains("active"))
     await refreshPpTracker().catch(()=>{});
+  if($("news").classList.contains("active"))
+    await loadNews().catch(()=>{});
 }
 function renderDevices(){
   const list=$("deviceList");list.replaceChildren();
@@ -3004,6 +3042,70 @@ $("reboot").onclick=()=>perform(async()=>{
   if(!confirm("Restart this GameDay device now?"))return;
   await api("/api/reboot",{method:"POST"});message("Restart requested");
 });
+
+async function loadNews(){
+  const filter=$("newsFilter").value;
+  const data=await api("/api/news?filter="+encodeURIComponent(filter));
+  const cards=$("newsCards");
+  cards.replaceChildren();
+  const rows=data.articles||[];
+  const cache=data.cached?
+    "Cached "+Math.floor((data.ageSeconds||0)/60)+" min ago":
+    "Awaiting first successful Forge fetch";
+  $("newsStatus").textContent=cache+" · "+rows.length+" stories"+
+     (data.live?" · live games take priority":"")+
+     (data.failures?" · retrying after API error":"");
+  const ticker=$("newsTicker");
+  ticker.replaceChildren();
+  const moving=document.createElement("span");
+  moving.textContent=rows.length?rows.slice(0,5).map(a=>a.headline).join("   ◆   "):
+    "Latest league stories appear after the first successful NHL Forge update";
+  ticker.append(moving);
+  if(!rows.length){
+    const empty=document.createElement("div");
+    empty.className="card";
+    empty.textContent=filter==="followed"?
+      "No articles for followed teams are cached yet. Star a matchup or select favorite teams, then allow the next idle refresh.":
+      "No matching stories cached yet. Forge may be unreachable or have no articles in this category.";
+    cards.append(empty);
+    return;
+  }
+  rows.forEach(article=>{
+    const card=document.createElement("article");card.className="news-card";
+    if(article.image && /^https:\/\//i.test(article.image)){
+      const img=document.createElement("img");
+      img.src=article.image;img.loading="lazy";img.alt="";
+      img.onerror=()=>img.remove();card.append(img);
+    }
+    const body=document.createElement("div");body.className="news-card-body";
+    const label=document.createElement("div");label.className="news-meta";
+    const date=article.published?new Date(article.published):null;
+    label.textContent=[article.team||"LEAGUE",article.kind||"NHL NEWS",
+      date && !Number.isNaN(date.getTime())?
+        date.toLocaleDateString([],{month:"short",day:"numeric"}):""]
+      .filter(Boolean).join(" · ");
+    const title=document.createElement("h3");
+    title.textContent=article.headline||"NHL story";
+    const summary=document.createElement("p");
+    summary.textContent=article.summary||"Open the story for details.";
+    body.append(label,title,summary);
+    if(article.slug && /^[a-z0-9-]+$/i.test(article.slug)){
+      const link=document.createElement("a");
+      link.href="https://www.nhl.com/news/"+encodeURIComponent(article.slug);
+      link.target="_blank";link.rel="noopener noreferrer";
+      link.textContent="Read on NHL.com";
+      body.append(link);
+    }
+    card.append(body);cards.append(card);
+  });
+}
+$("newsFilter").onchange=()=>loadNews().catch(err=>message("News: "+err.message));
+$("refreshNews").onclick=()=>perform(async()=>{
+  const result=await api("/api/news/refresh",{method:"POST"});
+  message(result.note||"Refresh queued");
+  await loadNews();
+});
+
 (async()=>{
   try{
     mountPortalModules();
@@ -3025,6 +3127,7 @@ $("reboot").onclick=()=>perform(async()=>{
     await loadConfig();
     await loadHueConfig().catch(err=>{$("huePairStatus").textContent=err.message});
     await refresh();
+    await loadNews().catch(()=>{});
     await loadGoalGif();
     await loadSoundLibrary();
     await loadS3CaseLeds();
