@@ -108,6 +108,8 @@ public:
     if(!http.begin(client,url))return false;
     http.addHeader("Accept","image/jpeg");
     http.addHeader("Accept-Encoding","identity");
+    const char *headers[]={"Content-Type"};
+    http.collectHeaders(headers,1);
     const int status=http.GET();
     const String type=http.header("Content-Type");
     const int expected=http.getSize();
@@ -178,8 +180,8 @@ public:
                       (height+scale-1)/scale>maxH))scale*=2;
     const int16_t scaledW=(width+scale-1)/scale;
     const int16_t scaledH=(height+scale-1)/scale;
-    const int16_t drawX=x+max(0,(maxW-scaledW)/2);
-    const int16_t drawY=y+max(0,(maxH-scaledH)/2);
+    const int16_t drawX=x+(maxW-scaledW)/2;
+    const int16_t drawY=y+(maxH-scaledH)/2;
     TJpgDec.setCallback(output);
     TJpgDec.setSwapBytes(true);
     TJpgDec.setJpgScale(scale);
