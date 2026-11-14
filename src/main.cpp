@@ -6082,13 +6082,16 @@ void tickForgeNews(uint32_t now) {
      overlayController.active() || rearEvent!=RearEvent::IDLE ||
      wledRestoreWouldConflict(now,8500UL) || now<NhlNews::kMinimumBootMs)
     return;
-  const uint32_t retry=newsCache.failures?NhlNews::kRetryMs:NhlNews::kRefreshMs;
+  const uint32_t follows=newsFollowMask();
+  // Prime the first followed-team fetch shortly after the league feed,
+  // then return to an eight-minute refresh cycle.
+  const uint32_t interval=newsCache.failures?NhlNews::kRetryMs:
+      (newsFetchTeamNext && follows ? 30000UL : NhlNews::kRefreshMs);
   if(!newsRefreshRequested && newsLastAttempt &&
-     uint32_t(now-newsLastAttempt)<retry)return;
+     uint32_t(now-newsLastAttempt)<interval)return;
   if(ESP.getFreeHeap()<39000UL)return; // CYD must retain TLS/scoreboard headroom.
   newsLastAttempt=millis();
   newsRefreshRequested=false;
-  const uint32_t follows=newsFollowMask();
   uint8_t teamId=0;
   if(newsFetchTeamNext && follows) {
     for(uint8_t n=0;n<TeamPalette::kCount;++n){
