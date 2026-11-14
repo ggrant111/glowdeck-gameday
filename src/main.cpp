@@ -6142,7 +6142,7 @@ void tickNewsTicker(uint32_t now){
   newsTickerAt=now;
   newsTickerPixel++;
   const String glyph=newsGlyph(newsTickerChar);
-  const uint8_t glyphWidth=uint8_t(max(1,tft.textWidth(glyph,2)));
+  const uint8_t glyphWidth=uint8_t(max(1,int(tft.textWidth(glyph,2))));
   if(newsTickerPixel>=glyphWidth){
     newsTickerPixel=0;
     newsTickerChar=newsNextByte(newsTickerChar);
