@@ -26,7 +26,7 @@ assert 'if(s3NewsTickerFrame)tft.presentRegion(0,286,480,24);' in main
 assert 'NhlNewsPhoto::Cache newsPhotos;' in main
 assert 'newsPhotos.begin(goalGif.mounted());' in main
 assert 'newsPhotos.begin();' in main
-assert 'NhlNewsPhoto::kSlots' not in main
+assert 'if(newsSlide>=NhlNewsPhoto::kSlots)return;' in main
 assert 'newsPhotos.draw(story->image,px,py,pw,ph,' in card
 assert 'bool newsJpegBlock(' in main
 assert 'tft.pushImage(x,y,w,h,pixels);' in main
