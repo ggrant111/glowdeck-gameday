@@ -80,19 +80,24 @@ struct Story {
   char summary[180]={};
   char published[26]={};
   char team[5]={};
+  uint32_t taggedTeams=0; // One story may reference multiple NHL teams.
   char image[192]={};
   Kind kind=Kind::GENERAL;
   bool valid() const {return slug[0] && headline[0];}
 };
+inline bool followed(const Story &s,uint32_t favorites) {
+  if(s.taggedTeams)return (s.taggedTeams & favorites)!=0;
+  return DisplayEventPolicy::isFavorite(favorites,s.team);
+}
 inline bool matches(const Story &s,Filter filter,uint32_t favorites) {
   return filter==Filter::ALL ||
-    (filter==Filter::FOLLOWED && DisplayEventPolicy::isFavorite(favorites,s.team)) ||
+    (filter==Filter::FOLLOWED && followed(s,favorites)) ||
     (filter==Filter::PREGAME && s.kind==Kind::PREGAME) ||
     (filter==Filter::POSTGAME && s.kind==Kind::POSTGAME);
 }
 inline bool ahead(const Story &a,const Story &b,uint32_t favorites) {
-  const bool fa=DisplayEventPolicy::isFavorite(favorites,a.team);
-  const bool fb=DisplayEventPolicy::isFavorite(favorites,b.team);
+  const bool fa=followed(a,favorites);
+  const bool fb=followed(b,favorites);
   if(fa!=fb)return fa;
   // The API places featured stories ahead of newer stories. Always order
   // chronologically within each followed/league tier.
@@ -111,6 +116,7 @@ struct Catalog {
       if(!strcmp(stories[i].slug,story.slug)){
         Story update=story;
         if(!update.team[0])copy(update.team,sizeof(update.team),stories[i].team);
+        if(!update.taggedTeams)update.taggedTeams=stories[i].taggedTeams;
         stories[i]=update;
         return;
       }
