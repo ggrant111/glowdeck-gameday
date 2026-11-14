@@ -61,6 +61,7 @@
 #include "NhlPowerPlayPresentation.h"
 #include "NhlLiveTicker.h"
 #include "NhlNewsService.h"
+#include "NhlNewsPhoto.h"
 #include "NhlOnIce.h"
 #include "EventOverlay.h"
 #include "DisplayEventPolicy.h"
@@ -233,7 +234,12 @@ bool liveTickerDirty=false;
 // Phase 9: RAM-only bounded editorial cache; never attached to celebrations.
 NhlNews::Catalog newsCache;
 uint32_t newsLastAttempt=0, newsTickerAt=0;
-uint16_t newsTickerOffset=0;
+// Continuous league-headline ticker: independent of whichever card is visible.
+String newsTickerText;
+uint16_t newsTickerChar=0; // UTF-8 character start byte
+uint8_t newsTickerPixel=0; // Sub-character pixel offset
+NhlNewsPhoto::Cache newsPhotos;
+uint32_t newsPhotoLastCheck=0;
 uint8_t newsSlide=0, newsTeamCursor=0;
 bool newsFetchTeamNext=false, newsRefreshRequested=false, newsTickerDirty=false;
 bool newsTryEspnNext=false; // Fallback is scheduled separately to avoid two TLS requests in one loop.
@@ -6076,9 +6082,72 @@ void advanceNews(int direction) {
   if(newsCache.count<2)return;
   const int count=newsCache.count;
   newsSlide=uint8_t((int(newsSlide)+count+(direction<0?-1:1))%count);
-  newsTickerOffset=0;
+  // Leave the ticker untouched: it must keep scrolling between articles.
   lastCarouselAdvance=millis();
   needsDraw=true;
+}
+void rebuildNewsTicker(){
+  String text="  NHL HEADLINES  |  ";
+  text.reserve(1500);
+  const uint32_t mask=newsFollowMask();
+  for(uint8_t i=0;i<newsCache.count;++i){
+    const NhlNews::Story *article=newsCache.ranked(i,mask);
+    if(!article)break;
+    text+=article->headline;
+    text+="   |   ";
+  }
+  if(text!=newsTickerText){
+    newsTickerText=text;
+    if(newsTickerChar>=newsTickerText.length()){
+      newsTickerChar=0;
+      newsTickerPixel=0;
+    }
+  }
+}
+// UTF-8-safe glyph traversal; byte offsets only move at codepoint boundaries.
+// The rendered ticker text and scroll position outlive any card transition.
+String newsGlyph(uint16_t offset){
+  if(newsTickerText.isEmpty())return String(" ");
+  const uint16_t n=newsTickerText.length();
+  offset%=n;
+  const uint8_t ch=(uint8_t)newsTickerText[offset];
+  uint8_t len=ch>=0xF0?4:ch>=0xE0?3:ch>=0xC0?2:1;
+  if(offset+len>n)len=1;
+  return newsTickerText.substring(offset,offset+len);
+}
+uint16_t newsNextByte(uint16_t offset){
+  if(newsTickerText.isEmpty())return 0;
+  const uint16_t n=newsTickerText.length();
+  const uint8_t ch=(uint8_t)newsTickerText[offset%n];
+  const uint8_t len=ch>=0xF0?4:ch>=0xE0?3:ch>=0xC0?2:1;
+  return uint16_t((offset+len)%n);
+}
+String newsTickerWindow(uint16_t width){
+  if(newsTickerText.isEmpty())return String("NHL NEWS");
+  String out;out.reserve(110);
+  uint16_t at=newsTickerChar;
+  int16_t filled=-int16_t(newsTickerPixel);
+  for(uint8_t i=0;i<100 && filled<int16_t(width+16);++i){
+    const String glyph=newsGlyph(at);
+    out+=glyph;
+    filled+=tft.textWidth(glyph,2);
+    at=newsNextByte(at);
+  }
+  return out;
+}
+void tickNewsTicker(uint32_t now){
+  if(!newsViewEnabled() || !newsCache.count || overlayController.active() ||
+     newsTickerText.isEmpty())return;
+  if(uint32_t(now-newsTickerAt)<30UL)return;
+  newsTickerAt=now;
+  newsTickerPixel++;
+  const String glyph=newsGlyph(newsTickerChar);
+  const uint8_t glyphWidth=uint8_t(max(1,tft.textWidth(glyph,2)));
+  if(newsTickerPixel>=glyphWidth){
+    newsTickerPixel=0;
+    newsTickerChar=newsNextByte(newsTickerChar);
+  }
+  newsTickerDirty=true;
 }
 void tickForgeNews(uint32_t now) {
   // Keep score, physical event output, and restore timing higher priority.
@@ -6128,6 +6197,7 @@ void tickForgeNews(uint32_t now) {
     // After fallback, attempt NHL Forge again on the next regular cycle.
     newsFetchTeamNext=usingEspn?false:!newsFetchTeamNext;
     if(newsSlide>=newsCache.count)newsSlide=0;
+    rebuildNewsTicker();
     if(newsViewEnabled())needsDraw=true;
     Serial.printf("[NEWS] %s ok team=%u received=%u cached=%u heap=%u\n",
       newsCache.source,teamId,result.accepted,newsCache.count,
@@ -6178,25 +6248,59 @@ void newsWrap(const char *raw,int16_t x,int16_t y,int16_t width,
     tft.drawString(line,x,y+int(row)*lineHeight,font);
   }
 }
+// JPEG decode writes directly into the original CYD panel or existing S3
+// 480x320 sprite. No second framebuffer, PNG inflater or large heap array.
+int16_t newsImageX0=0,newsImageY0=0,newsImageX1=0,newsImageY1=0;
+bool newsJpegBlock(int16_t x,int16_t y,uint16_t w,uint16_t h,uint16_t *pixels) {
+  if(!pixels || x>=newsImageX1 || y>=newsImageY1)return false;
+  if(x>=newsImageX0 && y>=newsImageY0 &&
+     x+w<=newsImageX1 && y+h<=newsImageY1){
+    tft.pushImage(x,y,w,h,pixels);
+    return true;
+  }
+  // Only JPEG MCU blocks touching the right/bottom edge need clipping.
+  for(uint16_t row=0;row<h;++row){
+    const int16_t yy=y+row;
+    if(yy<newsImageY0 || yy>=newsImageY1)continue;
+    for(uint16_t col=0;col<w;++col){
+      const int16_t xx=x+col;
+      if(xx>=newsImageX0 && xx<newsImageX1)
+        tft.drawPixel(xx,yy,pixels[row*w+col]);
+    }
+  }
+  return true;
+}
 void drawNewsTicker() {
-  if(!newsCache.count)return; // Never modulo by zero while awaiting first feed.
-  const int w=
+  if(!newsCache.count)return;
 #ifdef GLOWDECK_WAVESHARE_S3
-    480;
-  const int y=286, h=24;
+  constexpr int w=480,y=286,h=24;
 #else
-    320;
-  const int y=215, h=23;
+  constexpr int w=320,y=215,h=23;
 #endif
   tft.fillRect(0,y,w,h,ARENA_PLATE);
-  const uint8_t next=uint8_t((newsSlide+1)%newsCache.count);
-  const NhlNews::Story *story=newsCache.ranked(next,newsFollowMask());
-  const String ticker="  NHL NEWS  |  "+String(story?story->headline:"Headlines updating")+"  |  ";
   tft.setTextDatum(TL_DATUM);
   tft.setTextColor(WHITE,ARENA_PLATE);
-  const int span=tft.textWidth(ticker,2)+w;
-  if(span>0 && newsTickerOffset>=span)newsTickerOffset=0;
-  tft.drawString(ticker,w-int(newsTickerOffset),y+4,2);
+  tft.drawString(newsTickerWindow(w),-int16_t(newsTickerPixel),y+4,2);
+}
+void tickNewsPhoto(uint32_t now) {
+  if(!newsViewEnabled() || !newsCache.count || !newsPhotos.ready() ||
+     overlayController.active() || rearEvent!=RearEvent::IDLE ||
+     WiFi.status()!=WL_CONNECTED || wledRestoreWouldConflict(now,5000UL))
+    return;
+  // Show the text first, then fill the optional JPEG asynchronously in a
+  // later main-loop iteration. Never download in draw()/touch callbacks.
+  if(uint32_t(now-lastCarouselAdvance)<700UL ||
+     uint32_t(now-lastCarouselAdvance)>NhlNews::kCardMs-1700UL ||
+     uint32_t(now-newsPhotoLastCheck)<700UL)return;
+  const NhlNews::Story *story=visibleNewsStory();
+  if(!story || !story->image[0] || newsPhotos.has(story->image,now))
+    return;
+  newsPhotoLastCheck=now;
+  if(newsPhotos.fetch(story->image,now)){
+    // Only redraw if still the same visible article; real game state and
+    // queued overlays are checked again at the start of the next loop.
+    if(newsViewEnabled() && visibleNewsStory()==story)needsDraw=true;
+  }
 }
 void drawNewsCard() {
   const NhlNews::Story *story=visibleNewsStory();
@@ -6257,7 +6361,7 @@ void drawNewsCard() {
                  margin,203,2);
   tft.drawString("MENU",w-49,18,2);
 #endif
-  newsTickerOffset=0;
+  // Do not rewind headline scrolling on article switch or JPEG redraw.
   drawNewsTicker();
 }
 
@@ -9520,10 +9624,12 @@ void setup() {
                 (unsigned)(sizeof(TEAM_LOGOS)/sizeof(TEAM_LOGOS[0])),
                 (unsigned)TEAM_LOGO_SIZE, (unsigned)TEAM_LOGO_SIZE);
   goalGif.beginStorage();
+  newsPhotos.begin(goalGif.mounted()); // Same existing LittleFS mount, no format.
   soundStorage.begin(goalGif.mounted()); // one shared LittleFS mount
   s3Audio.setStorageMounted(soundStorage.mounted());
 #else
   tft.init();
+  newsPhotos.begin(); // Dedicated SPIFFS image cache; NVS unaffected.
 #endif
   tft.setRotation(1);
   tft.fillScreen(BG);
@@ -10004,12 +10110,7 @@ void loop() {
   bool s3NewsTickerFrame=false;
   uint8_t s3PartialMask=S3BroadcastFrame::BOTH;
 #endif
-  if(newsViewEnabled() && newsCache.count && !overlayController.active() &&
-     uint32_t(now-newsTickerAt)>=120UL){
-    newsTickerAt=now;
-    newsTickerOffset+=2;
-    newsTickerDirty=true;
-  }
+  tickNewsTicker(now);
   const bool fullDrawThisLoop=needsDraw;
   if (needsDraw) {
     partialLiveUpdate = false;
@@ -10181,6 +10282,9 @@ void loop() {
 #endif
   }
 #endif
+  // Image HTTP and decode are lower priority than the entire NHL render
+  // pipeline. A photo never triggers a light, sound or game event.
+  if (!overlayController.active())tickNewsPhoto(millis());
   // Update one optional pregame conference record after the current frame
   // is painted. This keeps the first season/standings view responsive.
   if (!overlayController.active()) tickPregameConferenceRecords();
