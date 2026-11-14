@@ -22,7 +22,7 @@ Forge's Deltatre Distribution API documents `items[]`, `headline`, `title`, `sum
 ## Performance and caching
 - Fixed-size **10-article RAM cache** shared by the device and dashboard; no daily write wear or additional flash partition. Reboot clears news; network failures preserve already cached stories until reboot.
 - Two small alternating fetches: general feed, then a team-specific tag feed when favorites exist. The team rotates among followed teams across fetch cycles. Followed-team news is prioritized on cards and filtered dashboard views.
-- Update period: every **8 minutes** when safe; **2-minute** retry after failure. No requests until after boot, the first scoreboard load, Wi-Fi connection, and adequate free heap.
+- Update period: every **8 minutes** when safe, with the first followed-team fetch primed **30 seconds** after a successful league fetch; **2-minute** retry after failure. No requests until after boot, the first scoreboard load, Wi-Fi connection, and adequate free heap.
 - Uses streamed, filtered ArduinoJson to discard full story bodies, relations and excess metadata, with bounded TLS timeouts and minimum free heap.
 - Skips news HTTP calls during any game with state LIVE/CRIT, including intermission; during active event overlays or rear LED goals; or when a WLED restoration may be due. Goal/PP/SO polling and physical effects always take priority.
 - News is editorial: it must never call a celebration, horn, WLED/Hue state change, or game arming function.
