@@ -6294,6 +6294,12 @@ void tickNewsPhoto(uint32_t now) {
   if(uint32_t(now-lastCarouselAdvance)<700UL ||
      uint32_t(now-lastCarouselAdvance)>NhlNews::kCardMs-1700UL ||
      uint32_t(now-newsPhotoLastCheck)<700UL)return;
+  // The CYD min_spiffs partition is only 128 KiB. Only the top four ranked
+  // (followed-team-first) articles can own flash photo slots. A later card
+  // still shows all text and retains the continuous headline ticker.
+#ifndef GLOWDECK_WAVESHARE_S3
+  if(newsSlide>=NhlNewsPhoto::kSlots)return;
+#endif
   const NhlNews::Story *story=visibleNewsStory();
   if(!story || !story->image[0] || newsPhotos.has(story->image,now))
     return;
