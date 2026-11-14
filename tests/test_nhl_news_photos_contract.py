@@ -50,6 +50,7 @@ assert 'TJpgDec.drawFsJpg' in photo
 assert 'url.startsWith("https://")' in photo
 assert 'image/jpeg' in photo
 assert config.count('bodmer/TJpg_Decoder@^1.1.0')==2
-assert 'sample["images"].createNestedObject()["url"]=true;' in news
+assert 'sample.createNestedArray("images").createNestedObject()' in news
+assert 'image["url"]=true;' in news
 assert 'NhlNews::copy(story.image,sizeof(story.image),url);' in news
 print("PASS news: continuous ticker, cropped JPEG thumbnails, safe idle fetch, CYD/S3 parity")

@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <StreamUtils.h>
 #include "NhlNews.h"
 
 // NHL's Forge/Deltatre API is undocumented by the NHL itself; treat fields,
@@ -10,6 +11,44 @@
 // Fetch only from idle/low-priority loop time, never in screen drawing.
 namespace NhlNewsService {
 constexpr const char *kBase="https://forge-dapi.d3.nhle.com/v2/content/en-us/stories";
+constexpr size_t kStreamBufferBytes=512; // TLS reads by blocks, never 1 byte at a time.
+// HTTPClient::getStream() is RAW body bytes: CDN proxies may return chunked
+// even after requesting HTTP/1.0. Decode Content-Encoding/Transfer-Encoding
+// before the ArduinoJson filtered parser consumes the stream.
+inline void collectHttpHeaders(HTTPClient &http) {
+  static const char* headers[]={"Transfer-Encoding","Content-Encoding","Content-Type"};
+  http.collectHeaders(headers,3);
+}
+inline bool gzipResponse(HTTPClient &http) {
+  String encoding=http.header("Content-Encoding");
+  encoding.toLowerCase();
+  return encoding.indexOf("gzip")>=0 || encoding.indexOf("br")>=0;
+}
+inline DeserializationError parseHttpJson(HTTPClient &http,
+    DynamicJsonDocument &doc, const JsonDocument &filter) {
+  Stream &wire=http.getStream();
+  // The ArduinoJson parser needs a sensible timeout when waiting for TLS
+  // frames; default one-second stream timeouts can produce IncompleteInput.
+  wire.setTimeout(8000);
+  ChunkDecodingStream decoded(wire);
+  String transfer=http.header("Transfer-Encoding");
+  transfer.toLowerCase();
+  Stream &body=transfer.indexOf("chunked")>=0?
+      static_cast<Stream&>(decoded):wire;
+  ReadBufferingStream buffered(body,kStreamBufferBytes);
+  return deserializeJson(doc,buffered,DeserializationOption::Filter(filter),
+                         DeserializationOption::NestingLimit(16));
+}
+inline void logParseFailure(const char *source,HTTPClient &http,
+                           DeserializationError err,const JsonDocument &doc) {
+  Serial.printf("[NEWS] %s decode=%s HTTP=200 length=%d transfer=%s "
+                "encoding=%s jsonUsed=%u jsonCapacity=%u heap=%u\n",
+                source,err.c_str(),http.getSize(),
+                http.header("Transfer-Encoding").c_str(),
+                http.header("Content-Encoding").c_str(),
+                unsigned(doc.memoryUsage()),unsigned(doc.capacity()),
+                (unsigned)ESP.getFreeHeap());
+}
 struct Result {
   bool ok=false;
   int code=0;
@@ -34,6 +73,7 @@ inline Result fetch(NhlNews::Catalog &catalog,uint32_t teamMask,
   if(filteredTeamId)
     url+="&tags.slug=teamid-"+String(filteredTeamId);
   if(!http.begin(client,url)){result.error="TLS begin failed";return result;}
+  collectHttpHeaders(http);
   http.addHeader("Accept","application/json");
   http.addHeader("Accept-Encoding","identity");
   result.code=http.GET();
@@ -45,7 +85,7 @@ inline Result fetch(NhlNews::Catalog &catalog,uint32_t teamMask,
   // Parse a filtered stream: article bodies, media relations and the full
   // 25-item response are never kept in RAM. Responses may still be large on
   // the wire, so no call is allowed during a game/celebration.
-  StaticJsonDocument<1024> filter;
+  StaticJsonDocument<1280> filter;
   JsonObject sample=filter.createNestedArray("items").createNestedObject();
   sample["slug"]=true;
   sample["headline"]=true;
@@ -57,12 +97,18 @@ inline Result fetch(NhlNews::Catalog &catalog,uint32_t teamMask,
   tag["slug"]=true;
   tag["neutralSlug"]=true;
   tag["extraData"]["abbreviation"]=true;
+  if(filter.overflowed()){
+    http.end();result.error="Forge JSON filter too large";return result;
+  }
+  if(gzipResponse(http)){
+    http.end();result.error="compressed Forge response unsupported";return result;
+  }
   DynamicJsonDocument doc(18432);
   if(doc.capacity()<18432){http.end();result.error="no memory";return result;}
-  const auto parse=deserializeJson(doc,http.getStream(),
-     DeserializationOption::Filter(filter),DeserializationOption::NestingLimit(12));
+  const auto parse=parseHttpJson(http,doc,filter);
+  if(parse)logParseFailure("Forge",http,parse,doc);
   http.end();
-  if(parse){result.error="invalid/truncated JSON";return result;}
+  if(parse){result.error=parse.c_str();return result;}
   JsonArray items=doc["items"].as<JsonArray>();
   if(items.isNull()){result.error="missing items";return result;}
   for(JsonObject item:items){
@@ -121,8 +167,9 @@ inline Result fetchEspn(NhlNews::Catalog &catalog,uint32_t teamMask) {
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   http.useHTTP10(true);
   const char *url=
-      "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/news?limit=10";
+      "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/news?limit=5";
   if(!http.begin(client,url)){result.error="ESPN TLS begin failed";return result;}
+  collectHttpHeaders(http);
   http.addHeader("Accept","application/json");
   http.addHeader("Accept-Encoding","identity");
   result.code=http.GET();
@@ -133,24 +180,40 @@ inline Result fetchEspn(NhlNews::Catalog &catalog,uint32_t teamMask) {
   }
   // The raw ESPN response includes dozens of image variants and links per
   // article; explicitly discard them to keep this viable on original CYDs.
-  StaticJsonDocument<768> filter;
+  StaticJsonDocument<1280> filter;
   JsonObject sample=filter.createNestedArray("articles").createNestedObject();
   sample["id"]=true;
   sample["headline"]=true;
   sample["description"]=true;
   sample["published"]=true;
   sample["type"]=true;
-  sample["images"].createNestedObject()["url"]=true;
+  // "images" is an array. A nested-object filter here made the JPEG field
+  // silently disappear and could mis-handle actual ESPN article documents.
+  JsonObject image=sample.createNestedArray("images").createNestedObject();
+  image["url"]=true;
   sample["links"]["web"]["href"]=true;
   JsonObject category=sample.createNestedArray("categories").createNestedObject();
   category["type"]=true;
   category["team"]["abbreviation"]=true;
-  DynamicJsonDocument doc(16384);
-  if(doc.capacity()<16384){http.end();result.error="ESPN no memory";return result;}
-  const auto parsed=deserializeJson(doc,http.getStream(),
-      DeserializationOption::Filter(filter),DeserializationOption::NestingLimit(12));
+  if(filter.overflowed()){
+    http.end();result.error="ESPN JSON filter too large";return result;
+  }
+  if(gzipResponse(http)){
+    http.end();result.error="compressed ESPN response unsupported";return result;
+  }
+#ifdef GLOWDECK_WAVESHARE_S3
+  constexpr size_t kEspnDocBytes=24576;
+#else
+  constexpr size_t kEspnDocBytes=18432;
+#endif
+  DynamicJsonDocument doc(kEspnDocBytes);
+  if(doc.capacity()<kEspnDocBytes){
+    http.end();result.error="ESPN no JSON memory";return result;
+  }
+  const auto parsed=parseHttpJson(http,doc,filter);
+  if(parsed)logParseFailure("ESPN",http,parsed,doc);
   http.end();
-  if(parsed){result.error="ESPN invalid/truncated JSON";return result;}
+  if(parsed){result.error=parsed.c_str();return result;}
   JsonArray items=doc["articles"].as<JsonArray>();
   if(items.isNull()){result.error="ESPN missing articles";return result;}
   for(JsonObject item:items){
