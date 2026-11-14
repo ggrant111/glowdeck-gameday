@@ -33,6 +33,7 @@ Forge's Deltatre Distribution API documents `items[]`, `headline`, `title`, `sum
 - The bottom news ticker has its own continuous UTF-8-safe pixel scroll (30 ms steps), independent of card selection and image redraw. Switching cards never resets the ticker or switches it to a new story mid-scroll. News feed updates preserve offset when possible.
 - Photos are downloaded **outside** the display renderer, using the existing CYD SPIFFS partition or S3 LittleFS mount (shared with goal GIF and WAV assets). They are decoded by the lightweight JPEG library directly into the TFT or existing S3 sprite; no second frame buffer is allocated.
 - The browser dashboard also displays image URLs from Forge and now includes article photos from ESPN fallback when returned by the service.
+- **Publisher links:** Use the canonical `links.web.href` URL for ESPN fallback news, or a numeric ESPN article-ID route when no editorial link is provided. ESPN synthetic keys such as `espn-50477832` are never turned into `nhl.com/news/espn-...` URLs, even if legacy source metadata is stale. Genuine NHL article slugs still link to NHL.com.
 
 ## Manual verification
 1. Flash a board-matched OTA image (not a factory erase) on a CYD and S3.
