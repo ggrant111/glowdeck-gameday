@@ -39,8 +39,9 @@ for policy in ('newsViewEnabled()', 'overlayController.active()',
                'rearEvent!=RearEvent::IDLE','wledRestoreWouldConflict(now,5000UL)',
                'WiFi.status()!=WL_CONNECTED'):
     assert policy in tick,policy
-assert 'kMaxBytes=65000UL' in photo and 'kMaxBytes=110000UL' in photo
-assert photo.count('kSlots=10;')==2
+assert 'kMaxBytes=20000UL' in photo and 'kMaxBytes=110000UL' in photo
+assert 'kSlots=4;' in photo and 'kSlots=10;' in photo
+assert 'if(newsSlide>=NhlNewsPhoto::kSlots)return;' in main
 assert 'http.collectHeaders(headers,1);' in photo
 assert 'type.startsWith("image/jpeg")' in photo
 assert 'total+uint32_t(got)>kMaxBytes' in photo
