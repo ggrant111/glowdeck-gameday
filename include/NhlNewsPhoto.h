@@ -15,10 +15,10 @@
 // The JPEG is streamed to an existing filesystem partition, NOT buffered in RAM.
 namespace NhlNewsPhoto {
 #ifdef GLOWDECK_WAVESHARE_S3
-constexpr uint8_t kSlots=8;
+constexpr uint8_t kSlots=10;
 constexpr uint32_t kMaxBytes=110000UL;
 #else
-constexpr uint8_t kSlots=5;
+constexpr uint8_t kSlots=10;
 constexpr uint32_t kMaxBytes=65000UL;
 #endif
 constexpr uint32_t kRetryMs=30UL*60UL*1000UL;
@@ -59,7 +59,7 @@ public:
     storage_=&LittleFS;
 #else
     // Only the dedicated CYD SPIFFS partition is affected; Wi-Fi and NVS
-    // remain untouched. Once formatted, thumbnails occupy a fixed 5 slots.
+    // remain untouched. Once formatted, thumbnails occupy a fixed 10 slots.
     mounted_=SPIFFS.begin(false);
     if(!mounted_)mounted_=SPIFFS.begin(true);
     storage_=&SPIFFS;
