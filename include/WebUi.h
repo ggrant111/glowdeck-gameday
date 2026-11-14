@@ -3043,6 +3043,30 @@ $("reboot").onclick=()=>perform(async()=>{
   await api("/api/reboot",{method:"POST"});message("Restart requested");
 });
 
+// The slug is only an NHL path component for genuine NHL articles.
+// ESPN fallback items have synthetic espn-<id> keys, which must NEVER be
+// sent to nhl.com. Honor their publisher URL; use the numeric ESPN ID path
+// only when the API omits the canonical link.
+function newsArticleDestination(article){
+  const slug=String(article.slug||"");
+  const supplied=typeof article.url==="string"?article.url.trim():"";
+  const espnId=/^espn-([0-9]{1,12})$/i.exec(slug);
+  const isEspn=article.source==="ESPN"||!!espnId;
+  if(isEspn){
+    if(/^https:\/\/(?:www\.)?espn\.com\/[^\s]+$/i.test(supplied))
+      return {href:supplied,label:"Read on ESPN"};
+    if(espnId)
+      return {href:"https://www.espn.com/nhl/story/_/id/"+espnId[1],
+              label:"Read on ESPN"};
+    return null;
+  }
+  if(/^https:\/\/(?:www\.)?nhl\.com\/news\/[a-z0-9-]+(?:\?[^\s]*)?$/i.test(supplied))
+    return {href:supplied,label:"Read on NHL.com"};
+  if(/^[a-z0-9-]+$/i.test(slug) && !/^espn-/i.test(slug))
+    return {href:"https://www.nhl.com/news/"+encodeURIComponent(slug),
+            label:"Read on NHL.com"};
+  return null;
+}
 async function loadNews(){
   const filter=$("newsFilter").value;
   const data=await api("/api/news?filter="+encodeURIComponent(filter));
@@ -3092,17 +3116,13 @@ async function loadNews(){
     const summary=document.createElement("p");
     summary.textContent=article.summary||"Open the story for details.";
     body.append(label,title,summary);
-    const trustedUrl=typeof article.url==="string" &&
-      /^https:\/\/(?:www\.)?(?:nhl\.com|espn\.com)\//i.test(article.url)?
-        article.url:"";
-    const nhlUrl=article.source!=="ESPN" && article.slug &&
-      /^[a-z0-9-]+$/i.test(article.slug)?
-      "https://www.nhl.com/news/"+encodeURIComponent(article.slug):"";
-    if(trustedUrl||nhlUrl){
+    const destination=newsArticleDestination(article);
+    if(destination){
       const link=document.createElement("a");
-      link.href=trustedUrl||nhlUrl;
-      link.target="_blank";link.rel="noopener noreferrer";
-      link.textContent=article.source==="ESPN"?"Read on ESPN":"Read on NHL.com";
+      link.href=destination.href;
+      link.target="_blank";
+      link.rel="noopener noreferrer";
+      link.textContent=destination.label;
       body.append(link);
     }
     card.append(body);cards.append(card);
