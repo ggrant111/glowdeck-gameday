@@ -10089,7 +10089,6 @@ void loop() {
         if(s3ScoreOnlyFrame && (s3PartialMask&S3BroadcastFrame::BOTTOM))
           tft.presentRegion(bottom.x,bottom.y,bottom.w,bottom.h);
         if(s3TickerFrame)tft.presentRegion(0,269,480,20);
-        if(s3NewsTickerFrame)tft.presentRegion(0,286,480,24);
       } else
 #endif
       {
@@ -10100,6 +10099,8 @@ void loop() {
           tft.presentRegion(shots.x,shots.y,shots.w,shots.h);
         }
       }
+      // Text cards are independent of the arena framebuffer on S3.
+      if(s3NewsTickerFrame)tft.presentRegion(0,286,480,24);
     } else {
       tft.present();
     }
