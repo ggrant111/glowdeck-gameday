@@ -11,7 +11,7 @@ for name in ("newsAnyLive()", "newsViewEnabled()", "drawNewsCard()",
     assert name in main,name
 assert 'wledRestoreWouldConflict(now,8500UL)' in main
 assert 'overlayController.active() || rearEvent!=RearEvent::IDLE' in main
-assert 'if(newsViewEnabled()) { drawNewsCard(); return; }' in main
+assert 'if (newsViewEnabled()) { drawNewsCard(); return; }' in main
 assert 'if(screen==Screen::LIVE && newsViewEnabled())' in main
 assert 'cfg.cycleGames && newsViewEnabled()' in main
 assert 's3NewsTickerFrame' in main and 'presentRegion(0,286,480,24)' in main
