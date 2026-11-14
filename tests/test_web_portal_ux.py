@@ -16,7 +16,7 @@ ids=re.findall(r'\bid="([^"]+)"',html)
 duplicates=[key for key,value in Counter(ids).items() if value!=1]
 assert not duplicates, f"Duplicate HTML ID(s): {duplicates}"
 ids=set(ids)
-expected_nav=("dashboard","games","customize","lab","device","events")
+expected_nav=("dashboard","games","news","customize","lab","device","events")
 nav=re.search(r'<nav class="tabs" aria-label="GameDay navigation">(.*?)</nav>',
               html,re.S)
 assert nav
