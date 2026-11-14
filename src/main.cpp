@@ -6252,7 +6252,8 @@ void newsWrap(const char *raw,int16_t x,int16_t y,int16_t width,
 // 480x320 sprite. No second framebuffer, PNG inflater or large heap array.
 int16_t newsImageX0=0,newsImageY0=0,newsImageX1=0,newsImageY1=0;
 bool newsJpegBlock(int16_t x,int16_t y,uint16_t w,uint16_t h,uint16_t *pixels) {
-  if(!pixels || y>=newsImageY1)return false;
+  if(!pixels)return false;
+  if(y>=newsImageY1)return true; // Cropped rows must not abort decode.
   if(x>=newsImageX1)return true; // Skip cropped blocks, continue later rows.
   if(x>=newsImageX0 && y>=newsImageY0 &&
      x+w<=newsImageX1 && y+h<=newsImageY1){
