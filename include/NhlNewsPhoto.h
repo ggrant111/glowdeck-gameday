@@ -18,8 +18,10 @@ namespace NhlNewsPhoto {
 constexpr uint8_t kSlots=10;
 constexpr uint32_t kMaxBytes=110000UL;
 #else
-constexpr uint8_t kSlots=10;
-constexpr uint32_t kMaxBytes=65000UL;
+// min_spiffs.csv has only 128 KiB of CYD flash after dual OTA partitions.
+// Reserve space for filesystem metadata and never rotate/wear all ten cards.
+constexpr uint8_t kSlots=4;
+constexpr uint32_t kMaxBytes=20000UL;
 #endif
 constexpr uint32_t kRetryMs=30UL*60UL*1000UL;
 constexpr uint32_t kTimeoutMs=3500UL;
@@ -59,7 +61,7 @@ public:
     storage_=&LittleFS;
 #else
     // Only the dedicated CYD SPIFFS partition is affected; Wi-Fi and NVS
-    // remain untouched. Once formatted, thumbnails occupy a fixed 10 slots.
+    // remain untouched. Once formatted, thumbnails occupy only four bounded slots.
     mounted_=SPIFFS.begin(false);
     if(!mounted_)mounted_=SPIFFS.begin(true);
     storage_=&SPIFFS;
